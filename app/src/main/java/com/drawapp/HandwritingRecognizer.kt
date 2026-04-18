@@ -7,6 +7,7 @@ import com.google.mediapipe.tasks.genai.llminference.LlmInference
 import com.google.mediapipe.tasks.genai.llminference.LlmInferenceSession
 import com.google.mediapipe.tasks.genai.llminference.VisionModelOptions
 import com.google.mediapipe.tasks.genai.llminference.GraphOptions
+import com.google.mediapipe.tasks.core.BaseOptions
 import kotlinx.coroutines.*
 
 /**
@@ -38,7 +39,9 @@ class HandwritingRecognizer(private val context: Context) {
                     .setModelPath(modelPath)
                     .setMaxTokens(4096)
                     .setMaxNumImages(1)
-                    .setVisionModelOptions(VisionModelOptions.builder().build())
+                    .setVisionModelOptions(
+                        VisionModelOptions.builder().build()
+                    )
                     .build()
 
                 llmInference = LlmInference.createFromOptions(context, options)

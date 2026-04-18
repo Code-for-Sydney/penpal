@@ -128,7 +128,9 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         recognitionHandler.removeCallbacks(recognitionRunnable)
-        downloadPollHandler.removeCallbacks(downloadPollRunnable)
+        if (::downloadPollRunnable.isInitialized) {
+            downloadPollHandler.removeCallbacks(downloadPollRunnable)
+        }
         unregisterReceiver(modelReadyReceiver)
         recognizer.close()
     }
