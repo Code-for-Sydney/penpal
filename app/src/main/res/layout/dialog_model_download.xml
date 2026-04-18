@@ -22,7 +22,7 @@
         android:id="@+id/dlSubtitle"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Downloading the Gemma 3n model so recognition works entirely on your device."
+        android:text="Downloading the Gemma 4 model so recognition works entirely on your device."
         android:textColor="#AAAAAA"
         android:textSize="13sp"
         android:layout_marginBottom="20dp" />
@@ -105,7 +105,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Gemma 3n E2B (int4)"
+                android:text="Gemma 4 E2B (int4)"
                 android:textColor="#FFFFFF"
                 android:textSize="12sp" />
         </LinearLayout>

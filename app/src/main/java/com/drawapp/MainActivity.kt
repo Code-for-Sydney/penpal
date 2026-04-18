@@ -221,7 +221,7 @@ class MainActivity : AppCompatActivity() {
 
         // Web links
         btnAcceptLic.setOnClickListener {
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://huggingface.co/google/gemma-3n-E2B-it-litert-preview"))
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://huggingface.co/google/gemma-4-E2B-it"))
             startActivity(intent)
         }
         btnGetToken.setOnClickListener {
@@ -333,14 +333,14 @@ class MainActivity : AppCompatActivity() {
     /** Fallback: user points to an existing .task file path. */
     private fun showManualPathDialog() {
         val input = EditText(this).apply {
-            hint = "/sdcard/Download/gemma-3n-e2b-it-int4.task"
+            hint = "/sdcard/Download/gemma-4-E2B-it.litertlm"
             setTextColor(Color.WHITE)
             setHintTextColor(Color.parseColor("#55FFFFFF"))
             setPadding(32, 24, 32, 24)
         }
         AlertDialog.Builder(this, R.style.DarkDialogTheme)
             .setTitle("Model File Path")
-            .setMessage("Enter the full path to a Gemma .task file already on this device:")
+            .setMessage("Enter the full path to a Gemma .litertlm file already on this device:")
             .setView(input)
             .setPositiveButton("Load") { _, _ ->
                 val path = input.text.toString().trim()

@@ -36,10 +36,9 @@ class HandwritingRecognizer(private val context: Context) {
 
                 val options = LlmInference.LlmInferenceOptions.builder()
                     .setModelPath(modelPath)
-                    .setMaxTokens(1024)
+                    .setMaxTokens(4096)
                     .setMaxNumImages(1)
                     .setVisionModelOptions(VisionModelOptions.builder().build())
-                    .setPreferredBackend(LlmInference.Backend.GPU)
                     .build()
 
                 llmInference = LlmInference.createFromOptions(context, options)
@@ -47,7 +46,8 @@ class HandwritingRecognizer(private val context: Context) {
                 withContext(Dispatchers.Main) { onReady() }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
-                    onError("Model load failed: ${e.message}")
+                    val fullError = e.stackTraceToString()
+                    onError("Model load failed: ${e.message}\n$fullError")
                 }
             }
         }

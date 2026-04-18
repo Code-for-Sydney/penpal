@@ -20,16 +20,16 @@ import java.io.File
 object ModelManager {
 
     // Model info
-    const val MODEL_FILE_NAME = "gemma-3n-E2B-it-int4.task"
+    const val MODEL_FILE_NAME = "gemma-4-E2B-it.litertlm"
 
-    // HuggingFace URL for Gemma 3n E2B MediaPipe task file
+    // HuggingFace URL for Gemma 4 E2B MediaPipe litertlm file (from LiteRT community)
     const val MODEL_DOWNLOAD_URL_HF =
-        "https://huggingface.co/google/gemma-3n-E2B-it-litert-preview/resolve/main/gemma-3n-E2B-it-int4.task"
+        "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm"
 
     // Kaggle URL for the same model
-    // Requires: kaggle.com account + accepting license at kaggle.com/models/google/gemma-3n
+    // Requires: kaggle.com account + accepting license at kaggle.com/models/google/gemma-4
     const val MODEL_DOWNLOAD_URL_KAGGLE =
-        "https://www.kaggle.com/api/v1/models/google/gemma-3n/tfLite/gemma3n-e2b-it-int4/1/download"
+        "https://www.kaggle.com/api/v1/models/google/gemma-4/tfLite/gemma4-e2b-it-web/1/download"
 
     // Back-compat default
     const val MODEL_DOWNLOAD_URL = MODEL_DOWNLOAD_URL_HF
@@ -39,8 +39,8 @@ object ModelManager {
     const val KEY_KAGGLE_USER    = "kaggle_user"
     const val KEY_KAGGLE_KEY     = "kaggle_key"
 
-    // Approx size shown in UI (~1.5 GB)
-    const val MODEL_SIZE_DISPLAY = "~1.5 GB"
+    // Approx size shown in UI (~2.6 GB)
+    const val MODEL_SIZE_DISPLAY = "~2.6 GB"
 
     // SharedPreferences keys
     private const val PREFS_NAME   = "penpal_prefs"
