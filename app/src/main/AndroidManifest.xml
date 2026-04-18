@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Internet for model download -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Storage permissions for saving drawings + model file -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+
+    <!-- Vulkan is optional but speeds up GPU inference with MediaPipe -->
+    <uses-feature android:name="android.hardware.vulkan.version"
+        android:version="0x401000" android:required="false" />
+
+    <application
+        android:allowBackup="true"
+        android:icon="@drawable/ic_brush"
+        android:label="@string/app_name"
+        android:roundIcon="@drawable/ic_brush"
+        android:supportsRtl="true"
+        android:theme="@style/AppTheme">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- BroadcastReceiver that fires when DownloadManager finishes the model -->
+        <receiver
+            android:name=".ModelDownloadReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.DOWNLOAD_COMPLETE" />
+            </intent-filter>
+        </receiver>
+
+    </application>
+
+</manifest>
