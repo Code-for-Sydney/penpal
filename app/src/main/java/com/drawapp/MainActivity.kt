@@ -111,6 +111,10 @@ class MainActivity : AppCompatActivity() {
         recognitionIcon     = findViewById(R.id.recognitionIcon)
         recognitionText     = findViewById(R.id.recognitionText)
 
+        // Set notebook title from intent
+        val notebookName = intent.getStringExtra("NOTEBOOK_NAME") ?: "My Notebook"
+        findViewById<TextView>(R.id.tvNotebookTitle).text = notebookName
+
         setupListeners()
         updateColorSwatch()
         setupRecognizer()

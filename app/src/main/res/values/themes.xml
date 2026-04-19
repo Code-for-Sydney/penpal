@@ -2,7 +2,7 @@
 <resources>
 
     <!-- Base app theme: dark, no action bar -->
-    <style name="AppTheme" parent="Theme.AppCompat.NoActionBar">
+    <style name="AppTheme" parent="Theme.MaterialComponents.DayNight.NoActionBar">
         <item name="android:windowBackground">@color/colorBackground</item>
         <item name="colorPrimary">@color/colorPrimary</item>
         <item name="colorPrimaryDark">@color/colorPrimaryDark</item>
@@ -12,7 +12,7 @@
     </style>
 
     <!-- Dark dialog theme -->
-    <style name="DarkDialogTheme" parent="Theme.AppCompat.Dialog.Alert">
+    <style name="DarkDialogTheme" parent="Theme.MaterialComponents.DayNight.Dialog.Alert">
         <item name="android:windowBackground">@android:color/transparent</item>
         <item name="colorAccent">@color/colorAccent</item>
         <item name="android:textColor">#FFFFFF</item>
@@ -22,7 +22,7 @@
         <item name="buttonBarNegativeButtonStyle">@style/DialogButtonStyle</item>
     </style>
 
-    <style name="DialogButtonStyle" parent="Widget.AppCompat.Button.ButtonBar.AlertDialog">
+    <style name="DialogButtonStyle" parent="Widget.MaterialComponents.Button.TextButton">
         <item name="android:textColor">@color/colorAccent</item>
     </style>
 
