@@ -262,7 +262,8 @@ class DrawingView @JvmOverloads constructor(
         val clusterBounds = RectF(lastStroke.bounds)
         
         // Distance to consider "close together"
-        val padding = 120f 
+        val hPadding = 156f // 120 * 1.3
+        val vPadding = 60f  // 120 * 0.5
         
         var changed = true
         while (changed) {
@@ -272,7 +273,7 @@ class DrawingView @JvmOverloads constructor(
                 
                 // Check if this stroke is near the current cluster
                 val nearBounds = RectF(clusterBounds).apply {
-                    inset(-padding, -padding)
+                    inset(-hPadding, -vPadding)
                 }
                 
                 if (RectF.intersects(nearBounds, stroke.bounds)) {
