@@ -46,6 +46,64 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="parent" />
 
+    <ImageButton
+        android:id="@+id/btnOverview"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:layout_marginEnd="8dp"
+        android:layout_marginTop="8dp"
+        android:src="@drawable/ic_grid"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:contentDescription="Overview"
+        android:tint="#CCCCCC"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <!-- Page Navigation -->
+    <LinearLayout
+        android:id="@+id/pageNavigationContainer"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:layout_marginEnd="16dp"
+        android:background="@drawable/toolbar_background"
+        android:padding="8dp"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent">
+
+        <ImageButton
+            android:id="@+id/btnPageUp"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:src="@drawable/ic_page_up"
+            android:background="@drawable/icon_btn_bg"
+            android:contentDescription="Previous Page"
+            android:tint="#CCCCCC"
+            android:layout_marginBottom="16dp" />
+
+        <TextView
+            android:id="@+id/tvPageIndicator"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="1"
+            android:textColor="#FFFFFF"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:layout_gravity="center_horizontal"
+            android:layout_marginBottom="16dp"/>
+
+        <ImageButton
+            android:id="@+id/btnPageDown"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:src="@drawable/ic_page_down"
+            android:background="@drawable/icon_btn_bg"
+            android:contentDescription="Next Page"
+            android:tint="#CCCCCC" />
+
+    </LinearLayout>
+
     <!-- ── AI Recognition Result Panel ─────────────────────────────── -->
     <LinearLayout
         android:id="@+id/recognitionPanel"

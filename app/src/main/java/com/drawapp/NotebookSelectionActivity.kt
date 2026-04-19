@@ -113,6 +113,13 @@ class NotebookSelectionActivity : AppCompatActivity() {
         )
     }
 
+    override fun onResume() {
+        super.onResume()
+        if (::adapter.isInitialized) {
+            adapter.updateData(NotebookManager.getNotebooks(this))
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         activityScope.cancel()

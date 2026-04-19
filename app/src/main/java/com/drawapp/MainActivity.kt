@@ -1,5 +1,6 @@
 package com.drawapp
 
+import android.graphics.Bitmap
 import android.graphics.Color
 import android.os.Bundle
 import android.os.Handler
@@ -29,6 +30,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var recognitionProgress: ProgressBar
     private lateinit var recognitionIcon: TextView
     private lateinit var recognitionText: TextView
+    
+    // Page Navigation
+    private lateinit var btnPageUp: ImageButton
+    private lateinit var btnPageDown: ImageButton
+    private lateinit var btnOverview: ImageButton
+    private lateinit var tvPageIndicator: TextView
 
     // ── State ──────────────────────────────────────────────────────────────
     private var activeColor: Int = Color.BLACK
@@ -45,6 +52,7 @@ class MainActivity : AppCompatActivity() {
     private var notebookName: String = "My Notebook"
     private var notebookId: String = ""
     private val activityScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private var currentPageIndex: Int = 0
 
     // ── Misc ───────────────────────────────────────────────────────────────
     private val STORAGE_PERMISSION_CODE = 101
@@ -81,17 +89,31 @@ class MainActivity : AppCompatActivity() {
         recognitionIcon     = findViewById(R.id.recognitionIcon)
         recognitionText     = findViewById(R.id.recognitionText)
         btnBack             = findViewById(R.id.btnBack)
+        btnPageUp           = findViewById(R.id.btnPageUp)
+        btnPageDown         = findViewById(R.id.btnPageDown)
+        btnOverview         = findViewById(R.id.btnOverview)
+        tvPageIndicator     = findViewById(R.id.tvPageIndicator)
 
         // Set notebook title from intent
         notebookId = intent.getStringExtra("NOTEBOOK_ID") ?: ""
         notebookName = intent.getStringExtra("NOTEBOOK_NAME") ?: "My Notebook"
         findViewById<TextView>(R.id.tvNotebookTitle).text = notebookName
 
+        val notebook = NotebookManager.getNotebooks(this).find { it.id == notebookId }
+        currentPageIndex = notebook?.lastDisplayedPage ?: 0
+
+        migrateOldNotebookToPageZero()
+
         setupListeners()
         drawingView.brushColor = activeColor
         updateColorSwatch()
         setupRecognizer()
-        loadNotebookDrawing()
+        loadNotebookDrawing(currentPageIndex)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        performAutosave()
     }
 
     override fun onDestroy() {
@@ -271,6 +293,20 @@ class MainActivity : AppCompatActivity() {
         }
         btnBrushSize.setOnClickListener   { showBrushSizeDialog() }
         btnColorPicker.setOnClickListener { showColorPickerDialog() }
+        
+        btnPageUp.setOnClickListener {
+            if (currentPageIndex > 0) {
+                performAutosave() // Save current
+                currentPageIndex--
+                loadNotebookDrawing(currentPageIndex)
+            }
+        }
+        btnPageDown.setOnClickListener {
+            performAutosave() // Save current
+            currentPageIndex++
+            loadNotebookDrawing(currentPageIndex)
+        }
+        btnOverview.setOnClickListener { showOverviewDialog() }
 
         // Long-press ✦ to re-trigger model setup (inform user to do it from the main screen instead)
         recognitionIcon.setOnLongClickListener {
@@ -421,21 +457,51 @@ class MainActivity : AppCompatActivity() {
                 recognitionText.setTextColor(Color.parseColor("#88FFFFFF"))
                 setRecognitionState(RecognitionState.IDLE)
                 // Delete the saved SVG immediately
-                deleteNotebookSvg()
+                deleteNotebookSvg(currentPageIndex)
             }
             .setNegativeButton("Cancel", null).show()
     }
 
     // ── Save / Load SVG ───────────────────────────────────────────────────
-
-    private fun getNotebookSvgFile(): File {
+    
+    private fun migrateOldNotebookToPageZero() {
         val dir = File(filesDir, "notebooks")
-        dir.mkdirs()
-        return File(dir, "${notebookName}.svg")
+        if (!dir.exists()) dir.mkdirs()
+        val oldFile = File(dir, "${notebookName}.svg")
+        if (oldFile.exists()) {
+            val newFile = File(dir, "${notebookName}_page_0.svg")
+            oldFile.renameTo(newFile)
+        }
     }
 
-    private fun loadNotebookDrawing() {
-        val file = getNotebookSvgFile()
+    private fun getNotebookSvgFile(pageIndex: Int): File {
+        val dir = File(filesDir, "notebooks")
+        dir.mkdirs()
+        return File(dir, "${notebookName}_page_${pageIndex}.svg")
+    }
+    
+    private fun getNotebookThumbFile(pageIndex: Int): File {
+        val dir = File(filesDir, "notebooks")
+        dir.mkdirs()
+        return File(dir, "${notebookName}_page_${pageIndex}_thumb.png")
+    }
+
+    private fun loadNotebookDrawing(pageIndex: Int = 0) {
+        tvPageIndicator.text = "${pageIndex + 1}"
+        drawingView.clear()
+        drawingView.clearDebugBox()
+        val file = getNotebookSvgFile(pageIndex)
+        
+        btnPageUp.alpha = if (pageIndex > 0) 1.0f else 0.4f
+        btnPageUp.isEnabled = pageIndex > 0
+        
+        val notebooks = NotebookManager.getNotebooks(this)
+        val notebook = notebooks.find { it.id == notebookId }
+        if (notebook != null && notebook.lastDisplayedPage != pageIndex) {
+            notebook.lastDisplayedPage = pageIndex
+            NotebookManager.updateNotebook(this, notebook)
+        }
+        
         if (!file.exists()) return
 
         try {
@@ -443,7 +509,6 @@ class MainActivity : AppCompatActivity() {
             val strokeDataList = SvgSerializer.deserialize(svgContent)
             if (strokeDataList.isNotEmpty()) {
                 drawingView.loadFromStrokeData(strokeDataList)
-                Toast.makeText(this, "Loaded \"$notebookName\"", Toast.LENGTH_SHORT).show()
             }
         } catch (e: Exception) {
             e.printStackTrace()
@@ -452,10 +517,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun performAutosave() {
         val strokeData = drawingView.getStrokeDataList()
-        val file = getNotebookSvgFile()
+        val file = getNotebookSvgFile(currentPageIndex)
+        val thumbFile = getNotebookThumbFile(currentPageIndex)
 
         if (strokeData.isEmpty()) {
             if (file.exists()) file.delete()
+            if (thumbFile.exists()) thumbFile.delete()
             return
         }
 
@@ -468,17 +535,145 @@ class MainActivity : AppCompatActivity() {
                 contentBounds = drawingView.getContentBounds()
             )
             file.writeText(svgContent)
+            
+            // Generate and save thumbnail
+            saveThumbnail(thumbFile)
+            
         } catch (e: Exception) {
             e.printStackTrace()
         }
     }
+    
+    private fun saveThumbnail(file: File) {
+        val bounds = drawingView.getContentBounds() ?: return
+        if (bounds.isEmpty) return
+        
+        // Render to a 400x400 thumbnail max bounds
+        val thumbSize = 400
+        val scale = minOf(thumbSize / bounds.width(), thumbSize / bounds.height())
+        val scaledW = (bounds.width() * scale).toInt().coerceAtLeast(1)
+        val scaledH = (bounds.height() * scale).toInt().coerceAtLeast(1)
+        
+        val bitmap = Bitmap.createBitmap(scaledW, scaledH, Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(bitmap)
+        canvas.drawColor(drawingView.canvasBackgroundColor)
+        
+        canvas.scale(scale, scale)
+        canvas.translate(-bounds.left, -bounds.top)
+        
+        for (stroke in drawingView.getStrokeDataList()) {
+            val path = android.graphics.Path()
+            for (cmd in stroke.commands) {
+                when (cmd) {
+                    is com.drawapp.PathCommand.MoveTo -> path.moveTo(cmd.x, cmd.y)
+                    is com.drawapp.PathCommand.QuadTo -> path.quadTo(cmd.x1, cmd.y1, cmd.x2, cmd.y2)
+                    is com.drawapp.PathCommand.LineTo -> path.lineTo(cmd.x, cmd.y)
+                }
+            }
+            val paint = android.graphics.Paint().apply {
+                color = if (stroke.isEraser) drawingView.canvasBackgroundColor else stroke.color
+                style = android.graphics.Paint.Style.STROKE
+                strokeJoin = android.graphics.Paint.Join.ROUND
+                strokeCap = android.graphics.Paint.Cap.ROUND
+                strokeWidth = stroke.strokeWidth
+                isAntiAlias = true
+                alpha = stroke.opacity
+            }
+            canvas.drawPath(path, paint)
+        }
+        
+        file.outputStream().use { 
+            bitmap.compress(Bitmap.CompressFormat.PNG, 90, it)
+        }
+    }
 
-    private fun deleteNotebookSvg() {
+    private fun deleteNotebookSvg(pageIndex: Int) {
         try {
-            val file = getNotebookSvgFile()
+            val file = getNotebookSvgFile(pageIndex)
+            val thumb = getNotebookThumbFile(pageIndex)
             if (file.exists()) file.delete()
+            if (thumb.exists()) thumb.delete()
         } catch (e: Exception) {
             e.printStackTrace()
         }
+    }
+    
+    // ── Overview Dialog ───────────────────────────────────────────────────
+    
+    private fun showOverviewDialog() {
+        performAutosave() // ensure current page is up to date
+        val dialogView = layoutInflater.inflate(R.layout.dialog_overview, null)
+        val gridView = dialogView.findViewById<GridView>(R.id.gridOverview)
+        val dialog = AlertDialog.Builder(this, R.style.DarkDialogTheme)
+            .setView(dialogView).create()
+            
+        dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
+        
+        // Find all pages
+        val pages = mutableListOf<Int>()
+        var pIndex = 0
+        while (true) {
+            val svg = getNotebookSvgFile(pIndex)
+            // Or if they skipped pages, just check up to a limit. Let's list files instead.
+            // But if they are sequential:
+            if (svg.exists() || pIndex == currentPageIndex) {
+                if (!pages.contains(pIndex)) {
+                    pages.add(pIndex)
+                }
+            } else if (pIndex > currentPageIndex) {
+                break
+            }
+            pIndex++
+        }
+        
+        // Actually, let's just search the directory for this notebook's pages to be robust
+        val dir = File(filesDir, "notebooks")
+        val allFiles = dir.listFiles { _, name -> 
+            name.startsWith("${notebookName}_page_") && name.endsWith(".svg") 
+        } ?: emptyArray()
+        
+        val existingPages = allFiles.mapNotNull { 
+            it.name.removePrefix("${notebookName}_page_").removeSuffix(".svg").toIntOrNull() 
+        }.toMutableSet()
+        
+        existingPages.add(currentPageIndex) // always show current page
+        val sortedPages = existingPages.sorted().toList()
+        
+        val adapter = object : android.widget.BaseAdapter() {
+            override fun getCount() = sortedPages.size
+            override fun getItem(position: Int) = sortedPages[position]
+            override fun getItemId(position: Int) = position.toLong()
+            override fun getView(position: Int, convertView: View?, parent: android.view.ViewGroup?): View {
+                val view = convertView ?: layoutInflater.inflate(R.layout.item_overview_page, parent, false)
+                val imgThumb = view.findViewById<ImageView>(R.id.imgThumb)
+                val tvPage = view.findViewById<TextView>(R.id.tvPageNumber)
+                val pageIdx = getItem(position)
+                
+                tvPage.text = "Page ${pageIdx + 1}"
+                val thumbFile = getNotebookThumbFile(pageIdx)
+                if (thumbFile.exists()) {
+                    val bmp = android.graphics.BitmapFactory.decodeFile(thumbFile.absolutePath)
+                    imgThumb.setImageBitmap(bmp)
+                } else {
+                    imgThumb.setImageResource(R.drawable.toolbar_background) // placeholder
+                }
+                
+                if (pageIdx == currentPageIndex) {
+                    view.setBackgroundResource(R.drawable.icon_btn_bg)
+                } else {
+                    view.background = null
+                }
+                
+                view.setOnClickListener {
+                    currentPageIndex = pageIdx
+                    loadNotebookDrawing(currentPageIndex)
+                    dialog.dismiss()
+                }
+                return view
+            }
+        }
+        
+        gridView.adapter = adapter
+        dialog.show()
     }
 }

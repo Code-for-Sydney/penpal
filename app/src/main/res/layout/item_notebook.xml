@@ -4,52 +4,60 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:id="@+id/cardNotebook"
     android:layout_width="match_parent"
-    android:layout_height="wrap_content"
+    android:layout_height="200dp"
     android:layout_margin="8dp"
     app:cardCornerRadius="16dp"
     app:cardElevation="4dp"
     app:cardBackgroundColor="#2C2C2E"
     app:strokeColor="#3A3A3C"
-    app:strokeWidth="1dp"
+    app:strokeWidth="4dp"
     android:clickable="true"
     android:focusable="true">
 
-    <LinearLayout
+    <FrameLayout
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:padding="16dp">
+        android:layout_height="match_parent">
 
-        <View
-            android:id="@+id/notebookColor"
-            android:layout_width="64dp"
-            android:layout_height="64dp"
-            android:layout_gravity="center_horizontal"
+        <!-- No id needed for color view anymore, we use the stroke. We will just keep the image preview id -->
+        <ImageView
+            android:id="@+id/notebookImagePreview"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:scaleType="centerCrop"
             android:background="@android:color/white" />
 
-        <TextView
-            android:id="@+id/notebookName"
+        <!-- Bottom bar for title and edit button -->
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:gravity="center"
-            android:text="Notebook Name"
-            android:textColor="#FFFFFF"
-            android:textSize="16sp"
-            android:textStyle="bold"
-            android:ellipsize="end"
-            android:maxLines="1" />
+            android:layout_gravity="bottom"
+            android:background="#B3000000"
+            android:orientation="horizontal"
+            android:paddingHorizontal="12dp"
+            android:paddingVertical="8dp"
+            android:gravity="center_vertical">
 
-        <ImageButton
-            android:id="@+id/btnEditNotebook"
-            android:layout_width="32dp"
-            android:layout_height="32dp"
-            android:layout_gravity="end"
-            android:layout_marginTop="4dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:src="@android:drawable/ic_menu_edit"
-            app:tint="#8E8E93" />
+            <TextView
+                android:id="@+id/notebookName"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Notebook Name"
+                android:textColor="#FFFFFF"
+                android:textSize="16sp"
+                android:textStyle="bold"
+                android:ellipsize="end"
+                android:maxLines="1" />
 
-    </LinearLayout>
+            <ImageButton
+                android:id="@+id/btnEditNotebook"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:layout_marginStart="8dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:src="@android:drawable/ic_menu_edit"
+                app:tint="#FFFFFF" />
+        </LinearLayout>
+    </FrameLayout>
 
 </com.google.android.material.card.MaterialCardView>

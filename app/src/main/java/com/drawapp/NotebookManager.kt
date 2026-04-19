@@ -60,10 +60,15 @@ object NotebookManager {
 
     fun deleteNotebookSvg(context: Context, notebookName: String) {
         try {
-            val file = File(context.filesDir, "notebooks/${notebookName}.svg")
-            if (file.exists()) {
-                file.delete()
+            val dir = File(context.filesDir, "notebooks")
+            val files = dir.listFiles { _, name -> 
+                name.startsWith("${notebookName}_page_") && (name.endsWith(".svg") || name.endsWith(".png"))
             }
+            files?.forEach { it.delete() }
+            
+            // Also delete the old format if it exists
+            val oldFile = File(dir, "${notebookName}.svg")
+            if (oldFile.exists()) oldFile.delete()
         } catch (e: Exception) {
             e.printStackTrace()
         }
