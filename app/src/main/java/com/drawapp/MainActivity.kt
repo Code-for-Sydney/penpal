@@ -48,7 +48,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var recognitionText: TextView
 
     // ── State ──────────────────────────────────────────────────────────────
-    private var activeColor: Int = Color.WHITE
+    private var activeColor: Int = Color.BLACK
     private var isEraserActive = false
 
     // ── Recognizer ─────────────────────────────────────────────────────────
@@ -84,10 +84,10 @@ class MainActivity : AppCompatActivity() {
     // ── Misc ───────────────────────────────────────────────────────────────
     private val STORAGE_PERMISSION_CODE = 101
     private val colors = listOf(
-        "#FFFFFF", "#000000", "#FF4081", "#F44336", "#FF9800",
-        "#FFEB3B", "#4CAF50", "#00BCD4", "#2196F3", "#9C27B0",
-        "#795548", "#607D8B", "#E91E63", "#8BC34A", "#FF5722",
-        "#00E5FF", "#76FF03", "#EA80FC", "#FF6D00", "#18FFFF"
+        "#000000", "#1A237E", "#1B5E20", "#B71C1C", "#4A148C",
+        "#FFFFFF", "#FF4081", "#F44336", "#FF9800", "#FFEB3B",
+        "#4CAF50", "#00BCD4", "#2196F3", "#9C27B0", "#795548",
+        "#607D8B", "#E91E63", "#8BC34A", "#FF5722", "#00E5FF"
     )
 
     // ══════════════════════════════════════════════════════════════════════
@@ -123,6 +123,7 @@ class MainActivity : AppCompatActivity() {
         findViewById<TextView>(R.id.tvNotebookTitle).text = notebookName
 
         setupListeners()
+        drawingView.brushColor = activeColor
         updateColorSwatch()
         setupRecognizer()
         loadNotebookDrawing()

@@ -13,6 +13,26 @@ class DrawingView @JvmOverloads constructor(
     defStyleAttr: Int = 0
 ) : View(context, attrs, defStyleAttr) {
 
+    // Background color
+    var canvasBackgroundColor: Int = Color.parseColor("#FDFCF5")
+
+    // --- Lined Paper Paints ---
+    private val linePaint = Paint().apply {
+        color = Color.parseColor("#D3D3D3") // Light Grey
+        strokeWidth = 2f
+        style = Paint.Style.STROKE
+    }
+
+    private val marginPaint = Paint().apply {
+        color = Color.parseColor("#FFCDD2") // Soft Red
+        strokeWidth = 3f
+        style = Paint.Style.STROKE
+    }
+
+    init {
+        setBackgroundColor(canvasBackgroundColor)
+    }
+
     // --- Data classes ---
     data class Stroke(
         val path: Path,
@@ -64,8 +84,6 @@ class DrawingView @JvmOverloads constructor(
     // Original background image if loaded from file
     private var initialBitmap: Bitmap? = null
 
-    // Background color
-    var canvasBackgroundColor: Int = Color.parseColor("#1A1A2E")
 
     // Touch tolerance for smoothness
     private val TOUCH_TOLERANCE = 4f
@@ -117,7 +135,10 @@ class DrawingView @JvmOverloads constructor(
         // 1. Draw background color
         dc.drawColor(canvasBackgroundColor)
         
-        // 2. Draw initial bitmap if present (scaled to fit)
+        // 2. Draw paper lines
+        drawPaperLines(dc)
+        
+        // 3. Draw initial bitmap if present (scaled to fit)
         initialBitmap?.let {
             if (it.width != w || it.height != h) {
                 val scaled = Bitmap.createScaledBitmap(it, w, h, true)
@@ -127,10 +148,28 @@ class DrawingView @JvmOverloads constructor(
             }
         }
         
-        // 3. Redraw all strokes on top
+        // 4. Redraw all strokes on top
         for (stroke in strokes) {
             dc.drawPath(stroke.path, stroke.paint)
         }
+    }
+
+    private fun drawPaperLines(canvas: Canvas) {
+        val w = width.toFloat()
+        val h = height.toFloat()
+        if (w <= 0 || h <= 0) return
+
+        // Horizontal lines
+        val lineSpacing = 100f
+        var y = lineSpacing * 2f // Start a bit lower for the top margin
+        while (y < h) {
+            canvas.drawLine(0f, y, w, y, linePaint)
+            y += lineSpacing
+        }
+
+        // Vertical margin line
+        val marginX = 120f
+        canvas.drawLine(marginX, 0f, marginX, h, marginPaint)
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
