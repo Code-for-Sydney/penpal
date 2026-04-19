@@ -1,13 +1,9 @@
 package com.drawapp
 
 import android.Manifest
-import android.app.Dialog
-import android.app.DownloadManager
-import android.content.BroadcastReceiver
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -30,6 +26,8 @@ import java.io.File
 import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
 
 class MainActivity : AppCompatActivity() {
 
@@ -61,25 +59,7 @@ class MainActivity : AppCompatActivity() {
     private val AUTOSAVE_DEBOUNCE_MS = 2000L
     private var notebookName: String = "My Notebook"
     private var notebookId: String = ""
-
-    // ── Download tracking ──────────────────────────────────────────────────
-    private var downloadId: Long = -1L
-    private var downloadDialog: Dialog? = null
-    private val downloadPollHandler = Handler(Looper.getMainLooper())
-    private lateinit var downloadPollRunnable: Runnable
-
-    /** Receives MODEL_READY broadcast when DownloadManager completes. */
-    private val modelReadyReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) {
-            if (intent.action == ModelDownloadReceiver.ACTION_MODEL_READY) {
-                val path = intent.getStringExtra(ModelDownloadReceiver.EXTRA_MODEL_PATH) ?: return
-                downloadPollHandler.removeCallbacks(downloadPollRunnable)
-                downloadDialog?.dismiss()
-                Toast.makeText(this@MainActivity, "Model downloaded!", Toast.LENGTH_SHORT).show()
-                loadModel(path)
-            }
-        }
-    }
+    private val activityScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     // ── Misc ───────────────────────────────────────────────────────────────
     private val STORAGE_PERMISSION_CODE = 101
@@ -127,26 +107,14 @@ class MainActivity : AppCompatActivity() {
         updateColorSwatch()
         setupRecognizer()
         loadNotebookDrawing()
-
-        // Register for MODEL_READY broadcast
-        val filter = IntentFilter(ModelDownloadReceiver.ACTION_MODEL_READY)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(modelReadyReceiver, filter, RECEIVER_NOT_EXPORTED)
-        } else {
-            @Suppress("UnspecifiedRegisterReceiverFlag")
-            registerReceiver(modelReadyReceiver, filter)
-        }
     }
 
     override fun onDestroy() {
         super.onDestroy()
         recognitionHandler.removeCallbacks(recognitionRunnable)
         recognitionHandler.removeCallbacks(autosaveRunnable)
-        if (::downloadPollRunnable.isInitialized) {
-            downloadPollHandler.removeCallbacks(downloadPollRunnable)
-        }
-        unregisterReceiver(modelReadyReceiver)
-        recognizer.close()
+        activityScope.cancel()
+        // No longer closing the recognizer here as it is shared
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -154,7 +122,7 @@ class MainActivity : AppCompatActivity() {
     // ══════════════════════════════════════════════════════════════════════
 
     private fun setupRecognizer() {
-        recognizer = HandwritingRecognizer(this)
+        recognizer = HandwritingRecognizer.getInstance(this)
 
         // Wire stroke callback → debounced recognition & autosave
         drawingView.onStrokeCompleted = {
@@ -167,39 +135,32 @@ class MainActivity : AppCompatActivity() {
             recognitionHandler.postDelayed(autosaveRunnable, AUTOSAVE_DEBOUNCE_MS)
         }
 
-        // 1. Check if model already exists anywhere on device
+        // Observe readiness to update UI
+        activityScope.launch {
+            recognizer.isReadyFlow.collect { ready ->
+                if (ready) {
+                    setRecognitionState(RecognitionState.IDLE)
+                }
+            }
+        }
+
+        // 1. Check if recognizer is already ready from startup
+        if (recognizer.isReady) {
+            setRecognitionState(RecognitionState.IDLE)
+            return
+        }
+
+        // 2. Check if model already exists anywhere on device (being loaded)
         val existing = ModelManager.findExistingModel(this)
         if (existing != null) {
             loadModel(existing)
             return
         }
 
-        // 2. Check if a download is already in progress from a previous session
-        val savedId = ModelManager.savedDownloadId(this)
-        if (savedId != -1L) {
-            val status = ModelManager.queryDownload(this, savedId)
-            when (status.state) {
-                ModelManager.DownloadState.RUNNING,
-                ModelManager.DownloadState.PAUSED -> {
-                    // Resume showing progress for existing download
-                    downloadId = savedId
-                    showDownloadDialog(alreadyDownloading = true)
-                    return
-                }
-                ModelManager.DownloadState.DONE -> {
-                    val path = ModelManager.modelFile(this).absolutePath
-                    if (File(path).exists()) {
-                        ModelManager.saveModelPath(this, path)
-                        loadModel(path)
-                        return
-                    }
-                }
-                else -> { /* fall through to show dialog */ }
-            }
-        }
-
-        // 3. Nothing found — show download dialog automatically
-        showDownloadDialog(alreadyDownloading = false)
+        // 3. Otherwise, model doesn't exist. Tell user to go back.
+        setRecognitionState(RecognitionState.ERROR)
+        recognitionText.text = "Model not found. Download on home screen."
+        recognitionText.setTextColor(Color.parseColor("#FF6B6B"))
     }
 
     private fun loadModel(path: String) {
@@ -208,7 +169,6 @@ class MainActivity : AppCompatActivity() {
             modelPath = path,
             onReady = {
                 setRecognitionState(RecognitionState.IDLE)
-                Toast.makeText(this, "Gemma ready ✓", Toast.LENGTH_SHORT).show()
             },
             onError = { msg ->
                 setRecognitionState(RecognitionState.ERROR)
@@ -219,163 +179,7 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    // ══════════════════════════════════════════════════════════════════════
-    // Download dialog
-    // ══════════════════════════════════════════════════════════════════════
 
-    private fun showDownloadDialog(alreadyDownloading: Boolean) {
-        val dialogView = layoutInflater.inflate(R.layout.dialog_model_download, null)
-
-        val progressArea  = dialogView.findViewById<View>(R.id.dlProgressArea)
-        val readyArea     = dialogView.findViewById<View>(R.id.dlReadyArea)
-        val progressBar   = dialogView.findViewById<ProgressBar>(R.id.dlProgressBar)
-        val progressLabel = dialogView.findViewById<TextView>(R.id.dlProgressLabel)
-        val progressPct   = dialogView.findViewById<TextView>(R.id.dlProgressPercent)
-        val errorText     = dialogView.findViewById<TextView>(R.id.dlErrorText)
-        val btnStart      = dialogView.findViewById<Button>(R.id.btnStartDownload)
-        val btnSkip       = dialogView.findViewById<Button>(R.id.btnSkipDownload)
-        val etToken       = dialogView.findViewById<android.widget.EditText>(R.id.etHfToken)
-        val btnAcceptLic  = dialogView.findViewById<TextView>(R.id.btnAcceptLicense)
-        val btnGetToken   = dialogView.findViewById<TextView>(R.id.btnGetToken)
-
-        // Web links
-        btnAcceptLic.setOnClickListener {
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://huggingface.co/google/gemma-4-E2B-it"))
-            startActivity(intent)
-        }
-        btnGetToken.setOnClickListener {
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://huggingface.co/settings/tokens"))
-            startActivity(intent)
-        }
-
-        // Pre-fill any previously saved token
-        val savedToken = ModelManager.savedHfToken(this)
-        if (savedToken.isNotBlank()) etToken.setText(savedToken)
-
-        val dialog = AlertDialog.Builder(this, R.style.DarkDialogTheme)
-            .setView(dialogView)
-            .setCancelable(false)
-            .create()
-        dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
-        downloadDialog = dialog
-
-        // ── Polling runnable ────────────────────────────────────────────
-        downloadPollRunnable = Runnable {
-            if (downloadId == -1L) return@Runnable
-            val status = ModelManager.queryDownload(this, downloadId)
-
-            when (status.state) {
-                ModelManager.DownloadState.RUNNING,
-                ModelManager.DownloadState.PAUSED -> {
-                    progressBar.progress = status.progressPercent
-                    progressLabel.text   = status.progressDisplay
-                    progressPct.text     = "${status.progressPercent}%"
-                    // Poll again in 1s
-                    downloadPollHandler.postDelayed(downloadPollRunnable, 1000)
-                }
-                ModelManager.DownloadState.DONE -> {
-                    val path = ModelManager.modelFile(this).absolutePath
-                    if (File(path).exists()) {
-                        ModelManager.saveModelPath(this, path)
-                        dialog.dismiss()
-                        loadModel(path)
-                    }
-                }
-                ModelManager.DownloadState.FAILED -> {
-                    progressArea.visibility = View.GONE
-                    readyArea.visibility    = View.VISIBLE
-                    errorText.visibility    = View.VISIBLE
-                    errorText.text          =
-                        "Download failed (reason ${status.reason}). Check your internet connection and try again."
-                }
-                else -> {}
-            }
-        }
-
-        fun showProgress() {
-            readyArea.visibility    = View.GONE
-            progressArea.visibility = View.VISIBLE
-            progressBar.progress    = 0
-            progressLabel.text      = "Connecting…"
-            progressPct.text        = "0%"
-            downloadPollHandler.postDelayed(downloadPollRunnable, 1000)
-        }
-
-        // ── If already downloading, jump straight to progress view ──────
-        if (alreadyDownloading) {
-            showProgress()
-        } else {
-            readyArea.visibility    = View.VISIBLE
-            progressArea.visibility = View.GONE
-        }
-
-        // ── Buttons ─────────────────────────────────────────────────────
-        btnStart.setOnClickListener {
-            val token = etToken.text.toString().trim()
-            if (token.isBlank()) {
-                errorText.visibility = View.VISIBLE
-                errorText.text = "Please enter your HuggingFace access token first."
-                return@setOnClickListener
-            }
-            errorText.visibility = View.GONE
-            btnStart.isEnabled = false
-            btnStart.text = "Connecting..."
-            
-            ModelManager.startDownloadHFAsync(
-                context = this,
-                hfToken = token,
-                onSuccess = { id ->
-                    downloadId = id
-                    btnStart.isEnabled = true
-                    btnStart.text = "⬇  Download Model"
-                    showProgress()
-                },
-                onError = { msg ->
-                    btnStart.isEnabled = true
-                    btnStart.text = "⬇  Download Model"
-                    errorText.visibility = View.VISIBLE
-                    errorText.text = msg
-                }
-            )
-        }
-
-        btnSkip.setOnClickListener {
-            dialog.dismiss()
-            showManualPathDialog()
-        }
-
-        dialog.show()
-        recognitionText.text = "Waiting for Gemma model…"
-        recognitionText.setTextColor(Color.parseColor("#88FFFFFF"))
-    }
-
-    /** Fallback: user points to an existing .task file path. */
-    private fun showManualPathDialog() {
-        val input = EditText(this).apply {
-            hint = "/sdcard/Download/gemma-4-E2B-it.litertlm"
-            setTextColor(Color.WHITE)
-            setHintTextColor(Color.parseColor("#55FFFFFF"))
-            setPadding(32, 24, 32, 24)
-        }
-        AlertDialog.Builder(this, R.style.DarkDialogTheme)
-            .setTitle("Model File Path")
-            .setMessage("Enter the full path to a Gemma .litertlm file already on this device:")
-            .setView(input)
-            .setPositiveButton("Load") { _, _ ->
-                val path = input.text.toString().trim()
-                if (path.isNotBlank() && File(path).exists()) {
-                    ModelManager.saveModelPath(this, path)
-                    loadModel(path)
-                } else {
-                    Toast.makeText(this, "File not found at that path", Toast.LENGTH_LONG).show()
-                    showDownloadDialog(alreadyDownloading = false)
-                }
-            }
-            .setNegativeButton("Back") { _, _ ->
-                showDownloadDialog(alreadyDownloading = false)
-            }
-            .show()
-    }
 
     // ══════════════════════════════════════════════════════════════════════
     // Recognition
@@ -481,12 +285,9 @@ class MainActivity : AppCompatActivity() {
         btnBrushSize.setOnClickListener   { showBrushSizeDialog() }
         btnColorPicker.setOnClickListener { showColorPickerDialog() }
 
-        // Long-press ✦ to re-trigger model setup
+        // Long-press ✦ to re-trigger model setup (inform user to do it from the main screen instead)
         recognitionIcon.setOnLongClickListener {
-            ModelManager.clearModelPath(this)
-            recognizer.close()
-            recognizer = HandwritingRecognizer(this)
-            showDownloadDialog(alreadyDownloading = false)
+            Toast.makeText(this, "Manage model downloads from the home screen.", Toast.LENGTH_SHORT).show()
             true
         }
     }

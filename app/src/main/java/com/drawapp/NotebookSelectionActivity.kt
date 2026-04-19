@@ -14,12 +14,18 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.floatingactionbutton.FloatingActionButton
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
+import java.io.File
 
 class NotebookSelectionActivity : AppCompatActivity() {
 
     private lateinit var rvNotebooks: RecyclerView
     private lateinit var fabAdd: FloatingActionButton
     private lateinit var adapter: NotebookAdapter
+    private lateinit var loadingOverlay: View
+    private val activityScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private var downloadDialog: android.app.Dialog? = null
 
     private val colors = listOf(
         "#FF4081", "#F44336", "#FF9800", "#FFEB3B", "#4CAF50",
@@ -33,11 +39,83 @@ class NotebookSelectionActivity : AppCompatActivity() {
         rvNotebooks = findViewById(R.id.rvNotebooks)
         fabAdd = findViewById(R.id.fabAddNotebook)
 
+        loadingOverlay = findViewById(R.id.loadingOverlay)
+
         setupRecyclerView()
 
         fabAdd.setOnClickListener {
             showAddEditDialog(null)
         }
+
+        // Observe readiness to hide loading overlay
+        val recognizer = HandwritingRecognizer.getInstance(this)
+
+        activityScope.launch {
+            recognizer.isReadyFlow.collect { ready ->
+                if (ready) {
+                    loadingOverlay.visibility = View.GONE
+                }
+            }
+        }
+
+        checkAndLoadModel(recognizer)
+    }
+
+    private fun checkAndLoadModel(recognizer: HandwritingRecognizer) {
+        if (recognizer.isReady) {
+            loadingOverlay.visibility = View.GONE
+            return
+        }
+
+        val existing = ModelManager.findExistingModel(this)
+        if (existing != null) {
+            loadingOverlay.visibility = View.VISIBLE
+            recognizer.load(existing)
+            return
+        }
+
+        val savedId = ModelManager.savedDownloadId(this)
+        if (savedId != -1L) {
+            val status = ModelManager.queryDownload(this, savedId)
+            when (status.state) {
+                ModelManager.DownloadState.RUNNING,
+                ModelManager.DownloadState.PAUSED -> {
+                    showDownloadDialog(alreadyDownloading = true)
+                    return
+                }
+                ModelManager.DownloadState.DONE -> {
+                    val path = ModelManager.modelFile(this).absolutePath
+                    if (File(path).exists()) {
+                        ModelManager.saveModelPath(this, path)
+                        loadingOverlay.visibility = View.VISIBLE
+                        recognizer.load(path)
+                        return
+                    }
+                }
+                else -> { /* fall through to show dialog */ }
+            }
+        }
+
+        showDownloadDialog(alreadyDownloading = false)
+    }
+
+    private fun showDownloadDialog(alreadyDownloading: Boolean) {
+        downloadDialog?.dismiss()
+        downloadDialog = ModelDownloadHelper.showDownloadDialog(
+            activity = this,
+            alreadyDownloading = alreadyDownloading,
+            onDownloadIdAcquired = { /* managed by helper/manager */ },
+            onDialogDismissed = { downloadDialog = null },
+            onModelLoaded = { path ->
+                loadingOverlay.visibility = View.VISIBLE
+                HandwritingRecognizer.getInstance(this).load(path)
+            }
+        )
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        activityScope.cancel()
     }
 
     private fun setupRecyclerView() {

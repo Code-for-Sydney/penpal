@@ -11,23 +11,67 @@ import java.io.ByteArrayOutputStream
  * Wraps LiteRT-LM (Gemma) for handwriting recognition.
  * Call [load] once, then [recognize] for each canvas bitmap.
  */
-class HandwritingRecognizer(private val context: Context) {
+/**
+ * Wraps LiteRT-LM (Gemma) for handwriting recognition.
+ * Shared singleton instance to keep the engine alive across activities.
+ */
+class HandwritingRecognizer private constructor(private val context: Context) {
 
     private var engine: Engine? = null
     private val ioScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    var isReady = false
-        private set
+    private val _isReady = MutableStateFlow(false)
+    val isReadyFlow: StateFlow<Boolean> = _isReady.asStateFlow()
+
+    var isReady: Boolean
+        get() = _isReady.value
+        private set(value) { _isReady.value = value }
+
+    private var isInitializing = false
+    private val loadCallbacks = mutableListOf<Pair<() -> Unit, (String) -> Unit>>()
 
     var isRecognizing = false
         private set
 
-    /** Load (or reload) the model from [modelPath] (.litertlm file on device). */
+    companion object {
+        @Volatile
+        private var instance: HandwritingRecognizer? = null
+
+        fun getInstance(context: Context): HandwritingRecognizer {
+            return instance ?: synchronized(this) {
+                instance ?: HandwritingRecognizer(context.applicationContext).also { instance = it }
+            }
+        }
+    }
+
+    /**
+     * Initial initialization of the engine.
+     * Looks for an existing model and loads it if found.
+     */
+    fun initialize() {
+        if (isReady) return
+        val path = ModelManager.findExistingModel(context)
+        if (path != null) {
+            load(path, {}, {})
+        }
+    }
+
     fun load(
         modelPath: String,
-        onReady: () -> Unit,
-        onError: (String) -> Unit
+        onReady: () -> Unit = {},
+        onError: (String) -> Unit = {}
     ) {
+        synchronized(this) {
+            if (isReady && engine != null) {
+                onReady()
+                return
+            }
+            
+            loadCallbacks.add(onReady to onError)
+            if (isInitializing) return
+            isInitializing = true
+        }
+        
         isReady = false
         ioScope.launch {
             try {
@@ -37,23 +81,36 @@ class HandwritingRecognizer(private val context: Context) {
 
                 val config = EngineConfig(
                     modelPath = modelPath,
-                    // Specify backends for both LLM and Vision
                     backend = Backend.GPU(),
                     visionBackend = Backend.GPU(),
                     maxNumImages = 1
                 )
 
-                // Use the Engine constructor (create method is not available in this version)
                 val newEngine = Engine(config)
                 newEngine.initialize()
                 
                 engine = newEngine
                 isReady = true
-                withContext(Dispatchers.Main) { onReady() }
+                
+                val callbacks = synchronized(this@HandwritingRecognizer) {
+                    isInitializing = false
+                    val c = loadCallbacks.toList()
+                    loadCallbacks.clear()
+                    c
+                }
+                withContext(Dispatchers.Main) { 
+                    callbacks.forEach { it.first() } 
+                }
             } catch (e: Exception) {
+                val fullError = e.stackTraceToString()
+                val callbacks = synchronized(this@HandwritingRecognizer) {
+                    isInitializing = false
+                    val c = loadCallbacks.toList()
+                    loadCallbacks.clear()
+                    c
+                }
                 withContext(Dispatchers.Main) {
-                    val fullError = e.stackTraceToString()
-                    onError("Model load failed: ${e.message}\n$fullError")
+                    callbacks.forEach { it.second("Model load failed: ${e.message}\n$fullError") }
                 }
             }
         }
@@ -126,10 +183,12 @@ class HandwritingRecognizer(private val context: Context) {
         }
     }
 
+    /** Only call this when the application is actually shutting down if necessary. */
     fun close() {
-        ioScope.cancel()
+        // Typically not needed for a singleton in Android unless you want to force release memory
         engine?.close()
         engine = null
         isReady = false
     }
 }
+
