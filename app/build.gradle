@@ -39,9 +39,8 @@ dependencies {
     implementation 'com.google.android.material:material:1.11.0'
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
 
-    // MediaPipe on-device LLM inference (Gemma)
-    implementation 'com.google.mediapipe:tasks-genai:0.10.33'
-    implementation 'com.google.mediapipe:tasks-vision:0.10.33'
+    // LiteRT-LM on-device LLM inference (Gemma)
+    implementation 'com.google.ai.edge.litertlm:litertlm-android:latest.release'
 
     // Coroutines
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
