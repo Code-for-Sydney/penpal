@@ -1,30 +1,15 @@
 package com.drawapp
 
-import android.Manifest
-import android.content.ContentValues
-import android.content.Context
-import android.content.Intent
-import android.content.pm.PackageManager
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.Color
-import android.net.Uri
-import android.os.Build
 import android.os.Bundle
-import android.os.Environment
 import android.os.Handler
 import android.os.Looper
-import android.provider.MediaStore
 import android.view.View
 import android.view.WindowManager
 import android.widget.*
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.app.ActivityCompat
-import androidx.core.content.ContextCompat
 import java.io.File
-import java.io.IOException
-import java.text.SimpleDateFormat
 import java.util.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -271,10 +256,12 @@ class MainActivity : AppCompatActivity() {
         btnUndo.setOnClickListener {
             drawingView.undo(); updateButtonStates()
             scheduleRecognition()
+            scheduleAutosave()
         }
         btnRedo.setOnClickListener {
             drawingView.redo(); updateButtonStates()
             scheduleRecognition()
+            scheduleAutosave()
         }
         btnClear.setOnClickListener { showClearConfirmDialog() }
         btnEraser.setOnClickListener {
@@ -297,6 +284,11 @@ class MainActivity : AppCompatActivity() {
             recognitionHandler.removeCallbacks(recognitionRunnable)
             recognitionHandler.postDelayed(recognitionRunnable, DEBOUNCE_MS)
         }
+    }
+
+    private fun scheduleAutosave() {
+        recognitionHandler.removeCallbacks(autosaveRunnable)
+        recognitionHandler.postDelayed(autosaveRunnable, AUTOSAVE_DEBOUNCE_MS)
     }
 
     private fun updateButtonStates() {
@@ -428,59 +420,30 @@ class MainActivity : AppCompatActivity() {
                 recognitionText.text = "Draw something to recognize…"
                 recognitionText.setTextColor(Color.parseColor("#88FFFFFF"))
                 setRecognitionState(RecognitionState.IDLE)
+                // Delete the saved SVG immediately
+                deleteNotebookSvg()
             }
             .setNegativeButton("Cancel", null).show()
     }
 
-    // ── Save drawing ──────────────────────────────────────────────────────
+    // ── Save / Load SVG ───────────────────────────────────────────────────
+
+    private fun getNotebookSvgFile(): File {
+        val dir = File(filesDir, "notebooks")
+        dir.mkdirs()
+        return File(dir, "${notebookName}.svg")
+    }
 
     private fun loadNotebookDrawing() {
-        val fileName = "${notebookName}.png"
-        val relativePath = Environment.DIRECTORY_PICTURES + "/Penpal"
-        
+        val file = getNotebookSvgFile()
+        if (!file.exists()) return
+
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                val projection = arrayOf(MediaStore.Images.Media._ID)
-                // Try both with and without trailing slash
-                val paths = arrayOf(relativePath + "/", relativePath)
-                var found = false
-                
-                for (path in paths) {
-                    val selection = "${MediaStore.Images.Media.DISPLAY_NAME} = ? AND ${MediaStore.Images.Media.RELATIVE_PATH} = ?"
-                    val selectionArgs = arrayOf(fileName, path)
-                    
-                    contentResolver.query(
-                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                        projection,
-                        selection,
-                        selectionArgs,
-                        null
-                    )?.use { cursor ->
-                        if (cursor.moveToFirst()) {
-                            val id = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID))
-                            val uri = Uri.withAppendedPath(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id.toString())
-                            contentResolver.openInputStream(uri)?.use { input ->
-                                val bitmap = BitmapFactory.decodeStream(input)
-                                if (bitmap != null) {
-                                    drawingView.initializeWithBitmap(bitmap)
-                                    Toast.makeText(this, "Loaded \"$notebookName\"", Toast.LENGTH_SHORT).show()
-                                    found = true
-                                }
-                            }
-                        }
-                    }
-                    if (found) break
-                }
-            } else {
-                val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES), "Penpal")
-                val file = File(dir, fileName)
-                if (file.exists()) {
-                    val bitmap = BitmapFactory.decodeFile(file.absolutePath)
-                    if (bitmap != null) {
-                        drawingView.initializeWithBitmap(bitmap)
-                        Toast.makeText(this, "Loaded \"$notebookName\"", Toast.LENGTH_SHORT).show()
-                    }
-                }
+            val svgContent = file.readText()
+            val strokeDataList = SvgSerializer.deserialize(svgContent)
+            if (strokeDataList.isNotEmpty()) {
+                drawingView.loadFromStrokeData(strokeDataList)
+                Toast.makeText(this, "Loaded \"$notebookName\"", Toast.LENGTH_SHORT).show()
             }
         } catch (e: Exception) {
             e.printStackTrace()
@@ -488,58 +451,32 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun performAutosave() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
-            != PackageManager.PERMISSION_GRANTED) {
+        val strokeData = drawingView.getStrokeDataList()
+        val file = getNotebookSvgFile()
+
+        if (strokeData.isEmpty()) {
+            if (file.exists()) file.delete()
             return
         }
-        
-        val bitmap = drawingView.getBitmap() ?: return
-        val fileName = "${notebookName}.png"
-        val relativePath = Environment.DIRECTORY_PICTURES + "/Penpal"
 
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                val projection = arrayOf(MediaStore.Images.Media._ID)
-                val selection = "${MediaStore.Images.Media.DISPLAY_NAME} = ? AND ${MediaStore.Images.Media.RELATIVE_PATH} = ?"
-                val selectionArgs = arrayOf(fileName, relativePath + "/")
-                
-                var uri: Uri? = null
-                contentResolver.query(
-                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                    projection,
-                    selection,
-                    selectionArgs,
-                    null
-                )?.use { cursor ->
-                    if (cursor.moveToFirst()) {
-                        val id = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID))
-                        uri = Uri.withAppendedPath(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id.toString())
-                    }
-                }
+            val svgContent = SvgSerializer.serialize(
+                strokes = strokeData,
+                width = drawingView.width,
+                height = drawingView.height,
+                backgroundColor = drawingView.canvasBackgroundColor,
+                contentBounds = drawingView.getContentBounds()
+            )
+            file.writeText(svgContent)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
 
-                if (uri == null) {
-                    val values = ContentValues().apply {
-                        put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
-                        put(MediaStore.Images.Media.MIME_TYPE, "image/png")
-                        put(MediaStore.Images.Media.RELATIVE_PATH, relativePath + "/")
-                    }
-                    uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
-                }
-
-                uri?.let {
-                    contentResolver.openOutputStream(it, "wt")?.use { out ->
-                        bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
-                    }
-                }
-            } else {
-                val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES), "Penpal")
-                dir.mkdirs()
-                val file = File(dir, fileName)
-                file.outputStream().use { out ->
-                    bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
-                }
-            }
+    private fun deleteNotebookSvg() {
+        try {
+            val file = getNotebookSvgFile()
+            if (file.exists()) file.delete()
         } catch (e: Exception) {
             e.printStackTrace()
         }
