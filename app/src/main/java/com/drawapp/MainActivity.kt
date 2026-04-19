@@ -366,7 +366,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun triggerRecognition() {
         if (isRecognizing || !recognizer.isReady) return
-        val bitmap = drawingView.getBitmap() ?: return
+        
+        // Use the cropped cluster bitmap instead of the full canvas
+        val bitmap = drawingView.getRecentClusterBitmap() ?: return
 
         isRecognizing = true
         setRecognitionState(RecognitionState.RUNNING)
@@ -603,6 +605,7 @@ class MainActivity : AppCompatActivity() {
             .setMessage("Are you sure you want to erase everything?")
             .setPositiveButton("Clear") { _, _ ->
                 drawingView.clear()
+                drawingView.clearDebugBox()
                 recognitionHandler.removeCallbacks(recognitionRunnable)
                 recognitionText.text = "Draw something to recognize…"
                 recognitionText.setTextColor(Color.parseColor("#88FFFFFF"))

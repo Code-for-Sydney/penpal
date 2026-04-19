@@ -38,8 +38,8 @@ class HandwritingRecognizer(private val context: Context) {
                 val config = EngineConfig(
                     modelPath = modelPath,
                     // Specify backends for both LLM and Vision
-                    backend = Backend.CPU(),
-                    visionBackend = Backend.CPU(),
+                    backend = Backend.GPU(),
+                    visionBackend = Backend.GPU(),
                     maxNumImages = 1
                 )
 

@@ -16,7 +16,8 @@ class DrawingView @JvmOverloads constructor(
     // --- Data classes ---
     data class Stroke(
         val path: Path,
-        val paint: Paint
+        val paint: Paint,
+        val bounds: RectF
     )
 
     // --- State ---
@@ -42,6 +43,15 @@ class DrawingView @JvmOverloads constructor(
 
     /** Called once each time the user lifts their finger after a stroke. */
     var onStrokeCompleted: (() -> Unit)? = null
+
+    // --- Debug ---
+    private var debugBoundingBox: RectF? = null
+    private val debugPaint = Paint().apply {
+        color = Color.RED
+        style = Paint.Style.STROKE
+        strokeWidth = 3f
+        pathEffect = DashPathEffect(floatArrayOf(15f, 15f), 0f)
+    }
 
 
     private var currentPaint = buildPaint()
@@ -103,6 +113,11 @@ class DrawingView @JvmOverloads constructor(
         canvasBitmap?.let { canvas.drawBitmap(it, 0f, 0f, bitmapPaint) }
         // Draw in-progress stroke live
         canvas.drawPath(currentPath, currentPaint)
+
+        // Draw debug bounding box if present
+        debugBoundingBox?.let {
+            canvas.drawRect(it, debugPaint)
+        }
     }
 
     // --- Touch handling ---
@@ -154,12 +169,22 @@ class DrawingView @JvmOverloads constructor(
         // Commit to bitmap
         drawingCanvas?.drawPath(currentPath, strokePaint)
 
+        // Compute bounds
+        val bounds = RectF()
+        currentPath.computeBounds(bounds, true)
+        // Adjust for stroke width
+        val halfWidth = strokePaint.strokeWidth / 2f
+        bounds.inset(-halfWidth, -halfWidth)
+
         // Save stroke for undo
-        strokes.add(Stroke(currentPath, strokePaint))
+        strokes.add(Stroke(currentPath, strokePaint, bounds))
         redoStack.clear()
 
         // Reset current path
         currentPath = Path()
+
+        // Clear debug box on new interaction (optional, or keep it until next recognition)
+        // debugBoundingBox = null 
 
         // Notify listener so recognition can be debounced
         onStrokeCompleted?.invoke()
@@ -197,4 +222,71 @@ class DrawingView @JvmOverloads constructor(
 
     // --- Save ---
     fun getBitmap(): Bitmap? = canvasBitmap?.copy(Bitmap.Config.ARGB_8888, false)
+
+    // --- Cropped Bitmap for Recognition ---
+    fun getRecentClusterBitmap(): Bitmap? {
+        val bounds = getRecentClusterBounds() ?: return null
+        
+        // Add some margin (e.g., 40px)
+        val margin = 40f
+        val left = (bounds.left - margin).coerceAtLeast(0f)
+        val top = (bounds.top - margin).coerceAtLeast(0f)
+        val right = (bounds.right + margin).coerceAtMost(width.toFloat())
+        val bottom = (bounds.bottom + margin).coerceAtMost(height.toFloat())
+        
+        val cropRect = RectF(left, top, right, bottom)
+        if (cropRect.width() < 10 || cropRect.height() < 10) return null
+
+        // Update debug box for visualization
+        debugBoundingBox = cropRect
+        invalidate()
+
+        val fullBitmap = canvasBitmap ?: return null
+        
+        // Ensure coordinates are within bitmap
+        val ix = left.toInt().coerceIn(0, fullBitmap.width - 1)
+        val iy = top.toInt().coerceIn(0, fullBitmap.height - 1)
+        val iw = cropRect.width().toInt().coerceAtMost(fullBitmap.width - ix)
+        val ih = cropRect.height().toInt().coerceAtMost(fullBitmap.height - iy)
+
+        if (iw <= 0 || ih <= 0) return null
+
+        return Bitmap.createBitmap(fullBitmap, ix, iy, iw, ih)
+    }
+
+    private fun getRecentClusterBounds(): RectF? {
+        if (strokes.isEmpty()) return null
+        
+        val lastStroke = strokes.last()
+        val cluster = mutableSetOf(lastStroke)
+        val clusterBounds = RectF(lastStroke.bounds)
+        
+        // Distance to consider "close together"
+        val padding = 120f 
+        
+        var changed = true
+        while (changed) {
+            changed = false
+            for (stroke in strokes) {
+                if (stroke in cluster) continue
+                
+                // Check if this stroke is near the current cluster
+                val nearBounds = RectF(clusterBounds).apply {
+                    inset(-padding, -padding)
+                }
+                
+                if (RectF.intersects(nearBounds, stroke.bounds)) {
+                    cluster.add(stroke)
+                    clusterBounds.union(stroke.bounds)
+                    changed = true
+                }
+            }
+        }
+        return clusterBounds
+    }
+
+    fun clearDebugBox() {
+        debugBoundingBox = null
+        invalidate()
+    }
 }
