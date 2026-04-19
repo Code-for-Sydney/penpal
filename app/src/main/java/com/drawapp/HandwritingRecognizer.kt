@@ -19,6 +19,9 @@ class HandwritingRecognizer(private val context: Context) {
     var isReady = false
         private set
 
+    var isRecognizing = false
+        private set
+
     /** Load (or reload) the model from [modelPath] (.litertlm file on device). */
     fun load(
         modelPath: String,
@@ -72,9 +75,16 @@ class HandwritingRecognizer(private val context: Context) {
             return
         }
 
+        if (isRecognizing) {
+            onError("Another recognition is already in progress")
+            return
+        }
+
         ioScope.launch {
+            var conversation: Conversation? = null
             try {
-                val conversation = currentEngine.createConversation()
+                isRecognizing = true
+                conversation = currentEngine.createConversation()
 
                 // Resize bitmap to a standard resolution (e.g., 448x448) for the multimodal model
                 val scaledBitmap = Bitmap.createScaledBitmap(bitmap, 448, 448, true)
@@ -109,6 +119,9 @@ class HandwritingRecognizer(private val context: Context) {
                 withContext(Dispatchers.Main) {
                     onError("Recognition failed: ${e.message}")
                 }
+            } finally {
+                conversation?.close()
+                isRecognizing = false
             }
         }
     }
