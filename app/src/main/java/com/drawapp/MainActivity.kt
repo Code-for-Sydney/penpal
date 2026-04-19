@@ -9,6 +9,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.net.Uri
 import android.os.Build
@@ -36,7 +38,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnUndo: ImageButton
     private lateinit var btnRedo: ImageButton
     private lateinit var btnClear: ImageButton
-    private lateinit var btnSave: ImageButton
     private lateinit var btnEraser: ImageButton
     private lateinit var btnBrushSize: ImageButton
     private lateinit var btnColorPicker: View
@@ -55,6 +56,10 @@ class MainActivity : AppCompatActivity() {
     private val DEBOUNCE_MS = 1500L
     private var isRecognizing = false
     private val recognitionRunnable = Runnable { triggerRecognition() }
+    private val autosaveRunnable = Runnable { performAutosave() }
+    private val AUTOSAVE_DEBOUNCE_MS = 2000L
+    private var notebookName: String = "My Notebook"
+    private var notebookId: String = ""
 
     // ── Download tracking ──────────────────────────────────────────────────
     private var downloadId: Long = -1L
@@ -102,7 +107,6 @@ class MainActivity : AppCompatActivity() {
         btnUndo             = findViewById(R.id.btnUndo)
         btnRedo             = findViewById(R.id.btnRedo)
         btnClear            = findViewById(R.id.btnClear)
-        btnSave             = findViewById(R.id.btnSave)
         btnEraser           = findViewById(R.id.btnEraser)
         btnBrushSize        = findViewById(R.id.btnBrushSize)
         colorSwatch         = findViewById(R.id.colorSwatch)
@@ -112,12 +116,14 @@ class MainActivity : AppCompatActivity() {
         recognitionText     = findViewById(R.id.recognitionText)
 
         // Set notebook title from intent
-        val notebookName = intent.getStringExtra("NOTEBOOK_NAME") ?: "My Notebook"
+        notebookId = intent.getStringExtra("NOTEBOOK_ID") ?: ""
+        notebookName = intent.getStringExtra("NOTEBOOK_NAME") ?: "My Notebook"
         findViewById<TextView>(R.id.tvNotebookTitle).text = notebookName
 
         setupListeners()
         updateColorSwatch()
         setupRecognizer()
+        loadNotebookDrawing()
 
         // Register for MODEL_READY broadcast
         val filter = IntentFilter(ModelDownloadReceiver.ACTION_MODEL_READY)
@@ -132,6 +138,7 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         recognitionHandler.removeCallbacks(recognitionRunnable)
+        recognitionHandler.removeCallbacks(autosaveRunnable)
         if (::downloadPollRunnable.isInitialized) {
             downloadPollHandler.removeCallbacks(downloadPollRunnable)
         }
@@ -146,12 +153,15 @@ class MainActivity : AppCompatActivity() {
     private fun setupRecognizer() {
         recognizer = HandwritingRecognizer(this)
 
-        // Wire stroke callback → debounced recognition
+        // Wire stroke callback → debounced recognition & autosave
         drawingView.onStrokeCompleted = {
             if (recognizer.isReady && !isRecognizing) {
                 recognitionHandler.removeCallbacks(recognitionRunnable)
                 recognitionHandler.postDelayed(recognitionRunnable, DEBOUNCE_MS)
             }
+            // Always schedule autosave when a stroke is completed
+            recognitionHandler.removeCallbacks(autosaveRunnable)
+            recognitionHandler.postDelayed(autosaveRunnable, AUTOSAVE_DEBOUNCE_MS)
         }
 
         // 1. Check if model already exists anywhere on device
@@ -459,7 +469,6 @@ class MainActivity : AppCompatActivity() {
             scheduleRecognition()
         }
         btnClear.setOnClickListener { showClearConfirmDialog() }
-        btnSave.setOnClickListener  { saveDrawing() }
         btnEraser.setOnClickListener {
             isEraserActive = !isEraserActive
             drawingView.isEraser = isEraserActive
@@ -620,53 +629,114 @@ class MainActivity : AppCompatActivity() {
 
     // ── Save drawing ──────────────────────────────────────────────────────
 
-    private fun saveDrawing() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
-            != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(this,
-                arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE), STORAGE_PERMISSION_CODE)
-            return
-        }
-        performSave()
-    }
-
-    private fun performSave() {
-        val bitmap = drawingView.getBitmap() ?: run {
-            Toast.makeText(this, "Nothing to save!", Toast.LENGTH_SHORT).show(); return
-        }
-        val ts = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-        val name = "Drawing_$ts.png"
+    private fun loadNotebookDrawing() {
+        val fileName = "${notebookName}.png"
+        val relativePath = Environment.DIRECTORY_PICTURES + "/Penpal"
+        
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                val values = ContentValues().apply {
-                    put(MediaStore.Images.Media.DISPLAY_NAME, name)
-                    put(MediaStore.Images.Media.MIME_TYPE, "image/png")
-                    put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/Penpal")
-                }
-                val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
-                    ?: throw IOException("MediaStore insert failed")
-                contentResolver.openOutputStream(uri)?.use {
-                    bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
+                val projection = arrayOf(MediaStore.Images.Media._ID)
+                // Try both with and without trailing slash
+                val paths = arrayOf(relativePath + "/", relativePath)
+                var found = false
+                
+                for (path in paths) {
+                    val selection = "${MediaStore.Images.Media.DISPLAY_NAME} = ? AND ${MediaStore.Images.Media.RELATIVE_PATH} = ?"
+                    val selectionArgs = arrayOf(fileName, path)
+                    
+                    contentResolver.query(
+                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                        projection,
+                        selection,
+                        selectionArgs,
+                        null
+                    )?.use { cursor ->
+                        if (cursor.moveToFirst()) {
+                            val id = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID))
+                            val uri = Uri.withAppendedPath(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id.toString())
+                            contentResolver.openInputStream(uri)?.use { input ->
+                                val bitmap = BitmapFactory.decodeStream(input)
+                                if (bitmap != null) {
+                                    drawingView.initializeWithBitmap(bitmap)
+                                    Toast.makeText(this, "Loaded \"$notebookName\"", Toast.LENGTH_SHORT).show()
+                                    found = true
+                                }
+                            }
+                        }
+                    }
+                    if (found) break
                 }
             } else {
                 val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES), "Penpal")
-                    .also { it.mkdirs() }
-                File(dir, name).outputStream().use {
-                    bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
+                val file = File(dir, fileName)
+                if (file.exists()) {
+                    val bitmap = BitmapFactory.decodeFile(file.absolutePath)
+                    if (bitmap != null) {
+                        drawingView.initializeWithBitmap(bitmap)
+                        Toast.makeText(this, "Loaded \"$notebookName\"", Toast.LENGTH_SHORT).show()
+                    }
                 }
             }
-            Toast.makeText(this, "Saved to Gallery!", Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
-            Toast.makeText(this, "Save failed: ${e.message}", Toast.LENGTH_SHORT).show()
+            e.printStackTrace()
         }
     }
 
-    override fun onRequestPermissionsResult(requestCode: Int,
-        permissions: Array<out String>, grantResults: IntArray) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == STORAGE_PERMISSION_CODE
-            && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) performSave()
-        else Toast.makeText(this, "Storage permission denied", Toast.LENGTH_SHORT).show()
+    private fun performAutosave() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            != PackageManager.PERMISSION_GRANTED) {
+            return
+        }
+        
+        val bitmap = drawingView.getBitmap() ?: return
+        val fileName = "${notebookName}.png"
+        val relativePath = Environment.DIRECTORY_PICTURES + "/Penpal"
+
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val projection = arrayOf(MediaStore.Images.Media._ID)
+                val selection = "${MediaStore.Images.Media.DISPLAY_NAME} = ? AND ${MediaStore.Images.Media.RELATIVE_PATH} = ?"
+                val selectionArgs = arrayOf(fileName, relativePath + "/")
+                
+                var uri: Uri? = null
+                contentResolver.query(
+                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                    projection,
+                    selection,
+                    selectionArgs,
+                    null
+                )?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val id = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID))
+                        uri = Uri.withAppendedPath(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id.toString())
+                    }
+                }
+
+                if (uri == null) {
+                    val values = ContentValues().apply {
+                        put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
+                        put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+                        put(MediaStore.Images.Media.RELATIVE_PATH, relativePath + "/")
+                    }
+                    uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                }
+
+                uri?.let {
+                    contentResolver.openOutputStream(it, "wt")?.use { out ->
+                        bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
+                    }
+                }
+            } else {
+                val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES), "Penpal")
+                dir.mkdirs()
+                val file = File(dir, fileName)
+                file.outputStream().use { out ->
+                    bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 }

@@ -60,6 +60,9 @@ class DrawingView @JvmOverloads constructor(
     private var canvasBitmap: Bitmap? = null
     private var drawingCanvas: Canvas? = null
     private val bitmapPaint = Paint(Paint.DITHER_FLAG)
+    
+    // Original background image if loaded from file
+    private var initialBitmap: Bitmap? = null
 
     // Background color
     var canvasBackgroundColor: Int = Color.parseColor("#1A1A2E")
@@ -90,20 +93,50 @@ class DrawingView @JvmOverloads constructor(
     }
 
     // --- Lifecycle ---
-    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
-        super.onSizeChanged(w, h, oldw, oldh)
-        canvasBitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-        drawingCanvas = Canvas(canvasBitmap!!)
-        drawingCanvas!!.drawColor(canvasBackgroundColor)
-        // Redraw all existing strokes onto new bitmap
-        redrawAll()
+    /** Allows initializing the canvas with a previously saved image. */
+    fun initializeWithBitmap(bitmap: Bitmap) {
+        initialBitmap = bitmap.copy(Bitmap.Config.ARGB_8888, true)
+        if (width > 0 && height > 0) {
+            redrawAll()
+            invalidate()
+        }
     }
 
     private fun redrawAll() {
+        val w = width; val h = height
+        if (w <= 0 || h <= 0) return
+        
+        // Recreate/prepare the canvas bitmap
+        if (canvasBitmap == null || canvasBitmap!!.width != w || canvasBitmap!!.height != h) {
+            canvasBitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            drawingCanvas = Canvas(canvasBitmap!!)
+        }
+        
         val dc = drawingCanvas ?: return
+        
+        // 1. Draw background color
         dc.drawColor(canvasBackgroundColor)
+        
+        // 2. Draw initial bitmap if present (scaled to fit)
+        initialBitmap?.let {
+            if (it.width != w || it.height != h) {
+                val scaled = Bitmap.createScaledBitmap(it, w, h, true)
+                dc.drawBitmap(scaled, 0f, 0f, bitmapPaint)
+            } else {
+                dc.drawBitmap(it, 0f, 0f, bitmapPaint)
+            }
+        }
+        
+        // 3. Redraw all strokes on top
         for (stroke in strokes) {
             dc.drawPath(stroke.path, stroke.paint)
+        }
+    }
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        if (w > 0 && h > 0) {
+            redrawAll()
         }
     }
 
