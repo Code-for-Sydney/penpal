@@ -33,6 +33,50 @@
         android:layout_marginTop="12dp"
         android:columnCount="5" />
 
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="24dp"
+        android:text="Default Page Background"
+        android:textColor="#88FFFFFF"
+        android:textSize="14sp" />
+
+    <RadioGroup
+        android:id="@+id/rgDefaultBackground"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:orientation="horizontal">
+
+        <RadioButton
+            android:id="@+id/rbRuled"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Ruled"
+            android:textColor="#FFFFFF"
+            android:buttonTint="#FF4081" />
+
+        <RadioButton
+            android:id="@+id/rbGraph"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Graph"
+            android:textColor="#FFFFFF"
+            android:buttonTint="#FF4081" />
+
+        <RadioButton
+            android:id="@+id/rbNone"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="None"
+            android:textColor="#FFFFFF"
+            android:buttonTint="#FF4081" />
+    </RadioGroup>
+
+
     <Button
         android:id="@+id/btnDeleteNotebook"
         android:layout_width="match_parent"

@@ -29,9 +29,16 @@ data class ImageData(
     val matrix: FloatArray
 ) : SvgData()
 
+data class SvgResult(
+    val items: List<SvgData>,
+    val backgroundType: String = "RULED"
+)
+
+
 object SvgSerializer {
 
-    fun serialize(items: List<SvgData>, width: Int, height: Int, backgroundColor: Int, contentBounds: RectF? = null): String {
+    fun serialize(items: List<SvgData>, width: Int, height: Int, backgroundColor: Int, backgroundType: String = "RULED", contentBounds: RectF? = null): String {
+
         val sb = StringBuilder()
         sb.appendLine("""<?xml version="1.0" encoding="UTF-8"?>""")
 
@@ -52,7 +59,8 @@ object SvgSerializer {
             vbW = width.toFloat()
             vbH = height.toFloat()
         }
-        sb.appendLine("""<svg xmlns="http://www.w3.org/2000/svg" width="${vbW.toInt()}" height="${vbH.toInt()}" viewBox="$vbX $vbY $vbW $vbH">""")
+        sb.appendLine("""<svg xmlns="http://www.w3.org/2000/svg" width="${vbW.toInt()}" height="${vbH.toInt()}" viewBox="$vbX $vbY $vbW $vbH" data-background-type="$backgroundType">""")
+
 
         // Background rect
         sb.appendLine("""  <rect x="$vbX" y="$vbY" width="$vbW" height="$vbH" fill="${colorToHex(backgroundColor)}"/>""")
@@ -87,8 +95,10 @@ object SvgSerializer {
         return sb.toString()
     }
 
-    fun deserialize(svg: String): List<SvgData> {
+    fun deserialize(svg: String): SvgResult {
         val items = mutableListOf<SvgData>()
+        var backgroundType = "RULED"
+
         val factory = XmlPullParserFactory.newInstance()
         val parser = factory.newPullParser()
         parser.setInput(StringReader(svg))
@@ -96,7 +106,10 @@ object SvgSerializer {
         var eventType = parser.eventType
         while (eventType != XmlPullParser.END_DOCUMENT) {
             if (eventType == XmlPullParser.START_TAG) {
-                if (parser.name == "path") {
+                if (parser.name == "svg") {
+                    backgroundType = parser.getAttributeValue(null, "data-background-type") ?: "RULED"
+                } else if (parser.name == "path") {
+
                     val pathData = parser.getAttributeValue(null, "d") ?: ""
                     val strokeColor = parser.getAttributeValue(null, "stroke") ?: "#000000"
                     val strokeWidth = parser.getAttributeValue(null, "stroke-width")?.toFloatOrNull() ?: 12f
@@ -151,8 +164,9 @@ object SvgSerializer {
             }
             eventType = parser.next()
         }
-        return items
+        return SvgResult(items, backgroundType)
     }
+
 
     // ── Helpers ──────────────────────────────────────────────────────────
 

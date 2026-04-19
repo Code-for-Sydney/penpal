@@ -26,7 +26,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnBrushSize: ImageButton
     private lateinit var btnColorPicker: View
     private lateinit var btnBack: ImageButton
+    private lateinit var btnBackground: ImageButton
     private lateinit var colorSwatch: View
+
     private lateinit var recognitionProgress: ProgressBar
     private lateinit var recognitionIcon: TextView
     private lateinit var recognitionText: TextView
@@ -51,7 +53,9 @@ class MainActivity : AppCompatActivity() {
     private val AUTOSAVE_DEBOUNCE_MS = 2000L
     private var notebookName: String = "My Notebook"
     private var notebookId: String = ""
+    private var currentNotebook: Notebook? = null
     private val activityScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+
     private var currentPageIndex: Int = 0
 
     // ── Misc ───────────────────────────────────────────────────────────────
@@ -109,7 +113,9 @@ class MainActivity : AppCompatActivity() {
         btnPageUp           = findViewById(R.id.btnPageUp)
         btnPageDown         = findViewById(R.id.btnPageDown)
         btnOverview         = findViewById(R.id.btnOverview)
+        btnBackground       = findViewById(R.id.btnBackground)
         tvPageIndicator     = findViewById(R.id.tvPageIndicator)
+
 
         // Set notebook title from intent
         notebookId = intent.getStringExtra("NOTEBOOK_ID") ?: ""
@@ -117,7 +123,9 @@ class MainActivity : AppCompatActivity() {
         findViewById<TextView>(R.id.tvNotebookTitle).text = notebookName
 
         val notebook = NotebookManager.getNotebooks(this).find { it.id == notebookId }
+        currentNotebook = notebook
         currentPageIndex = notebook?.lastDisplayedPage ?: 0
+
 
         migrateOldNotebookToPageZero()
 
@@ -317,8 +325,10 @@ class MainActivity : AppCompatActivity() {
         findViewById<ImageButton>(R.id.btnAddImage).setOnClickListener {
             pickMedia.launch(androidx.activity.result.PickVisualMediaRequest(androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly))
         }
+        btnBackground.setOnClickListener { showBackgroundDialog() }
         
         btnPageUp.setOnClickListener {
+
             if (currentPageIndex > 0) {
                 performAutosave() // Save current
                 currentPageIndex--
@@ -480,13 +490,33 @@ class MainActivity : AppCompatActivity() {
                 recognitionText.text = "Draw something to recognize…"
                 recognitionText.setTextColor(Color.parseColor("#88FFFFFF"))
                 setRecognitionState(RecognitionState.IDLE)
-                // Delete the saved SVG immediately
-                deleteNotebookSvg(currentPageIndex)
+                // Trigger autosave to preserve background type even if canvas is cleared
+                performAutosave()
             }
+
             .setNegativeButton("Cancel", null).show()
     }
 
+    private fun showBackgroundDialog() {
+        val options = arrayOf("Ruled Paper", "Graph Paper", "No Background")
+        val types = arrayOf(DrawingView.BackgroundType.RULED, DrawingView.BackgroundType.GRAPH, DrawingView.BackgroundType.NONE)
+        
+        val currentTypeIndex = types.indexOf(drawingView.backgroundType)
+        
+        AlertDialog.Builder(this, R.style.DarkDialogTheme)
+            .setTitle("Page Background")
+            .setSingleChoiceItems(options, currentTypeIndex) { dialog, which ->
+                drawingView.backgroundType = types[which]
+                drawingView.invalidate()
+                scheduleAutosave()
+                dialog.dismiss()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
     // ── Save / Load SVG ───────────────────────────────────────────────────
+
     
     private fun migrateOldNotebookToPageZero() {
         val dir = File(filesDir, "notebooks")
@@ -526,38 +556,54 @@ class MainActivity : AppCompatActivity() {
             NotebookManager.updateNotebook(this, notebook)
         }
         
-        if (!file.exists()) return
+        if (!file.exists()) {
+            // Set default background for new page
+            drawingView.backgroundType = when (currentNotebook?.defaultBackground) {
+                "GRAPH" -> DrawingView.BackgroundType.GRAPH
+                "NONE" -> DrawingView.BackgroundType.NONE
+                else -> DrawingView.BackgroundType.RULED
+            }
+            return
+        }
 
         try {
             val svgContent = file.readText()
-            val strokeDataList = SvgSerializer.deserialize(svgContent)
-            if (strokeDataList.isNotEmpty()) {
-                drawingView.loadFromSvgData(strokeDataList)
+            val result = SvgSerializer.deserialize(svgContent)
+            drawingView.backgroundType = when (result.backgroundType) {
+                "GRAPH" -> DrawingView.BackgroundType.GRAPH
+                "NONE" -> DrawingView.BackgroundType.NONE
+                else -> DrawingView.BackgroundType.RULED
+            }
+            if (result.items.isNotEmpty()) {
+                drawingView.loadFromSvgData(result.items)
             }
         } catch (e: Exception) {
             e.printStackTrace()
         }
     }
 
+
     private fun performAutosave() {
         val svgData = drawingView.getSvgDataList()
         val file = getNotebookSvgFile(currentPageIndex)
         val thumbFile = getNotebookThumbFile(currentPageIndex)
 
-        if (svgData.isEmpty()) {
-            if (file.exists()) file.delete()
-            if (thumbFile.exists()) thumbFile.delete()
-            return
-        }
-
+        // Only delete if absolutely everything is default (empty items AND default background)
+        // But actually, it's safer to always save if the user interacted.
+        // Let's at least save if svgData is not empty OR if background is set.
+        // Actually, let's just remove the delete-on-empty logic for now to ensure persistence.
+        
         try {
+
             val svgContent = SvgSerializer.serialize(
                 items = svgData,
                 width = drawingView.width,
                 height = drawingView.height,
                 backgroundColor = drawingView.canvasBackgroundColor,
+                backgroundType = drawingView.backgroundType.name,
                 contentBounds = drawingView.getContentBounds()
             )
+
             file.writeText(svgContent)
             
             // Generate and save thumbnail

@@ -147,12 +147,21 @@ class NotebookSelectionActivity : AppCompatActivity() {
         val dialogView = layoutInflater.inflate(R.layout.dialog_edit_notebook, null)
         val etName = dialogView.findViewById<EditText>(R.id.etNotebookName)
         val colorGrid = dialogView.findViewById<GridLayout>(R.id.colorGrid)
+        val rgBackground = dialogView.findViewById<android.widget.RadioGroup>(R.id.rgDefaultBackground)
         val btnDelete = dialogView.findViewById<Button>(R.id.btnDeleteNotebook)
+
 
         var selectedColor = notebook?.color ?: Color.parseColor(colors[0])
         etName.setText(notebook?.name ?: "")
         
+        when (notebook?.defaultBackground) {
+            "GRAPH" -> rgBackground.check(R.id.rbGraph)
+            "NONE" -> rgBackground.check(R.id.rbNone)
+            else -> rgBackground.check(R.id.rbRuled)
+        }
+        
         btnDelete.visibility = if (notebook != null) View.VISIBLE else View.GONE
+
 
         // Populate color grid
         colors.forEach { hex ->
@@ -194,13 +203,21 @@ class NotebookSelectionActivity : AppCompatActivity() {
                 return@setOnClickListener
             }
 
+            val background = when (rgBackground.checkedRadioButtonId) {
+                R.id.rbGraph -> "GRAPH"
+                R.id.rbNone -> "NONE"
+                else -> "RULED"
+            }
+
             if (notebook == null) {
-                NotebookManager.addNotebook(this, Notebook(name = name, color = selectedColor))
+                NotebookManager.addNotebook(this, Notebook(name = name, color = selectedColor, defaultBackground = background))
             } else {
                 notebook.name = name
                 notebook.color = selectedColor
+                notebook.defaultBackground = background
                 NotebookManager.updateNotebook(this, notebook)
             }
+
             adapter.updateData(NotebookManager.getNotebooks(this))
             dialog.dismiss()
         }

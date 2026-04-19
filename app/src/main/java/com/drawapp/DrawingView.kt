@@ -18,9 +18,14 @@ class DrawingView @JvmOverloads constructor(
     attrs: AttributeSet? = null,
     defStyleAttr: Int = 0
 ) : View(context, attrs, defStyleAttr) {
+    
+    enum class BackgroundType { NONE, RULED, GRAPH }
+
 
     // Background color
     var canvasBackgroundColor: Int = Color.parseColor("#FDFCF5")
+    var backgroundType: BackgroundType = BackgroundType.RULED
+
 
     // --- Lined Paper Paints ---
     private val linePaint = Paint().apply {
@@ -340,11 +345,14 @@ class DrawingView @JvmOverloads constructor(
     }
 
     private fun drawPaperLines(canvas: Canvas) {
+        if (backgroundType == BackgroundType.NONE) return
+        
         val w = width.toFloat()
         val h = height.toFloat()
         if (w <= 0 || h <= 0) return
 
         val lineSpacing = 100f
+        val gridSpacing = 80f
 
         val topLeft = screenToCanvas(0f, 0f)
         val bottomRight = screenToCanvas(w, h)
@@ -360,20 +368,38 @@ class DrawingView @JvmOverloads constructor(
         canvas.save()
         canvas.concat(viewMatrix)
 
-        val firstLineY = (Math.ceil((canvasTop / lineSpacing).toDouble()) * lineSpacing).toFloat()
-        var y = firstLineY
-        while (y < canvasBottom) {
-            canvas.drawLine(canvasLeft, y, canvasRight, y, adjustedLinePaint)
-            y += lineSpacing
-        }
+        if (backgroundType == BackgroundType.RULED) {
+            val firstLineY = (Math.ceil((canvasTop / lineSpacing).toDouble()) * lineSpacing).toFloat()
+            var y = firstLineY
+            while (y < canvasBottom) {
+                canvas.drawLine(canvasLeft, y, canvasRight, y, adjustedLinePaint)
+                y += lineSpacing
+            }
 
-        val marginX = 120f
-        if (marginX in canvasLeft..canvasRight) {
-            canvas.drawLine(marginX, canvasTop, marginX, canvasBottom, adjustedMarginPaint)
+            val marginX = 120f
+            if (marginX in canvasLeft..canvasRight) {
+                canvas.drawLine(marginX, canvasTop, marginX, canvasBottom, adjustedMarginPaint)
+            }
+        } else if (backgroundType == BackgroundType.GRAPH) {
+            // Horizontal lines
+            val firstLineY = (Math.ceil((canvasTop / gridSpacing).toDouble()) * gridSpacing).toFloat()
+            var y = firstLineY
+            while (y < canvasBottom) {
+                canvas.drawLine(canvasLeft, y, canvasRight, y, adjustedLinePaint)
+                y += gridSpacing
+            }
+            // Vertical lines
+            val firstLineX = (Math.ceil((canvasLeft / gridSpacing).toDouble()) * gridSpacing).toFloat()
+            var x = firstLineX
+            while (x < canvasRight) {
+                canvas.drawLine(x, canvasTop, x, canvasBottom, adjustedLinePaint)
+                x += gridSpacing
+            }
         }
 
         canvas.restore()
     }
+
 
     // ══════════════════════════════════════════════════════════════════════
     // Touch handling — multi-touch with draw/pan/zoom
