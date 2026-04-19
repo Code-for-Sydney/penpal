@@ -41,6 +41,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnEraser: ImageButton
     private lateinit var btnBrushSize: ImageButton
     private lateinit var btnColorPicker: View
+    private lateinit var btnBack: ImageButton
     private lateinit var colorSwatch: View
     private lateinit var recognitionProgress: ProgressBar
     private lateinit var recognitionIcon: TextView
@@ -114,6 +115,7 @@ class MainActivity : AppCompatActivity() {
         recognitionProgress = findViewById(R.id.recognitionProgress)
         recognitionIcon     = findViewById(R.id.recognitionIcon)
         recognitionText     = findViewById(R.id.recognitionText)
+        btnBack             = findViewById(R.id.btnBack)
 
         // Set notebook title from intent
         notebookId = intent.getStringExtra("NOTEBOOK_ID") ?: ""
@@ -460,6 +462,7 @@ class MainActivity : AppCompatActivity() {
     // ══════════════════════════════════════════════════════════════════════
 
     private fun setupListeners() {
+        btnBack.setOnClickListener { finish() }
         btnUndo.setOnClickListener {
             drawingView.undo(); updateButtonStates()
             scheduleRecognition()
