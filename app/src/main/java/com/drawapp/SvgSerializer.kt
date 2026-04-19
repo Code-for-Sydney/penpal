@@ -14,17 +14,24 @@ sealed class PathCommand {
 }
 
 // Serializable stroke representation
+sealed class SvgData
+
 data class StrokeData(
     val commands: List<PathCommand>,
     val color: Int,
     val strokeWidth: Float,
     val opacity: Int,
     val isEraser: Boolean
-)
+) : SvgData()
+
+data class ImageData(
+    val base64: String,
+    val matrix: FloatArray
+) : SvgData()
 
 object SvgSerializer {
 
-    fun serialize(strokes: List<StrokeData>, width: Int, height: Int, backgroundColor: Int, contentBounds: RectF? = null): String {
+    fun serialize(items: List<SvgData>, width: Int, height: Int, backgroundColor: Int, contentBounds: RectF? = null): String {
         val sb = StringBuilder()
         sb.appendLine("""<?xml version="1.0" encoding="UTF-8"?>""")
 
@@ -50,56 +57,101 @@ object SvgSerializer {
         // Background rect
         sb.appendLine("""  <rect x="$vbX" y="$vbY" width="$vbW" height="$vbH" fill="${colorToHex(backgroundColor)}"/>""")
 
-        // Each stroke as a separate <path> element
-        for ((index, stroke) in strokes.withIndex()) {
-            val d = commandsToSvgPath(stroke.commands)
-            if (d.isBlank()) continue
-            val hex = colorToHex(stroke.color)
-            val opacity = stroke.opacity / 255f
+        // Each item
+        for ((index, item) in items.withIndex()) {
+            when (item) {
+                is StrokeData -> {
+                    val d = commandsToSvgPath(item.commands)
+                    if (d.isBlank()) continue
+                    val hex = colorToHex(item.color)
+                    val opacity = item.opacity / 255f
 
-            sb.append("""  <path id="stroke-$index" d="$d"""")
-            sb.append(""" stroke="$hex" stroke-width="${stroke.strokeWidth}"""")
-            sb.append(""" stroke-opacity="$opacity"""")
-            sb.append(""" stroke-linecap="round" stroke-linejoin="round" fill="none"""")
-            if (stroke.isEraser) {
-                sb.append(""" data-eraser="true"""")
+                    sb.append("""  <path id="stroke-$index" d="$d"""")
+                    sb.append(""" stroke="$hex" stroke-width="${item.strokeWidth}"""")
+                    sb.append(""" stroke-opacity="$opacity"""")
+                    sb.append(""" stroke-linecap="round" stroke-linejoin="round" fill="none"""")
+                    if (item.isEraser) {
+                        sb.append(""" data-eraser="true"""")
+                    }
+                    sb.appendLine("""/>""")
+                }
+                is ImageData -> {
+                    val m = item.matrix
+                    val transform = "matrix(${m[0]},${m[3]},${m[1]},${m[4]},${m[2]},${m[5]})"
+                    sb.appendLine("""  <image id="image-$index" transform="$transform" href="data:image/png;base64,${item.base64}"/>""")
+                }
             }
-            sb.appendLine("""/>""")
         }
 
         sb.appendLine("</svg>")
         return sb.toString()
     }
 
-    fun deserialize(svg: String): List<StrokeData> {
-        val strokes = mutableListOf<StrokeData>()
+    fun deserialize(svg: String): List<SvgData> {
+        val items = mutableListOf<SvgData>()
         val factory = XmlPullParserFactory.newInstance()
         val parser = factory.newPullParser()
         parser.setInput(StringReader(svg))
 
         var eventType = parser.eventType
         while (eventType != XmlPullParser.END_DOCUMENT) {
-            if (eventType == XmlPullParser.START_TAG && parser.name == "path") {
-                val pathData = parser.getAttributeValue(null, "d") ?: ""
-                val strokeColor = parser.getAttributeValue(null, "stroke") ?: "#000000"
-                val strokeWidth = parser.getAttributeValue(null, "stroke-width")?.toFloatOrNull() ?: 12f
-                val strokeOpacity = parser.getAttributeValue(null, "stroke-opacity")?.toFloatOrNull() ?: 1f
-                val isEraser = parser.getAttributeValue(null, "data-eraser") == "true"
+            if (eventType == XmlPullParser.START_TAG) {
+                if (parser.name == "path") {
+                    val pathData = parser.getAttributeValue(null, "d") ?: ""
+                    val strokeColor = parser.getAttributeValue(null, "stroke") ?: "#000000"
+                    val strokeWidth = parser.getAttributeValue(null, "stroke-width")?.toFloatOrNull() ?: 12f
+                    val strokeOpacity = parser.getAttributeValue(null, "stroke-opacity")?.toFloatOrNull() ?: 1f
+                    val isEraser = parser.getAttributeValue(null, "data-eraser") == "true"
 
-                val commands = svgPathToCommands(pathData)
-                if (commands.isNotEmpty()) {
-                    strokes.add(StrokeData(
-                        commands = commands,
-                        color = parseHexColor(strokeColor),
-                        strokeWidth = strokeWidth,
-                        opacity = (strokeOpacity * 255).toInt().coerceIn(0, 255),
-                        isEraser = isEraser
-                    ))
+                    val commands = svgPathToCommands(pathData)
+                    if (commands.isNotEmpty()) {
+                        items.add(StrokeData(
+                            commands = commands,
+                            color = parseHexColor(strokeColor),
+                            strokeWidth = strokeWidth,
+                            opacity = (strokeOpacity * 255).toInt().coerceIn(0, 255),
+                            isEraser = isEraser
+                        ))
+                    }
+                } else if (parser.name == "image") {
+                    val href = parser.getAttributeValue(null, "href") ?: ""
+                    val transform = parser.getAttributeValue(null, "transform") ?: ""
+                    
+                    val base64 = href.removePrefix("data:image/png;base64,")
+                    
+                    // Parse matrix(a,b,c,d,e,f)
+                    val m = FloatArray(9) { if (it % 4 == 0) 1f else 0f }
+                    if (transform.startsWith("matrix(") && transform.endsWith(")")) {
+                        val vals = transform.removePrefix("matrix(").removeSuffix(")").split(",")
+                        if (vals.size == 6) {
+                            val a = vals[0].toFloatOrNull() ?: 1f
+                            val b = vals[1].toFloatOrNull() ?: 0f
+                            val c = vals[2].toFloatOrNull() ?: 0f
+                            val d = vals[3].toFloatOrNull() ?: 1f
+                            val e = vals[4].toFloatOrNull() ?: 0f
+                            val f = vals[5].toFloatOrNull() ?: 0f
+                            
+                            // SVG matrix is a, b, c, d, e, f
+                            // a c e
+                            // b d f
+                            // 0 0 1
+                            // Android Matrix is:
+                            // MSCALE_X (0), MSKEW_X (1), MTRANS_X (2)
+                            // MSKEW_Y (3), MSCALE_Y (4), MTRANS_Y (5)
+                            m[android.graphics.Matrix.MSCALE_X] = a
+                            m[android.graphics.Matrix.MSKEW_X] = c
+                            m[android.graphics.Matrix.MTRANS_X] = e
+                            m[android.graphics.Matrix.MSKEW_Y] = b
+                            m[android.graphics.Matrix.MSCALE_Y] = d
+                            m[android.graphics.Matrix.MTRANS_Y] = f
+                        }
+                    }
+                    items.add(ImageData(base64, m))
                 }
             }
             eventType = parser.next()
         }
-        return strokes
+        return items
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────

@@ -55,6 +55,23 @@ class MainActivity : AppCompatActivity() {
     private var currentPageIndex: Int = 0
 
     // ── Misc ───────────────────────────────────────────────────────────────
+    private val pickMedia = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) {
+            try {
+                val inputStream = contentResolver.openInputStream(uri)
+                val bitmap = android.graphics.BitmapFactory.decodeStream(inputStream)
+                if (bitmap != null) {
+                    drawingView.addImage(bitmap)
+                    updateButtonStates()
+                    scheduleAutosave()
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                Toast.makeText(this, "Failed to load image", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     private val STORAGE_PERMISSION_CODE = 101
     private val colors = listOf(
         "#000000", "#1A237E", "#1B5E20", "#B71C1C", "#4A148C",
@@ -285,7 +302,11 @@ class MainActivity : AppCompatActivity() {
             scheduleRecognition()
             scheduleAutosave()
         }
-        btnClear.setOnClickListener { showClearConfirmDialog() }
+        btnClear.setOnClickListener { 
+            if (!drawingView.deleteSelectedImage()) {
+                showClearConfirmDialog() 
+            }
+        }
         btnEraser.setOnClickListener {
             isEraserActive = !isEraserActive
             drawingView.isEraser = isEraserActive
@@ -293,6 +314,9 @@ class MainActivity : AppCompatActivity() {
         }
         btnBrushSize.setOnClickListener   { showBrushSizeDialog() }
         btnColorPicker.setOnClickListener { showColorPickerDialog() }
+        findViewById<ImageButton>(R.id.btnAddImage).setOnClickListener {
+            pickMedia.launch(androidx.activity.result.PickVisualMediaRequest(androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly))
+        }
         
         btnPageUp.setOnClickListener {
             if (currentPageIndex > 0) {
@@ -508,7 +532,7 @@ class MainActivity : AppCompatActivity() {
             val svgContent = file.readText()
             val strokeDataList = SvgSerializer.deserialize(svgContent)
             if (strokeDataList.isNotEmpty()) {
-                drawingView.loadFromStrokeData(strokeDataList)
+                drawingView.loadFromSvgData(strokeDataList)
             }
         } catch (e: Exception) {
             e.printStackTrace()
@@ -516,11 +540,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun performAutosave() {
-        val strokeData = drawingView.getStrokeDataList()
+        val svgData = drawingView.getSvgDataList()
         val file = getNotebookSvgFile(currentPageIndex)
         val thumbFile = getNotebookThumbFile(currentPageIndex)
 
-        if (strokeData.isEmpty()) {
+        if (svgData.isEmpty()) {
             if (file.exists()) file.delete()
             if (thumbFile.exists()) thumbFile.delete()
             return
@@ -528,7 +552,7 @@ class MainActivity : AppCompatActivity() {
 
         try {
             val svgContent = SvgSerializer.serialize(
-                strokes = strokeData,
+                items = svgData,
                 width = drawingView.width,
                 height = drawingView.height,
                 backgroundColor = drawingView.canvasBackgroundColor,
@@ -561,25 +585,42 @@ class MainActivity : AppCompatActivity() {
         canvas.scale(scale, scale)
         canvas.translate(-bounds.left, -bounds.top)
         
-        for (stroke in drawingView.getStrokeDataList()) {
-            val path = android.graphics.Path()
-            for (cmd in stroke.commands) {
-                when (cmd) {
-                    is com.drawapp.PathCommand.MoveTo -> path.moveTo(cmd.x, cmd.y)
-                    is com.drawapp.PathCommand.QuadTo -> path.quadTo(cmd.x1, cmd.y1, cmd.x2, cmd.y2)
-                    is com.drawapp.PathCommand.LineTo -> path.lineTo(cmd.x, cmd.y)
+        for (item in drawingView.getSvgDataList()) {
+            when (item) {
+                is StrokeData -> {
+                    val path = android.graphics.Path()
+                    for (cmd in item.commands) {
+                        when (cmd) {
+                            is com.drawapp.PathCommand.MoveTo -> path.moveTo(cmd.x, cmd.y)
+                            is com.drawapp.PathCommand.QuadTo -> path.quadTo(cmd.x1, cmd.y1, cmd.x2, cmd.y2)
+                            is com.drawapp.PathCommand.LineTo -> path.lineTo(cmd.x, cmd.y)
+                        }
+                    }
+                    val paint = android.graphics.Paint().apply {
+                        color = if (item.isEraser) drawingView.canvasBackgroundColor else item.color
+                        style = android.graphics.Paint.Style.STROKE
+                        strokeJoin = android.graphics.Paint.Join.ROUND
+                        strokeCap = android.graphics.Paint.Cap.ROUND
+                        strokeWidth = item.strokeWidth
+                        isAntiAlias = true
+                        alpha = item.opacity
+                    }
+                    canvas.drawPath(path, paint)
+                }
+                is ImageData -> {
+                    try {
+                        val decodedString = android.util.Base64.decode(item.base64, android.util.Base64.DEFAULT)
+                        val bmp = android.graphics.BitmapFactory.decodeByteArray(decodedString, 0, decodedString.size)
+                        if (bmp != null) {
+                            val matrix = android.graphics.Matrix()
+                            matrix.setValues(item.matrix)
+                            canvas.drawBitmap(bmp, matrix, null)
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
                 }
             }
-            val paint = android.graphics.Paint().apply {
-                color = if (stroke.isEraser) drawingView.canvasBackgroundColor else stroke.color
-                style = android.graphics.Paint.Style.STROKE
-                strokeJoin = android.graphics.Paint.Join.ROUND
-                strokeCap = android.graphics.Paint.Cap.ROUND
-                strokeWidth = stroke.strokeWidth
-                isAntiAlias = true
-                alpha = stroke.opacity
-            }
-            canvas.drawPath(path, paint)
         }
         
         file.outputStream().use { 
