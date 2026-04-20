@@ -47,7 +47,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var recognizer: HandwritingRecognizer
     private val recognitionHandler = Handler(Looper.getMainLooper())
     private val DEBOUNCE_MS = 1500L
-    private var isRecognizing = false
     private val recognitionRunnable = Runnable { triggerRecognition() }
     private val autosaveRunnable = Runnable { performAutosave() }
     private val AUTOSAVE_DEBOUNCE_MS = 2000L
@@ -158,7 +157,7 @@ class MainActivity : AppCompatActivity() {
 
         // Wire stroke callback → debounced recognition & autosave
         drawingView.onStrokeCompleted = {
-            if (recognizer.isReady && !isRecognizing) {
+            if (recognizer.isReady) {
                 recognitionHandler.removeCallbacks(recognitionRunnable)
                 recognitionHandler.postDelayed(recognitionRunnable, DEBOUNCE_MS)
             }
@@ -172,6 +171,15 @@ class MainActivity : AppCompatActivity() {
             recognizer.isReadyFlow.collect { ready ->
                 if (ready) {
                     setRecognitionState(RecognitionState.IDLE)
+                }
+            }
+        }
+        activityScope.launch {
+            recognizer.isProcessingFlow.collect { isProcessing ->
+                if (isProcessing) {
+                    setRecognitionState(RecognitionState.RUNNING)
+                } else if (recognizer.isReady) {
+                    setRecognitionState(RecognitionState.DONE)
                 }
             }
         }
@@ -218,13 +226,11 @@ class MainActivity : AppCompatActivity() {
     // ══════════════════════════════════════════════════════════════════════
 
     private fun triggerRecognition() {
-        if (isRecognizing || !recognizer.isReady) return
+        if (!recognizer.isReady) return
         
         // Use the cropped cluster bitmap instead of the full canvas
         val bitmap = drawingView.getRecentClusterBitmap() ?: return
 
-        isRecognizing = true
-        setRecognitionState(RecognitionState.RUNNING)
         var accumulated = ""
 
         recognizer.recognize(
@@ -235,15 +241,12 @@ class MainActivity : AppCompatActivity() {
                 recognitionText.setTextColor(Color.WHITE)
             },
             onDone = {
-                isRecognizing = false
-                setRecognitionState(RecognitionState.DONE)
                 if (accumulated.isBlank()) {
                     recognitionText.text = "(nothing recognized)"
                     recognitionText.setTextColor(Color.parseColor("#88FFFFFF"))
                 }
             },
             onError = { msg ->
-                isRecognizing = false
                 setRecognitionState(RecognitionState.ERROR)
                 recognitionText.text = "Error: $msg"
                 recognitionText.setTextColor(Color.parseColor("#FF6B6B"))
@@ -350,7 +353,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun scheduleRecognition() {
-        if (recognizer.isReady && !isRecognizing) {
+        if (recognizer.isReady) {
             recognitionHandler.removeCallbacks(recognitionRunnable)
             recognitionHandler.postDelayed(recognitionRunnable, DEBOUNCE_MS)
         }

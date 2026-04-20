@@ -6,6 +6,7 @@ import com.google.ai.edge.litertlm.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import java.io.ByteArrayOutputStream
+import kotlinx.coroutines.channels.Channel
 
 /**
  * Wraps LiteRT-LM (Gemma) for handwriting recognition.
@@ -30,8 +31,25 @@ class HandwritingRecognizer private constructor(private val context: Context) {
     private var isInitializing = false
     private val loadCallbacks = mutableListOf<Pair<() -> Unit, (String) -> Unit>>()
 
-    var isRecognizing = false
-        private set
+    private val _isProcessing = MutableStateFlow(false)
+    val isProcessingFlow: StateFlow<Boolean> = _isProcessing.asStateFlow()
+
+    private data class RecognitionRequest(
+        val bitmap: Bitmap,
+        val onPartialResult: (String) -> Unit,
+        val onDone: () -> Unit,
+        val onError: (String) -> Unit
+    )
+
+    private val requestChannel = Channel<RecognitionRequest>(Channel.UNLIMITED)
+
+    init {
+        ioScope.launch {
+            for (request in requestChannel) {
+                processRecognition(request)
+            }
+        }
+    }
 
     companion object {
         @Volatile
@@ -117,7 +135,7 @@ class HandwritingRecognizer private constructor(private val context: Context) {
     }
 
     /**
-     * Run multimodal inference on [bitmap] (the full canvas).
+     * Enqueues multimodal inference on [bitmap] (the full canvas).
      * [onPartialResult] is called for each streamed token.
      * [onDone] is called when generation completes.
      */
@@ -127,59 +145,59 @@ class HandwritingRecognizer private constructor(private val context: Context) {
         onDone: () -> Unit,
         onError: (String) -> Unit
     ) {
+        val request = RecognitionRequest(bitmap, onPartialResult, onDone, onError)
+        requestChannel.trySend(request)
+    }
+
+    private suspend fun processRecognition(request: RecognitionRequest) {
         val currentEngine = engine ?: run {
-            onError("Model not loaded")
-            return
-        }
-
-        if (isRecognizing) {
-            onError("Another recognition is already in progress")
-            return
-        }
-
-        ioScope.launch {
-            var conversation: Conversation? = null
-            try {
-                isRecognizing = true
-                conversation = currentEngine.createConversation()
-
-                // Resize bitmap to a standard resolution (e.g., 448x448) for the multimodal model
-                val scaledBitmap = Bitmap.createScaledBitmap(bitmap, 448, 448, true)
-
-                // Convert Android Bitmap -> Encoded Bytes (JPEG) for LiteRT-LM
-                val stream = ByteArrayOutputStream()
-                scaledBitmap.compress(Bitmap.CompressFormat.JPEG, 90, stream)
-                val imageBytes = stream.toByteArray()
-                
-                // Clean up scaled bitmap
-                if (scaledBitmap != bitmap) scaledBitmap.recycle()
-
-                // Construct multimodal message
-                val prompt = "Analyze the handwriting in this image. What word, letter, number, or text is drawn? Reply with ONLY the recognized text."
-                val content = Contents.of(
-                    Content.ImageBytes(imageBytes),
-                    Content.Text(prompt)
-                )
-
-                // Stream tokens back on Main thread
-                conversation.sendMessageAsync(content).collect { partial ->
-                    val text = partial.toString()
-                    withContext(Dispatchers.Main) {
-                        if (text.isNotBlank()) onPartialResult(text)
-                    }
-                }
-
-                withContext(Dispatchers.Main) {
-                    onDone()
-                }
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    onError("Recognition failed: ${e.message}")
-                }
-            } finally {
-                conversation?.close()
-                isRecognizing = false
+            withContext(Dispatchers.Main) {
+                request.onError("Model not loaded")
             }
+            return
+        }
+
+        var conversation: Conversation? = null
+        try {
+            _isProcessing.value = true
+            conversation = currentEngine.createConversation()
+
+            // Resize bitmap to a standard resolution (e.g., 448x448) for the multimodal model
+            val scaledBitmap = Bitmap.createScaledBitmap(request.bitmap, 448, 448, true)
+
+            // Convert Android Bitmap -> Encoded Bytes (JPEG) for LiteRT-LM
+            val stream = ByteArrayOutputStream()
+            scaledBitmap.compress(Bitmap.CompressFormat.JPEG, 90, stream)
+            val imageBytes = stream.toByteArray()
+            
+            // Clean up scaled bitmap
+            if (scaledBitmap != request.bitmap) scaledBitmap.recycle()
+
+            // Construct multimodal message
+            val prompt = "Analyze the handwriting in this image. What word, letter, number, or text is drawn? Reply with ONLY the recognized text."
+            val content = Contents.of(
+                Content.ImageBytes(imageBytes),
+                Content.Text(prompt)
+            )
+
+            // Stream tokens back on Main thread
+            conversation.sendMessageAsync(content).collect { partial ->
+                val text = partial.toString()
+                withContext(Dispatchers.Main) {
+                    if (text.isNotBlank()) request.onPartialResult(text)
+                }
+            }
+
+            withContext(Dispatchers.Main) {
+                request.onDone()
+            }
+        } catch (e: Exception) {
+            withContext(Dispatchers.Main) {
+                request.onError("Recognition failed: ${e.message}")
+            }
+        } finally {
+            conversation?.close()
+            _isProcessing.value = false
         }
     }
 
