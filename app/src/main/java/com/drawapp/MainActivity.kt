@@ -41,6 +41,18 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnOverview: ImageButton
     private lateinit var tvPageIndicator: TextView
 
+    // Search
+    private lateinit var searchBarContainer: LinearLayout
+    private lateinit var etSearch: EditText
+    private lateinit var btnCloseSearch: ImageButton
+    private lateinit var btnNextMatch: ImageButton
+    private lateinit var btnPrevMatch: ImageButton
+    private lateinit var tvSearchCount: TextView
+
+    private data class SearchMatch(val pageIndex: Int, val text: String, val itemIndex: Int)
+    private var allMatches = mutableListOf<SearchMatch>()
+    private var currentMatchIndex = -1
+
     // ── State ──────────────────────────────────────────────────────────────
     private var activeColor: Int = Color.BLACK
     private var isEraserActive = false
@@ -128,6 +140,13 @@ class MainActivity : AppCompatActivity() {
         btnSearch           = findViewById(R.id.btnSearch)
         btnBackground       = findViewById(R.id.btnBackground)
         tvPageIndicator     = findViewById(R.id.tvPageIndicator)
+
+        searchBarContainer  = findViewById(R.id.searchBarContainer)
+        etSearch            = findViewById(R.id.etSearch)
+        btnCloseSearch      = findViewById(R.id.btnCloseSearch)
+        btnNextMatch        = findViewById(R.id.btnNextMatch)
+        btnPrevMatch        = findViewById(R.id.btnPrevMatch)
+        tvSearchCount       = findViewById(R.id.tvSearchCount)
 
 
         // Set notebook title from intent
@@ -420,7 +439,42 @@ class MainActivity : AppCompatActivity() {
             loadNotebookDrawing(currentPageIndex)
         }
         btnOverview.setOnClickListener { showOverviewDialog() }
-        btnSearch.setOnClickListener { showSearchDialog() }
+        btnSearch.setOnClickListener { showSearchMode(true) }
+
+        btnCloseSearch.setOnClickListener { showSearchMode(false) }
+        btnNextMatch.setOnClickListener {
+            if (allMatches.isNotEmpty()) {
+                currentMatchIndex = (currentMatchIndex + 1) % allMatches.size
+                navigateToMatch(allMatches[currentMatchIndex])
+                updateSearchUI()
+            }
+        }
+        btnPrevMatch.setOnClickListener {
+            if (allMatches.isNotEmpty()) {
+                currentMatchIndex = if (currentMatchIndex <= 0) allMatches.size - 1 else currentMatchIndex - 1
+                navigateToMatch(allMatches[currentMatchIndex])
+                updateSearchUI()
+            }
+        }
+        
+        etSearch.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                performGlobalSearch(s.toString())
+            }
+            override fun afterTextChanged(s: android.text.Editable?) {}
+        })
+
+        etSearch.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH) {
+                if (allMatches.isNotEmpty()) {
+                    currentMatchIndex = (currentMatchIndex + 1) % allMatches.size
+                    navigateToMatch(allMatches[currentMatchIndex])
+                    updateSearchUI()
+                }
+                true
+            } else false
+        }
 
         // Long-press ✦ to re-trigger model setup (inform user to do it from the main screen instead)
         recognitionIcon.setOnLongClickListener {
@@ -854,29 +908,110 @@ class MainActivity : AppCompatActivity() {
         }
     }
     
-    private fun showSearchDialog() {
-        val etSearch = EditText(this).apply {
-            hint = "Search recognized text..."
-            setTextColor(Color.WHITE)
-            setHintTextColor(Color.parseColor("#88FFFFFF"))
-            setPadding(48, 40, 48, 40)
+    private fun showSearchMode(show: Boolean) {
+        searchBarContainer.visibility = if (show) View.VISIBLE else View.GONE
+        if (show) {
+            etSearch.requestFocus()
+            val imm = getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+            imm.showSoftInput(etSearch, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+        } else {
+            etSearch.setText("")
+            allMatches.clear()
+            currentMatchIndex = -1
+            drawingView.searchHighlightedWord = null
+            updateSearchUI()
+            val imm = getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+            imm.hideSoftInputFromWindow(etSearch.windowToken, 0)
         }
-        
-        AlertDialog.Builder(this, R.style.DarkDialogTheme)
-            .setTitle("Search Notebook")
-            .setView(etSearch)
-            .setPositiveButton("Find") { _, _ ->
-                val query = etSearch.text.toString().trim()
-                if (query.isNotEmpty()) {
-                    if (fullRecognizedText.contains(query, ignoreCase = true)) {
-                        Toast.makeText(this, "Found '$query' in handwriting!", Toast.LENGTH_SHORT).show()
-                    } else {
-                        Toast.makeText(this, "'$query' not found in current page recognition.", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun performGlobalSearch(query: String) {
+        if (query.isBlank()) {
+            allMatches.clear()
+            currentMatchIndex = -1
+            updateSearchUI()
+            drawingView.searchHighlightedWord = null
+            return
+        }
+
+        activityScope.launch(Dispatchers.IO) {
+            val matches = mutableListOf<SearchMatch>()
+            
+            val dir = File(filesDir, "notebooks")
+            val files = dir.listFiles { _, name -> 
+                name.startsWith("${notebookName}_page_") && name.endsWith(".svg") 
+            } ?: emptyArray()
+            
+            val pageIndices = files.mapNotNull { 
+                it.name.removePrefix("${notebookName}_page_").removeSuffix(".svg").toIntOrNull() 
+            }.sorted()
+
+            for (pageIdx in pageIndices) {
+                val file = getNotebookSvgFile(pageIdx)
+                if (file.exists()) {
+                    val content = file.readText()
+                    // Quick check for performance
+                    if (content.contains("data-text=", ignoreCase = true) && content.contains(query, ignoreCase = true)) {
+                        val result = SvgSerializer.deserialize(content)
+                        result.items.forEachIndexed { index, item ->
+                            if (item is WordData && item.text.contains(query, ignoreCase = true)) {
+                                matches.add(SearchMatch(pageIdx, item.text, index))
+                            }
+                        }
                     }
                 }
             }
-            .setNegativeButton("Cancel", null)
-            .show()
+
+            withContext(Dispatchers.Main) {
+                allMatches = matches
+                if (allMatches.isNotEmpty()) {
+                    // Try to stay on current page match if possible, otherwise start from first
+                    val currentIdx = allMatches.indexOfFirst { it.pageIndex == currentPageIndex }
+                    currentMatchIndex = if (currentIdx != -1) currentIdx else 0
+                    navigateToMatch(allMatches[currentMatchIndex])
+                } else {
+                    currentMatchIndex = -1
+                    drawingView.searchHighlightedWord = null
+                }
+                updateSearchUI()
+            }
+        }
+    }
+
+    private fun navigateToMatch(match: SearchMatch) {
+        if (match.pageIndex != currentPageIndex) {
+            flushPendingRecognition()
+            performAutosave()
+            currentPageIndex = match.pageIndex
+            loadNotebookDrawing(currentPageIndex)
+        }
+        
+        val item = drawingView.getItemAtIndex(match.itemIndex)
+        if (item is DrawingView.WordItem) {
+            drawingView.searchHighlightedWord = item
+            drawingView.scrollToWord(item)
+        }
+    }
+
+    private fun updateSearchUI() {
+        if (allMatches.isEmpty()) {
+            tvSearchCount.text = "0/0"
+            btnNextMatch.isEnabled = false
+            btnPrevMatch.isEnabled = false
+            btnNextMatch.alpha = 0.4f
+            btnPrevMatch.alpha = 0.4f
+        } else {
+            tvSearchCount.text = "${currentMatchIndex + 1}/${allMatches.size}"
+            btnNextMatch.isEnabled = true
+            btnPrevMatch.isEnabled = true
+            btnNextMatch.alpha = 1.0f
+            btnPrevMatch.alpha = 1.0f
+        }
+    }
+
+    @Deprecated("Use showSearchMode instead")
+    private fun showSearchDialog() {
+        // ... kept for compatibility if needed, but not used
     }
 
     // ── Overview Dialog ───────────────────────────────────────────────────

@@ -158,6 +158,12 @@ class DrawingView @JvmOverloads constructor(
         typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
     }
 
+    private val searchHighlightPaint = Paint().apply {
+        color = Color.argb(120, 255, 235, 59) // Semi-transparent yellow (Yellow 500)
+        style = Paint.Style.FILL
+        isAntiAlias = true
+    }
+
     private var currentPaint = buildPaint()
 
     // Original background image if loaded from file
@@ -201,6 +207,10 @@ class DrawingView @JvmOverloads constructor(
     // Pan tracking
     private var lastPanX = 0f
     private var lastPanY = 0f
+
+    /** Currently focused word for search results */
+    var searchHighlightedWord: WordItem? = null
+        set(value) { field = value; invalidate() }
 
     // Scale gesture detector
     private val scaleDetector = ScaleGestureDetector(context,
@@ -356,6 +366,19 @@ class DrawingView @JvmOverloads constructor(
                 is WordItem -> {
                     canvas.save()
                     canvas.concat(item.matrix)
+                    
+                    // Draw search highlight if this is the focused word
+                    if (item == searchHighlightedWord) {
+                        val localBounds = RectF()
+                        if (item.strokes.isNotEmpty()) {
+                            localBounds.set(item.strokes[0].bounds)
+                            for (i in 1 until item.strokes.size) {
+                                localBounds.union(item.strokes[i].bounds)
+                            }
+                        }
+                        canvas.drawRect(localBounds, searchHighlightPaint)
+                    }
+
                     if (item.isShowingText && item.text.isNotEmpty()) {
                         drawWordText(canvas, item)
                     } else {
@@ -798,11 +821,36 @@ class DrawingView @JvmOverloads constructor(
         initialBitmap = null
         selectedImage = null
         selectedWord = null
+        searchHighlightedWord = null
         scaleFactor = 1.0f
         translateX = 0f
         translateY = 0f
         updateMatrix()
         invalidate()
+    }
+
+    fun scrollToWord(word: WordItem) {
+        val bounds = word.bounds
+        val centerX = bounds.centerX()
+        val centerY = bounds.centerY()
+        
+        // Center the word in the view
+        translateX = width / 2f - centerX * scaleFactor
+        translateY = height / 2f - centerY * scaleFactor
+        
+        updateMatrix()
+        invalidate()
+    }
+
+    fun getWordItems(): List<WordItem> {
+        return drawItems.filterIsInstance<WordItem>()
+    }
+
+    fun getItemAtIndex(index: Int): CanvasItem? {
+        if (index >= 0 && index < drawItems.size) {
+            return drawItems[index]
+        }
+        return null
     }
 
     fun getBitmap(): Bitmap? {
