@@ -685,7 +685,7 @@ class DrawingView @JvmOverloads constructor(
         return bmp
     }
 
-    private fun getRecentClusterBounds(): RectF? {
+    fun getRecentClusterBounds(): RectF? {
         val strokes = drawItems.filterIsInstance<StrokeItem>()
         if (strokes.isEmpty()) return null
         

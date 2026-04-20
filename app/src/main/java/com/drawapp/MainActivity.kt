@@ -61,6 +61,11 @@ class MainActivity : AppCompatActivity() {
 
     private var currentPageIndex: Int = 0
 
+    // Multi-cluster tracking
+    private var pendingClusterBounds: android.graphics.RectF? = null
+    private var pendingClusterBitmap: android.graphics.Bitmap? = null
+    private var fullRecognizedText: String = ""
+
     // ── Misc ───────────────────────────────────────────────────────────────
     private val pickMedia = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) {
@@ -162,6 +167,19 @@ class MainActivity : AppCompatActivity() {
 
         // Wire stroke callback → debounced recognition & autosave
         drawingView.onStrokeCompleted = {
+            val currentBounds = drawingView.getRecentClusterBounds()
+            
+            if (pendingClusterBounds != null && currentBounds != null) {
+                if (!android.graphics.RectF.intersects(pendingClusterBounds!!, currentBounds)) {
+                    if (pendingClusterBitmap != null) {
+                        triggerRecognitionForBitmap(pendingClusterBitmap!!)
+                    }
+                }
+            }
+            
+            pendingClusterBounds = currentBounds
+            pendingClusterBitmap = drawingView.getRecentClusterBitmap()
+
             if (recognizer.isReady) {
                 recognitionHandler.removeCallbacks(recognitionRunnable)
                 recognitionHandler.postDelayed(recognitionRunnable, DEBOUNCE_MS)
@@ -234,20 +252,38 @@ class MainActivity : AppCompatActivity() {
     private fun triggerRecognition() {
         if (!recognizer.isReady) return
         
-        // Use the cropped cluster bitmap instead of the full canvas
-        val bitmap = drawingView.getRecentClusterBitmap() ?: return
+        val bitmap = pendingClusterBitmap ?: return
+        
+        pendingClusterBounds = null
+        pendingClusterBitmap = null
 
+        triggerRecognitionForBitmap(bitmap)
+    }
+
+    private fun triggerRecognitionForBitmap(bitmap: Bitmap) {
         var accumulated = ""
+        var currentPrefix = ""
+        var prefixEvaluated = false
 
         recognizer.recognize(
             bitmap = bitmap,
             onPartialResult = { partial ->
+                if (!prefixEvaluated) {
+                    currentPrefix = if (fullRecognizedText.isNotEmpty()) "$fullRecognizedText " else ""
+                    prefixEvaluated = true
+                }
                 accumulated += partial
-                recognitionText.text = accumulated
+                recognitionText.text = currentPrefix + accumulated.trim()
                 recognitionText.setTextColor(Color.WHITE)
             },
             onDone = {
-                if (accumulated.isBlank()) {
+                if (!prefixEvaluated) {
+                    currentPrefix = if (fullRecognizedText.isNotEmpty()) "$fullRecognizedText " else ""
+                    prefixEvaluated = true
+                }
+                if (accumulated.isNotBlank()) {
+                    fullRecognizedText = currentPrefix + accumulated.trim()
+                } else if (fullRecognizedText.isBlank()) {
                     recognitionText.text = "(nothing recognized)"
                     recognitionText.setTextColor(Color.parseColor("#88FFFFFF"))
                 }
@@ -510,6 +546,10 @@ class MainActivity : AppCompatActivity() {
                 drawingView.clear()
                 drawingView.clearDebugBox()
                 recognitionHandler.removeCallbacks(recognitionRunnable)
+                hasPendingRecognition = false
+                pendingClusterBounds = null
+                pendingClusterBitmap = null
+                fullRecognizedText = ""
                 recognitionText.text = "Draw something to recognize…"
                 recognitionText.setTextColor(Color.parseColor("#88FFFFFF"))
                 setRecognitionState(RecognitionState.IDLE)
@@ -567,6 +607,13 @@ class MainActivity : AppCompatActivity() {
         tvPageIndicator.text = "${pageIndex + 1}"
         drawingView.clear()
         drawingView.clearDebugBox()
+        hasPendingRecognition = false
+        pendingClusterBounds = null
+        pendingClusterBitmap = null
+        fullRecognizedText = ""
+        recognitionText.text = "Draw something to recognize…"
+        recognitionText.setTextColor(Color.parseColor("#88FFFFFF"))
+        
         val file = getNotebookSvgFile(pageIndex)
         
         btnPageUp.alpha = if (pageIndex > 0) 1.0f else 0.4f
