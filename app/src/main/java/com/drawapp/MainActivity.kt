@@ -60,10 +60,12 @@ class MainActivity : AppCompatActivity() {
     private var currentNotebook: Notebook? = null
     private val activityScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
+    private val busyStrokes = mutableSetOf<DrawingView.StrokeItem>()
+
     private var currentPageIndex: Int = 0
 
     // Multi-cluster tracking
-    private var pendingClusterBounds: android.graphics.RectF? = null
+    private var pendingClusterStrokes: List<DrawingView.StrokeItem>? = null
     private var pendingClusterBitmap: android.graphics.Bitmap? = null
     private var fullRecognizedText: String = ""
 
@@ -169,18 +171,23 @@ class MainActivity : AppCompatActivity() {
 
         // Wire stroke callback → debounced recognition & autosave
         drawingView.onStrokeCompleted = {
-            val currentBounds = drawingView.getRecentClusterBounds()
+            val clusterData = drawingView.getRecentClusterWithStrokes()
+            var currentStrokes = clusterData?.second ?: emptyList()
             
-            if (pendingClusterBounds != null && currentBounds != null) {
-                if (!android.graphics.RectF.intersects(pendingClusterBounds!!, currentBounds)) {
+            // Filter out strokes that are already being recognized to prevent duplication
+            currentStrokes = currentStrokes.filter { it !in busyStrokes }
+            
+            if (pendingClusterStrokes != null && currentStrokes.isNotEmpty()) {
+                // If the new stroke is not part of the current pending cluster, flush recognition for the previous one
+                if (currentStrokes.none { it in pendingClusterStrokes!! }) {
                     if (pendingClusterBitmap != null) {
-                        triggerRecognitionForBitmap(pendingClusterBitmap!!)
+                        triggerRecognitionForBitmap(pendingClusterBitmap!!, pendingClusterStrokes!!)
                     }
                 }
             }
             
-            pendingClusterBounds = currentBounds
-            pendingClusterBitmap = drawingView.getRecentClusterBitmap()
+            pendingClusterStrokes = if (currentStrokes.isNotEmpty()) currentStrokes else null
+            pendingClusterBitmap = if (currentStrokes.isNotEmpty()) clusterData?.first else null
 
             if (recognizer.isReady) {
                 recognitionHandler.removeCallbacks(recognitionRunnable)
@@ -255,14 +262,21 @@ class MainActivity : AppCompatActivity() {
         if (!recognizer.isReady) return
         
         val bitmap = pendingClusterBitmap ?: return
+        val strokes = pendingClusterStrokes ?: return
         
-        pendingClusterBounds = null
+        pendingClusterStrokes = null
         pendingClusterBitmap = null
 
-        triggerRecognitionForBitmap(bitmap)
+        triggerRecognitionForBitmap(bitmap, strokes)
     }
 
-    private fun triggerRecognitionForBitmap(bitmap: Bitmap) {
+    private fun triggerRecognitionForBitmap(bitmap: Bitmap, strokes: List<DrawingView.StrokeItem>) {
+        if (strokes.isEmpty()) return
+        busyStrokes.addAll(strokes)
+        
+        // Group immediately so they are transformable as a Word object
+        val wordItem = drawingView.groupStrokesIntoWord(strokes, "…")
+        
         var accumulated = ""
         var currentPrefix = ""
         var prefixEvaluated = false
@@ -277,6 +291,9 @@ class MainActivity : AppCompatActivity() {
                 accumulated += partial
                 recognitionText.text = currentPrefix + accumulated.trim()
                 recognitionText.setTextColor(Color.WHITE)
+                
+                // Update the word item text as we go
+                wordItem?.text = accumulated.trim()
             },
             onDone = {
                 if (!prefixEvaluated) {
@@ -284,16 +301,25 @@ class MainActivity : AppCompatActivity() {
                     prefixEvaluated = true
                 }
                 if (accumulated.isNotBlank()) {
-                    fullRecognizedText = currentPrefix + accumulated.trim()
+                    val result = currentPrefix + accumulated.trim()
+                    fullRecognizedText = result
+                    wordItem?.text = accumulated.trim()
+                    scheduleAutosave()
                 } else if (fullRecognizedText.isBlank()) {
                     recognitionText.text = "(nothing recognized)"
                     recognitionText.setTextColor(Color.parseColor("#88FFFFFF"))
+                    wordItem?.text = ""
                 }
+                busyStrokes.removeAll(strokes)
+                drawingView.invalidate()
             },
             onError = { msg ->
+                busyStrokes.removeAll(strokes)
                 setRecognitionState(RecognitionState.ERROR)
                 recognitionText.text = "Error: $msg"
                 recognitionText.setTextColor(Color.parseColor("#FF6B6B"))
+                wordItem?.text = ""
+                drawingView.invalidate()
             }
         )
     }
@@ -550,12 +576,12 @@ class MainActivity : AppCompatActivity() {
                 drawingView.clearDebugBox()
                 recognitionHandler.removeCallbacks(recognitionRunnable)
                 hasPendingRecognition = false
-                pendingClusterBounds = null
                 pendingClusterBitmap = null
                 fullRecognizedText = ""
                 recognitionText.text = "Draw something to recognize…"
                 recognitionText.setTextColor(Color.parseColor("#88FFFFFF"))
                 setRecognitionState(RecognitionState.IDLE)
+                busyStrokes.clear()
                 // Trigger autosave to preserve background type even if canvas is cleared
                 performAutosave()
             }
@@ -611,11 +637,11 @@ class MainActivity : AppCompatActivity() {
         drawingView.clear()
         drawingView.clearDebugBox()
         hasPendingRecognition = false
-        pendingClusterBounds = null
         pendingClusterBitmap = null
         fullRecognizedText = ""
         recognitionText.text = "Draw something to recognize…"
         recognitionText.setTextColor(Color.parseColor("#88FFFFFF"))
+        busyStrokes.clear()
         
         val file = getNotebookSvgFile(pageIndex)
         
@@ -737,6 +763,31 @@ class MainActivity : AppCompatActivity() {
                         }
                     } catch (e: Exception) {
                         e.printStackTrace()
+                    }
+                }
+                is WordData -> {
+                    for (stroke in item.strokes) {
+                        val path = android.graphics.Path()
+                        for (cmd in stroke.commands) {
+                            when (cmd) {
+                                is com.drawapp.PathCommand.MoveTo -> path.moveTo(cmd.x, cmd.y)
+                                is com.drawapp.PathCommand.QuadTo -> path.quadTo(cmd.x1, cmd.y1, cmd.x2, cmd.y2)
+                                is com.drawapp.PathCommand.LineTo -> path.lineTo(cmd.x, cmd.y)
+                            }
+                        }
+                        val paint = android.graphics.Paint().apply {
+                            color = if (stroke.isEraser) drawingView.canvasBackgroundColor else stroke.color
+                            style = android.graphics.Paint.Style.STROKE
+                            strokeJoin = android.graphics.Paint.Join.ROUND
+                            strokeCap = android.graphics.Paint.Cap.ROUND
+                            strokeWidth = stroke.strokeWidth
+                            isAntiAlias = true
+                            alpha = stroke.opacity
+                        }
+                        val matrix = android.graphics.Matrix()
+                        matrix.setValues(item.matrix)
+                        path.transform(matrix)
+                        canvas.drawPath(path, paint)
                     }
                 }
             }

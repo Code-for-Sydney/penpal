@@ -29,6 +29,12 @@ data class ImageData(
     val matrix: FloatArray
 ) : SvgData()
 
+data class WordData(
+    val strokes: List<StrokeData>,
+    val matrix: FloatArray,
+    val text: String
+) : SvgData()
+
 data class SvgResult(
     val items: List<SvgData>,
     val backgroundType: String = "RULED"
@@ -88,6 +94,21 @@ object SvgSerializer {
                     val transform = "matrix(${m[0]},${m[3]},${m[1]},${m[4]},${m[2]},${m[5]})"
                     sb.appendLine("""  <image id="image-$index" transform="$transform" href="data:image/png;base64,${item.base64}"/>""")
                 }
+                is WordData -> {
+                    val m = item.matrix
+                    val transform = "matrix(${m[0]},${m[3]},${m[1]},${m[4]},${m[2]},${m[5]})"
+                    sb.appendLine("""  <g id="word-$index" transform="$transform" data-text="${item.text}">""")
+                    for (stroke in item.strokes) {
+                        val d = commandsToSvgPath(stroke.commands)
+                        if (d.isBlank()) continue
+                        val hex = colorToHex(stroke.color)
+                        val opacity = stroke.opacity / 255f
+                        sb.append("""    <path d="$d" stroke="$hex" stroke-width="${stroke.strokeWidth}" stroke-opacity="$opacity" stroke-linecap="round" stroke-linejoin="round" fill="none"""")
+                        if (stroke.isEraser) sb.append(""" data-eraser="true"""")
+                        sb.appendLine("""/>""")
+                    }
+                    sb.appendLine("  </g>")
+                }
             }
         }
 
@@ -127,44 +148,75 @@ object SvgSerializer {
                         ))
                     }
                 } else if (parser.name == "image") {
-                    val href = parser.getAttributeValue(null, "href") ?: ""
                     val transform = parser.getAttributeValue(null, "transform") ?: ""
+                    val href = parser.getAttributeValue(null, "href") ?: ""
+                    val m = parseMatrix(transform)
+                    val base64Data = if (href.startsWith("data:image/png;base64,")) {
+                        href.substring("data:image/png;base64,".length)
+                    } else href
+                    items.add(ImageData(base64Data, m))
+                } else if (parser.name == "g") {
+                    val transform = parser.getAttributeValue(null, "transform") ?: ""
+                    val text = parser.getAttributeValue(null, "data-text") ?: ""
+                    val m = parseMatrix(transform)
                     
-                    val base64 = href.removePrefix("data:image/png;base64,")
-                    
-                    // Parse matrix(a,b,c,d,e,f)
-                    val m = FloatArray(9) { if (it % 4 == 0) 1f else 0f }
-                    if (transform.startsWith("matrix(") && transform.endsWith(")")) {
-                        val vals = transform.removePrefix("matrix(").removeSuffix(")").split(",")
-                        if (vals.size == 6) {
-                            val a = vals[0].toFloatOrNull() ?: 1f
-                            val b = vals[1].toFloatOrNull() ?: 0f
-                            val c = vals[2].toFloatOrNull() ?: 0f
-                            val d = vals[3].toFloatOrNull() ?: 1f
-                            val e = vals[4].toFloatOrNull() ?: 0f
-                            val f = vals[5].toFloatOrNull() ?: 0f
-                            
-                            // SVG matrix is a, b, c, d, e, f
-                            // a c e
-                            // b d f
-                            // 0 0 1
-                            // Android Matrix is:
-                            // MSCALE_X (0), MSKEW_X (1), MTRANS_X (2)
-                            // MSKEW_Y (3), MSCALE_Y (4), MTRANS_Y (5)
-                            m[android.graphics.Matrix.MSCALE_X] = a
-                            m[android.graphics.Matrix.MSKEW_X] = c
-                            m[android.graphics.Matrix.MTRANS_X] = e
-                            m[android.graphics.Matrix.MSKEW_Y] = b
-                            m[android.graphics.Matrix.MSCALE_Y] = d
-                            m[android.graphics.Matrix.MTRANS_Y] = f
+                    val strokes = mutableListOf<StrokeData>()
+                    var innerEvent = parser.next()
+                    while (!(innerEvent == XmlPullParser.END_TAG && parser.name == "g")) {
+                        if (innerEvent == XmlPullParser.START_TAG && parser.name == "path") {
+                            val strokeData = parsePath(parser)
+                            if (strokeData != null) strokes.add(strokeData)
                         }
+                        innerEvent = parser.next()
                     }
-                    items.add(ImageData(base64, m))
+                    items.add(WordData(strokes, m, text))
                 }
             }
             eventType = parser.next()
         }
         return SvgResult(items, backgroundType)
+    }
+
+    private fun parseMatrix(transform: String): FloatArray {
+        val m = FloatArray(9) { if (it % 4 == 0) 1f else 0f }
+        if (transform.startsWith("matrix(") && transform.endsWith(")")) {
+            val vals = transform.removePrefix("matrix(").removeSuffix(")").split(",")
+            if (vals.size == 6) {
+                val a = vals[0].toFloatOrNull() ?: 1f
+                val b = vals[1].toFloatOrNull() ?: 0f
+                val c = vals[2].toFloatOrNull() ?: 0f
+                val d = vals[3].toFloatOrNull() ?: 1f
+                val e = vals[4].toFloatOrNull() ?: 0f
+                val f = vals[5].toFloatOrNull() ?: 0f
+                
+                m[android.graphics.Matrix.MSCALE_X] = a
+                m[android.graphics.Matrix.MSKEW_X] = c
+                m[android.graphics.Matrix.MTRANS_X] = e
+                m[android.graphics.Matrix.MSKEW_Y] = b
+                m[android.graphics.Matrix.MSCALE_Y] = d
+                m[android.graphics.Matrix.MTRANS_Y] = f
+            }
+        }
+        return m
+    }
+
+    private fun parsePath(parser: XmlPullParser): StrokeData? {
+        val pathData = parser.getAttributeValue(null, "d") ?: ""
+        val strokeColor = parser.getAttributeValue(null, "stroke") ?: "#000000"
+        val strokeWidth = parser.getAttributeValue(null, "stroke-width")?.toFloatOrNull() ?: 12f
+        val strokeOpacity = parser.getAttributeValue(null, "stroke-opacity")?.toFloatOrNull() ?: 1f
+        val isEraser = parser.getAttributeValue(null, "data-eraser") == "true"
+
+        val commands = svgPathToCommands(pathData)
+        return if (commands.isNotEmpty()) {
+            StrokeData(
+                commands = commands,
+                color = parseHexColor(strokeColor),
+                strokeWidth = strokeWidth,
+                opacity = (strokeOpacity * 255).toInt().coerceIn(0, 255),
+                isEraser = isEraser
+            )
+        } else null
     }
 
 

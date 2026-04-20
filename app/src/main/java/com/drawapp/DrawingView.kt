@@ -71,6 +71,25 @@ class DrawingView @JvmOverloads constructor(
             }
     }
 
+    data class WordItem(
+        val strokes: List<StrokeItem>,
+        val matrix: Matrix,
+        var text: String = ""
+    ) : CanvasItem() {
+        override val bounds: RectF
+            get() {
+                val r = RectF()
+                if (strokes.isNotEmpty()) {
+                    r.set(strokes[0].bounds)
+                    for (i in 1 until strokes.size) {
+                        r.union(strokes[i].bounds)
+                    }
+                }
+                matrix.mapRect(r)
+                return r
+            }
+    }
+
     // --- State ---
     private val drawItems = mutableListOf<CanvasItem>()
     private val redoStack = mutableListOf<CanvasItem>()
@@ -96,14 +115,6 @@ class DrawingView @JvmOverloads constructor(
     /** Called once each time the user lifts their finger after a stroke. */
     var onStrokeCompleted: (() -> Unit)? = null
 
-    // --- Debug ---
-    private var debugBoundingBox: RectF? = null
-    private val debugPaint = Paint().apply {
-        color = Color.RED
-        style = Paint.Style.STROKE
-        strokeWidth = 3f
-        pathEffect = DashPathEffect(floatArrayOf(15f, 15f), 0f)
-    }
     
     private val selectionPaint = Paint().apply {
         color = Color.parseColor("#7C4DFF")
@@ -155,14 +166,16 @@ class DrawingView @JvmOverloads constructor(
     private var isDrawing = false
     private var isPanning = false
     private var isImageManipulating = false
+    private var isWordManipulating = false
     private var selectedImage: ImageItem? = null
+    private var selectedWord: WordItem? = null
     
-    // Image Manipulation State
-    private var initialImageMatrix = Matrix()
-    private var imageStartAngle = 0f
-    private var imageStartSpan = 1f
-    private var imageStartFocalX = 0f
-    private var imageStartFocalY = 0f
+    // Manipulation State
+    private var initialMatrix = Matrix()
+    private var startAngle = 0f
+    private var startSpan = 1f
+    private var startFocalX = 0f
+    private var startFocalY = 0f
 
     // Pan tracking
     private var lastPanX = 0f
@@ -172,42 +185,44 @@ class DrawingView @JvmOverloads constructor(
     private val scaleDetector = ScaleGestureDetector(context,
         object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
             override fun onScaleBegin(detector: ScaleGestureDetector): Boolean {
-                if (isImageManipulating && selectedImage != null) {
-                    initialImageMatrix.set(selectedImage!!.matrix)
-                    imageStartSpan = max(1f, detector.currentSpan)
+                if ((isImageManipulating && selectedImage != null) || (isWordManipulating && selectedWord != null)) {
+                    val currentMatrix = selectedImage?.matrix ?: selectedWord!!.matrix
+                    initialMatrix.set(currentMatrix)
+                    startSpan = max(1f, detector.currentSpan)
                     
                     // Angle between two fingers
                     val dx = detector.currentSpanX
                     val dy = detector.currentSpanY
-                    imageStartAngle = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())).toFloat()
+                    startAngle = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())).toFloat()
                     
                     val pt = screenToCanvas(detector.focusX, detector.focusY)
-                    imageStartFocalX = pt[0]
-                    imageStartFocalY = pt[1]
+                    startFocalX = pt[0]
+                    startFocalY = pt[1]
                     return true
                 }
                 return true
             }
 
             override fun onScale(detector: ScaleGestureDetector): Boolean {
-                if (isImageManipulating && selectedImage != null) {
-                    val scale = detector.currentSpan / imageStartSpan
+                if ((isImageManipulating && selectedImage != null) || (isWordManipulating && selectedWord != null)) {
+                    val targetMatrix = selectedImage?.matrix ?: selectedWord!!.matrix
+                    val scale = detector.currentSpan / startSpan
                     
                     val dx = detector.currentSpanX
                     val dy = detector.currentSpanY
                     val currentAngle = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())).toFloat()
-                    val rotation = currentAngle - imageStartAngle
+                    val rotation = currentAngle - startAngle
                     
                     val pt = screenToCanvas(detector.focusX, detector.focusY)
-                    val transX = pt[0] - imageStartFocalX
-                    val transY = pt[1] - imageStartFocalY
+                    val transX = pt[0] - startFocalX
+                    val transY = pt[1] - startFocalY
 
-                    val tempMatrix = Matrix(initialImageMatrix)
+                    val tempMatrix = Matrix(initialMatrix)
                     tempMatrix.postTranslate(transX, transY)
                     tempMatrix.postScale(scale, scale, pt[0], pt[1])
                     tempMatrix.postRotate(rotation, pt[0], pt[1])
                     
-                    selectedImage!!.matrix.set(tempMatrix)
+                    targetMatrix.set(tempMatrix)
                     invalidate()
                     return true
                 }
@@ -314,18 +329,18 @@ class DrawingView @JvmOverloads constructor(
                 is ImageItem -> {
                     canvas.drawBitmap(item.bitmap, item.matrix, null)
                     if (item == selectedImage) {
-                        canvas.drawRect(item.bounds, selectionPaint)
-                        
-                        // Draw delete cross at top-right
-                        val cx = item.bounds.right
-                        val cy = item.bounds.top
-                        val radius = 30f / scaleFactor
-                        canvas.drawCircle(cx, cy, radius, deleteBgPaint)
-                        
-                        deleteIconPaint.strokeWidth = 5f / scaleFactor
-                        val pad = 10f / scaleFactor
-                        canvas.drawLine(cx - radius + pad, cy - radius + pad, cx + radius - pad, cy + radius - pad, deleteIconPaint)
-                        canvas.drawLine(cx + radius - pad, cy - radius + pad, cx - radius + pad, cy + radius - pad, deleteIconPaint)
+                        drawSelectionBox(canvas, item.bounds)
+                    }
+                }
+                is WordItem -> {
+                    canvas.save()
+                    canvas.concat(item.matrix)
+                    for (stroke in item.strokes) {
+                        canvas.drawPath(stroke.path, stroke.paint)
+                    }
+                    canvas.restore()
+                    if (item == selectedWord) {
+                        drawSelectionBox(canvas, item.bounds)
                     }
                 }
             }
@@ -336,12 +351,25 @@ class DrawingView @JvmOverloads constructor(
             canvas.drawPath(currentPath, currentPaint)
         }
 
-        // 7. Draw debug bounding box if present
-        debugBoundingBox?.let {
-            canvas.drawRect(it, debugPaint)
-        }
 
         canvas.restore()
+    }
+
+    private fun drawSelectionBox(canvas: Canvas, bounds: RectF) {
+        // Draw dashed bounding box
+        canvas.drawRect(bounds, selectionPaint)
+
+        // Draw delete button at top-right corner
+        val radius = 24f / scaleFactor
+        val cx = bounds.right
+        val cy = bounds.top
+
+        canvas.drawCircle(cx, cy, radius, deleteBgPaint)
+
+        val crossSize = 10f / scaleFactor
+        val iconPaint = Paint(deleteIconPaint).apply { strokeWidth = 3f / scaleFactor }
+        canvas.drawLine(cx - crossSize, cy - crossSize, cx + crossSize, cy + crossSize, iconPaint)
+        canvas.drawLine(cx + crossSize, cy - crossSize, cx - crossSize, cy + crossSize, iconPaint)
     }
 
     private fun drawPaperLines(canvas: Canvas) {
@@ -414,38 +442,55 @@ class DrawingView @JvmOverloads constructor(
             MotionEvent.ACTION_DOWN -> {
                 val canvasCoords = screenToCanvas(event.x, event.y)
                 
-                // Check if user tapped the delete cross of the selected image
-                if (selectedImage != null) {
-                    val cx = selectedImage!!.bounds.right
-                    val cy = selectedImage!!.bounds.top
+                // Check if user tapped the delete cross of the selected image/word
+                val selectedItem = selectedImage ?: selectedWord
+                if (selectedItem != null) {
+                    val cx = selectedItem.bounds.right
+                    val cy = selectedItem.bounds.top
                     val touchRadius = 60f / scaleFactor // generous touch target
                     val dx = canvasCoords[0] - cx
                     val dy = canvasCoords[1] - cy
                     if (dx * dx + dy * dy <= touchRadius * touchRadius) {
-                        deleteSelectedImage()
+                        deleteSelectedItem()
                         return true
                     }
                 }
                 
-                // Hit testing for images
-                val hitImage = drawItems.reversed().find { 
-                    it is ImageItem && it.bounds.contains(canvasCoords[0], canvasCoords[1])
-                } as ImageItem?
+                // Hit testing for images and words
+                val hitItem = drawItems.reversed().find { 
+                    it.bounds.contains(canvasCoords[0], canvasCoords[1])
+                }
 
-                if (hitImage != null) {
-                    selectedImage = hitImage
-                    isImageManipulating = true
-                    isDrawing = false
-                    isPanning = false
-                    // Track pan for single finger image move
-                    lastPanX = event.x
-                    lastPanY = event.y
-                } else {
-                    selectedImage = null
-                    isImageManipulating = false
-                    isDrawing = true
-                    isPanning = false
-                    touchStart(canvasCoords[0], canvasCoords[1])
+                when (hitItem) {
+                    is ImageItem -> {
+                        selectedImage = hitItem
+                        selectedWord = null
+                        isImageManipulating = true
+                        isWordManipulating = false
+                        isDrawing = false
+                        isPanning = false
+                        lastPanX = event.x
+                        lastPanY = event.y
+                    }
+                    is WordItem -> {
+                        selectedWord = hitItem
+                        selectedImage = null
+                        isWordManipulating = true
+                        isImageManipulating = false
+                        isDrawing = false
+                        isPanning = false
+                        lastPanX = event.x
+                        lastPanY = event.y
+                    }
+                    else -> {
+                        selectedImage = null
+                        selectedWord = null
+                        isImageManipulating = false
+                        isWordManipulating = false
+                        isDrawing = true
+                        isPanning = false
+                        touchStart(canvasCoords[0], canvasCoords[1])
+                    }
                 }
                 invalidate()
             }
@@ -455,7 +500,7 @@ class DrawingView @JvmOverloads constructor(
                     cancelCurrentStroke()
                     isDrawing = false
                 }
-                if (!isImageManipulating) {
+                if (!isImageManipulating && !isWordManipulating) {
                     isPanning = true
                     lastPanX = event.x
                     lastPanY = event.y
@@ -464,19 +509,20 @@ class DrawingView @JvmOverloads constructor(
             }
 
             MotionEvent.ACTION_MOVE -> {
-                if (isImageManipulating && selectedImage != null && pointerCount == 1) {
-                    // Single finger image translate
+                if ((isImageManipulating && selectedImage != null || isWordManipulating && selectedWord != null) && pointerCount == 1) {
+                    // Single finger translate
+                    val targetMatrix = selectedImage?.matrix ?: selectedWord!!.matrix
                     val canvasCoords = screenToCanvas(event.x, event.y)
                     val lastCanvasCoords = screenToCanvas(lastPanX, lastPanY)
                     val dx = canvasCoords[0] - lastCanvasCoords[0]
                     val dy = canvasCoords[1] - lastCanvasCoords[1]
                     
-                    selectedImage!!.matrix.postTranslate(dx, dy)
+                    targetMatrix.postTranslate(dx, dy)
                     
                     lastPanX = event.x
                     lastPanY = event.y
                     invalidate()
-                } else if (isPanning && pointerCount >= 2 && !isImageManipulating) {
+                } else if (isPanning && pointerCount >= 2 && !isImageManipulating && !isWordManipulating) {
                     if (!scaleDetector.isInProgress) {
                         val dx = event.x - lastPanX
                         val dy = event.y - lastPanY
@@ -502,10 +548,11 @@ class DrawingView @JvmOverloads constructor(
                 }
                 isPanning = false
                 isImageManipulating = false
+                isWordManipulating = false
             }
 
             MotionEvent.ACTION_POINTER_UP -> {
-                if (pointerCount <= 2 && !isImageManipulating) {
+                if (pointerCount <= 2 && !isImageManipulating && !isWordManipulating) {
                     isPanning = true
                 }
             }
@@ -587,7 +634,7 @@ class DrawingView @JvmOverloads constructor(
         onStrokeCompleted?.invoke()
     }
 
-    fun deleteSelectedImage(): Boolean {
+    fun deleteSelectedItem(): Boolean {
         val image = selectedImage
         if (image != null) {
             drawItems.remove(image)
@@ -598,7 +645,38 @@ class DrawingView @JvmOverloads constructor(
             onStrokeCompleted?.invoke()
             return true
         }
+        val word = selectedWord
+        if (word != null) {
+            drawItems.remove(word)
+            selectedWord = null
+            isWordManipulating = false
+            redoStack.clear()
+            invalidate()
+            onStrokeCompleted?.invoke()
+            return true
+        }
         return false
+    }
+
+    @Deprecated("Use deleteSelectedItem instead", ReplaceWith("deleteSelectedItem()"))
+    fun deleteSelectedImage() = deleteSelectedItem()
+
+    fun groupStrokesIntoWord(strokesToGroup: List<StrokeItem>, text: String): WordItem? {
+        val stillInCanvas = strokesToGroup.filter { it in drawItems }
+        if (stillInCanvas.isEmpty()) return null
+        
+        // Remove individual strokes from drawItems
+        drawItems.removeAll { it in stillInCanvas }
+        
+        // Create WordItem with identity matrix (strokes are already in canvas space)
+        val wordItem = WordItem(stillInCanvas, Matrix(), text)
+        drawItems.add(wordItem)
+        
+        // Clear redo stack as we modified the item structure
+        redoStack.clear()
+        invalidate()
+        onStrokeCompleted?.invoke()
+        return wordItem
     }
 
     // --- Undo / Redo ---
@@ -606,6 +684,7 @@ class DrawingView @JvmOverloads constructor(
         if (drawItems.isNotEmpty()) {
             val item = drawItems.removeLast()
             if (item == selectedImage) selectedImage = null
+            if (item == selectedWord) selectedWord = null
             redoStack.add(item)
             invalidate()
         }
@@ -628,6 +707,7 @@ class DrawingView @JvmOverloads constructor(
         currentPath = Path()
         initialBitmap = null
         selectedImage = null
+        selectedWord = null
         scaleFactor = 1.0f
         translateX = 0f
         translateY = 0f
@@ -653,8 +733,9 @@ class DrawingView @JvmOverloads constructor(
     }
 
     // --- Cropped Bitmap for Recognition ---
-    fun getRecentClusterBitmap(): Bitmap? {
+    fun getRecentClusterWithStrokes(): Triple<Bitmap, List<StrokeItem>, RectF>? {
         val bounds = getRecentClusterBounds() ?: return null
+        val strokes = getRecentClusterStrokes() ?: return null
         
         val margin = 40f
         val left = bounds.left - margin
@@ -667,8 +748,6 @@ class DrawingView @JvmOverloads constructor(
         val cropHeight = cropRect.height().toInt()
         if (cropWidth < 10 || cropHeight < 10) return null
 
-        debugBoundingBox = cropRect
-        invalidate()
 
         val bmp = Bitmap.createBitmap(cropWidth, cropHeight, Bitmap.Config.ARGB_8888)
         val c = Canvas(bmp)
@@ -677,12 +756,46 @@ class DrawingView @JvmOverloads constructor(
         c.translate(-left, -top)
         
         for (item in drawItems) {
-            if (item is StrokeItem && RectF.intersects(cropRect, item.bounds)) {
+            if (item is StrokeItem && strokes.contains(item)) {
                 c.drawPath(item.path, item.paint)
             }
         }
         
-        return bmp
+        return Triple(bmp, strokes, cropRect)
+    }
+
+    @Deprecated("Use getRecentClusterWithStrokes instead")
+    fun getRecentClusterBitmap(): Bitmap? = getRecentClusterWithStrokes()?.first
+
+    fun getRecentClusterStrokes(): List<StrokeItem>? {
+        val strokes = drawItems.filterIsInstance<StrokeItem>()
+        if (strokes.isEmpty()) return null
+        
+        val lastStroke = strokes.last()
+        val cluster = mutableSetOf(lastStroke)
+        val clusterBounds = RectF(lastStroke.bounds)
+        
+        val hPadding = 156f
+        val vPadding = 60f
+        
+        var changed = true
+        while (changed) {
+            changed = false
+            for (stroke in strokes) {
+                if (stroke in cluster) continue
+                
+                val nearBounds = RectF(clusterBounds).apply {
+                    inset(-hPadding, -vPadding)
+                }
+                
+                if (RectF.intersects(nearBounds, stroke.bounds)) {
+                    cluster.add(stroke)
+                    clusterBounds.union(stroke.bounds)
+                    changed = true
+                }
+            }
+        }
+        return cluster.toList()
     }
 
     fun getRecentClusterBounds(): RectF? {
@@ -717,7 +830,6 @@ class DrawingView @JvmOverloads constructor(
     }
 
     fun clearDebugBox() {
-        debugBoundingBox = null
         invalidate()
     }
 
@@ -743,6 +855,20 @@ class DrawingView @JvmOverloads constructor(
                     item.matrix.getValues(m)
                     ImageData(base64, m)
                 }
+                is WordItem -> {
+                    val strokeDataList = item.strokes.map {
+                        StrokeData(
+                            commands = it.commands,
+                            color = it.paint.color,
+                            strokeWidth = it.paint.strokeWidth,
+                            opacity = it.paint.alpha,
+                            isEraser = it.isEraserStroke
+                        )
+                    }
+                    val m = FloatArray(9)
+                    item.matrix.getValues(m)
+                    WordData(strokeDataList, m, item.text)
+                }
             }
         }
     }
@@ -752,38 +878,12 @@ class DrawingView @JvmOverloads constructor(
         redoStack.clear()
         initialBitmap = null
         selectedImage = null
+        selectedWord = null
 
         for (data in dataList) {
             when (data) {
                 is StrokeData -> {
-                    val path = Path()
-                    for (cmd in data.commands) {
-                        when (cmd) {
-                            is PathCommand.MoveTo -> path.moveTo(cmd.x, cmd.y)
-                            is PathCommand.QuadTo -> path.quadTo(cmd.x1, cmd.y1, cmd.x2, cmd.y2)
-                            is PathCommand.LineTo -> path.lineTo(cmd.x, cmd.y)
-                        }
-                    }
-
-                    val paint = Paint().apply {
-                        color = data.color
-                        style = Paint.Style.STROKE
-                        strokeJoin = Paint.Join.ROUND
-                        strokeCap = Paint.Cap.ROUND
-                        strokeWidth = data.strokeWidth
-                        isAntiAlias = true
-                        alpha = data.opacity
-                        if (data.isEraser) {
-                            color = canvasBackgroundColor
-                        }
-                    }
-
-                    val bounds = RectF()
-                    path.computeBounds(bounds, true)
-                    val halfWidth = paint.strokeWidth / 2f
-                    bounds.inset(-halfWidth, -halfWidth)
-
-                    drawItems.add(StrokeItem(path, paint, bounds, data.commands, data.isEraser))
+                    drawItems.add(createStrokeItem(data))
                 }
                 is ImageData -> {
                     try {
@@ -798,6 +898,12 @@ class DrawingView @JvmOverloads constructor(
                         e.printStackTrace()
                     }
                 }
+                is WordData -> {
+                    val strokes = data.strokes.map { createStrokeItem(it) }
+                    val matrix = Matrix()
+                    matrix.setValues(data.matrix)
+                    drawItems.add(WordItem(strokes, matrix, data.text))
+                }
             }
         }
 
@@ -807,25 +913,53 @@ class DrawingView @JvmOverloads constructor(
         }
     }
 
-    private fun centerOnContent() {
-        val contentBounds = getContentBounds() ?: return
-        if (contentBounds.isEmpty) return
-
+    fun centerOnContent() {
+        val bounds = getContentBounds() ?: return
         val viewW = width.toFloat()
         val viewH = height.toFloat()
-        val contentW = contentBounds.width()
-        val contentH = contentBounds.height()
+        if (viewW <= 0f || viewH <= 0f) return
 
-        val padding = 60f
-        val paddedW = contentW + padding * 2
-        val paddedH = contentH + padding * 2
+        val contentW = bounds.width()
+        val contentH = bounds.height()
 
-        val fitScale = min(viewW / paddedW, viewH / paddedH).coerceIn(MIN_ZOOM, MAX_ZOOM)
-        scaleFactor = min(fitScale, 1.0f)
+        val scale = (min(viewW / contentW, viewH / contentH) * 0.8f).coerceIn(MIN_ZOOM, MAX_ZOOM)
+        scaleFactor = scale
 
-        translateX = (viewW - contentW * scaleFactor) / 2f - contentBounds.left * scaleFactor
-        translateY = (viewH - contentH * scaleFactor) / 2f - contentBounds.top * scaleFactor
+        translateX = viewW / 2f - (bounds.centerX() * scaleFactor)
+        translateY = viewH / 2f - (bounds.centerY() * scaleFactor)
 
         updateMatrix()
+        invalidate()
+    }
+
+    private fun createStrokeItem(data: StrokeData): StrokeItem {
+        val path = Path()
+        for (cmd in data.commands) {
+            when (cmd) {
+                is PathCommand.MoveTo -> path.moveTo(cmd.x, cmd.y)
+                is PathCommand.QuadTo -> path.quadTo(cmd.x1, cmd.y1, cmd.x2, cmd.y2)
+                is PathCommand.LineTo -> path.lineTo(cmd.x, cmd.y)
+            }
+        }
+
+        val paint = Paint().apply {
+            color = data.color
+            style = Paint.Style.STROKE
+            strokeJoin = Paint.Join.ROUND
+            strokeCap = Paint.Cap.ROUND
+            strokeWidth = data.strokeWidth
+            isAntiAlias = true
+            alpha = data.opacity
+            if (data.isEraser) {
+                color = canvasBackgroundColor
+            }
+        }
+
+        val bounds = RectF()
+        path.computeBounds(bounds, true)
+        val halfWidth = paint.strokeWidth / 2f
+        bounds.inset(-halfWidth, -halfWidth)
+
+        return StrokeItem(path, paint, bounds, data.commands, data.isEraser)
     }
 }
