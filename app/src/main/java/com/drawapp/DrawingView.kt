@@ -91,6 +91,13 @@ class DrawingView @JvmOverloads constructor(
             }
     }
 
+    data class ClusterResult(
+        val bitmap: Bitmap,
+        val strokes: List<StrokeItem>,
+        val mergedWords: List<WordItem>,
+        val cropRect: RectF
+    )
+
     // --- State ---
     private val drawItems = mutableListOf<CanvasItem>()
     private val redoStack = mutableListOf<CanvasItem>()
@@ -841,15 +848,19 @@ class DrawingView @JvmOverloads constructor(
     @Deprecated("Use deleteSelectedItem instead", ReplaceWith("deleteSelectedItem()"))
     fun deleteSelectedImage() = deleteSelectedItem()
 
-    fun groupStrokesIntoWord(strokesToGroup: List<StrokeItem>, text: String): WordItem? {
+    fun groupStrokesIntoWord(strokesToGroup: List<StrokeItem>, text: String, wordsToMerge: List<WordItem> = emptyList()): WordItem? {
         val stillInCanvas = strokesToGroup.filter { it in drawItems }
-        if (stillInCanvas.isEmpty()) return null
         
         // Remove individual strokes from drawItems
         drawItems.removeAll { it in stillInCanvas }
         
+        // Remove words being merged
+        drawItems.removeAll { it in wordsToMerge }
+        
+        if (strokesToGroup.isEmpty()) return null
+        
         // Create WordItem with identity matrix (strokes are already in canvas space)
-        val wordItem = WordItem(stillInCanvas, Matrix(), text)
+        val wordItem = WordItem(strokesToGroup, Matrix(), text)
         drawItems.add(wordItem)
         
         // Clear redo stack as we modified the item structure
@@ -938,9 +949,11 @@ class DrawingView @JvmOverloads constructor(
     }
 
     // --- Cropped Bitmap for Recognition ---
-    fun getRecentClusterWithStrokes(): Triple<Bitmap, List<StrokeItem>, RectF>? {
-        val bounds = getRecentClusterBounds() ?: return null
-        val strokes = getRecentClusterStrokes() ?: return null
+    fun getRecentClusterWithStrokes(): ClusterResult? {
+        val cluster = getRecentClusterItems() ?: return null
+        val strokes = cluster.first
+        val mergedWords = cluster.second
+        val bounds = getRecentClusterBounds(strokes)
         
         val margin = 40f
         val left = bounds.left - margin
@@ -960,24 +973,25 @@ class DrawingView @JvmOverloads constructor(
         
         c.translate(-left, -top)
         
-        for (item in drawItems) {
-            if (item is StrokeItem && strokes.contains(item)) {
-                c.drawPath(item.path, item.paint)
-            }
+        // Draw the strokes in the cluster.
+        // These strokes are already in canvas space.
+        for (stroke in strokes) {
+            c.drawPath(stroke.path, stroke.paint)
         }
         
-        return Triple(bmp, strokes, cropRect)
+        return ClusterResult(bmp, strokes, mergedWords, cropRect)
     }
 
     @Deprecated("Use getRecentClusterWithStrokes instead")
-    fun getRecentClusterBitmap(): Bitmap? = getRecentClusterWithStrokes()?.first
+    fun getRecentClusterBitmap(): Bitmap? = getRecentClusterWithStrokes()?.bitmap
 
-    fun getRecentClusterStrokes(): List<StrokeItem>? {
-        val strokes = drawItems.filterIsInstance<StrokeItem>()
-        if (strokes.isEmpty()) return null
+    fun getRecentClusterItems(): Pair<List<StrokeItem>, List<WordItem>>? {
+        val allLooseStrokes = drawItems.filterIsInstance<StrokeItem>()
+        if (allLooseStrokes.isEmpty()) return null
         
-        val lastStroke = strokes.last()
-        val cluster = mutableSetOf(lastStroke)
+        val lastStroke = allLooseStrokes.last()
+        val clusterStrokes = mutableSetOf(lastStroke)
+        val clusterWords = mutableSetOf<WordItem>()
         val clusterBounds = RectF(lastStroke.bounds)
         
         val hPadding = 156f
@@ -986,52 +1000,64 @@ class DrawingView @JvmOverloads constructor(
         var changed = true
         while (changed) {
             changed = false
-            for (stroke in strokes) {
-                if (stroke in cluster) continue
-                
-                val nearBounds = RectF(clusterBounds).apply {
-                    inset(-hPadding, -vPadding)
-                }
-                
-                if (RectF.intersects(nearBounds, stroke.bounds)) {
-                    cluster.add(stroke)
+            
+            // 1. Check loose strokes
+            for (stroke in allLooseStrokes) {
+                if (stroke in clusterStrokes) continue
+                if (isNear(clusterBounds, stroke.bounds, hPadding, vPadding)) {
+                    clusterStrokes.add(stroke)
                     clusterBounds.union(stroke.bounds)
                     changed = true
                 }
             }
+            
+            // 2. Check WordItems
+            val allWords = drawItems.filterIsInstance<WordItem>()
+            for (word in allWords) {
+                if (word in clusterWords) continue
+                if (isNear(clusterBounds, word.bounds, hPadding, vPadding)) {
+                    clusterWords.add(word)
+                    val dissolved = dissolveWordToStrokes(word)
+                    for (s in dissolved) {
+                        clusterStrokes.add(s)
+                        clusterBounds.union(s.bounds)
+                    }
+                    changed = true
+                }
+            }
         }
-        return cluster.toList()
+        return Pair(clusterStrokes.toList(), clusterWords.toList())
     }
 
-    fun getRecentClusterBounds(): RectF? {
-        val strokes = drawItems.filterIsInstance<StrokeItem>()
-        if (strokes.isEmpty()) return null
-        
-        val lastStroke = strokes.last()
-        val cluster = mutableSetOf(lastStroke)
-        val clusterBounds = RectF(lastStroke.bounds)
-        
-        val hPadding = 156f
-        val vPadding = 60f
-        
-        var changed = true
-        while (changed) {
-            changed = false
-            for (stroke in strokes) {
-                if (stroke in cluster) continue
-                
-                val nearBounds = RectF(clusterBounds).apply {
-                    inset(-hPadding, -vPadding)
-                }
-                
-                if (RectF.intersects(nearBounds, stroke.bounds)) {
-                    cluster.add(stroke)
-                    clusterBounds.union(stroke.bounds)
-                    changed = true
-                }
+    private fun isNear(b1: RectF, b2: RectF, hp: Float, vp: Float): Boolean {
+        val near = RectF(b1).apply { inset(-hp, -vp) }
+        return RectF.intersects(near, b2)
+    }
+
+    private fun dissolveWordToStrokes(word: WordItem): List<StrokeItem> {
+        return word.strokes.map { stroke ->
+            val newPath = Path(stroke.path)
+            newPath.transform(word.matrix)
+            val newBounds = RectF()
+            newPath.computeBounds(newBounds, true)
+            val halfWidth = stroke.paint.strokeWidth / 2f
+            newBounds.inset(-halfWidth, -halfWidth)
+            stroke.copy(path = newPath, boundsRect = newBounds)
+        }
+    }
+
+    fun getRecentClusterStrokes(): List<StrokeItem>? = getRecentClusterItems()?.first
+
+    fun getRecentClusterBounds(strokes: List<StrokeItem>? = null): RectF {
+        val targetStrokes = strokes ?: getRecentClusterStrokes() ?: return RectF()
+        val bounds = RectF()
+        if (targetStrokes.isNotEmpty()) {
+            bounds.set(targetStrokes[0].bounds)
+            for (i in 1 until targetStrokes.size) {
+                bounds.union(targetStrokes[i].bounds)
             }
         }
-        return clusterBounds
+        return bounds
     }
 
     fun clearDebugBox() {

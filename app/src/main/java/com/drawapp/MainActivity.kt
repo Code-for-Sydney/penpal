@@ -79,6 +79,7 @@ class MainActivity : AppCompatActivity() {
 
     // Multi-cluster tracking
     private var pendingClusterStrokes: List<DrawingView.StrokeItem>? = null
+    private var pendingClusterMergedWords: List<DrawingView.WordItem>? = null
     private var pendingClusterBitmap: android.graphics.Bitmap? = null
     private var fullRecognizedText: String = ""
 
@@ -192,7 +193,8 @@ class MainActivity : AppCompatActivity() {
         // Wire stroke callback → debounced recognition & autosave
         drawingView.onStrokeCompleted = {
             val clusterData = drawingView.getRecentClusterWithStrokes()
-            var currentStrokes = clusterData?.second ?: emptyList()
+            var currentStrokes = clusterData?.strokes ?: emptyList()
+            val mergedWords = clusterData?.mergedWords ?: emptyList()
             
             // Filter out strokes that are already being recognized to prevent duplication
             currentStrokes = currentStrokes.filter { it !in busyStrokes }
@@ -201,13 +203,14 @@ class MainActivity : AppCompatActivity() {
                 // If the new stroke is not part of the current pending cluster, flush recognition for the previous one
                 if (currentStrokes.none { it in pendingClusterStrokes!! }) {
                     if (pendingClusterBitmap != null) {
-                        triggerRecognitionForBitmap(pendingClusterBitmap!!, pendingClusterStrokes!!)
+                        triggerRecognitionForBitmap(pendingClusterBitmap!!, pendingClusterStrokes!!, pendingClusterMergedWords ?: emptyList())
                     }
                 }
             }
             
             pendingClusterStrokes = if (currentStrokes.isNotEmpty()) currentStrokes else null
-            pendingClusterBitmap = if (currentStrokes.isNotEmpty()) clusterData?.first else null
+            pendingClusterMergedWords = if (currentStrokes.isNotEmpty()) mergedWords else null
+            pendingClusterBitmap = if (currentStrokes.isNotEmpty()) clusterData?.bitmap else null
 
             if (recognizer.isReady) {
                 recognitionHandler.removeCallbacks(recognitionRunnable)
@@ -283,19 +286,21 @@ class MainActivity : AppCompatActivity() {
         
         val bitmap = pendingClusterBitmap ?: return
         val strokes = pendingClusterStrokes ?: return
+        val mergedWords = pendingClusterMergedWords ?: emptyList()
         
         pendingClusterStrokes = null
+        pendingClusterMergedWords = null
         pendingClusterBitmap = null
 
-        triggerRecognitionForBitmap(bitmap, strokes)
+        triggerRecognitionForBitmap(bitmap, strokes, mergedWords)
     }
 
-    private fun triggerRecognitionForBitmap(bitmap: Bitmap, strokes: List<DrawingView.StrokeItem>) {
+    private fun triggerRecognitionForBitmap(bitmap: Bitmap, strokes: List<DrawingView.StrokeItem>, mergedWords: List<DrawingView.WordItem> = emptyList()) {
         if (strokes.isEmpty()) return
         busyStrokes.addAll(strokes)
         
         // Group immediately so they are transformable as a Word object
-        val wordItem = drawingView.groupStrokesIntoWord(strokes, "…")
+        val wordItem = drawingView.groupStrokesIntoWord(strokes, "…", mergedWords)
         
         var accumulated = ""
         var currentPrefix = ""
@@ -305,6 +310,10 @@ class MainActivity : AppCompatActivity() {
             bitmap = bitmap,
             onPartialResult = { partial ->
                 if (!prefixEvaluated) {
+                    // If we merged words, we might want to preserve the text of the first one?
+                    // Actually, let's just use the current fullRecognizedText if we are continuing a sequence,
+                    // but if we merged a word, fullRecognizedText might be irrelevant for this specific WordItem.
+                    // However, triggerRecognitionForBitmap is usually called for the "recent" cluster.
                     currentPrefix = if (fullRecognizedText.isNotEmpty()) "$fullRecognizedText " else ""
                     prefixEvaluated = true
                 }
