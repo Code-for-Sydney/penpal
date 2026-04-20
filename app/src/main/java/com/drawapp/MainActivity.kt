@@ -709,6 +709,55 @@ class MainActivity : AppCompatActivity() {
     }
     
     // ── Overview Dialog ───────────────────────────────────────────────────
+
+    private fun deletePageAndShift(pageIndexToDelete: Int, overviewDialog: AlertDialog) {
+        // Delete the page files
+        deleteNotebookSvg(pageIndexToDelete)
+        
+        // Find remaining files to shift down
+        val dir = File(filesDir, "notebooks")
+        val allFiles = dir.listFiles { _, name -> 
+            name.startsWith("${notebookName}_page_") && name.endsWith(".svg") 
+        } ?: emptyArray()
+        
+        val existingPages = allFiles.mapNotNull { 
+            it.name.removePrefix("${notebookName}_page_").removeSuffix(".svg").toIntOrNull() 
+        }.filter { it > pageIndexToDelete }.sorted()
+        
+        for (pageIdx in existingPages) {
+            val oldSvg = getNotebookSvgFile(pageIdx)
+            val newSvg = getNotebookSvgFile(pageIdx - 1)
+            oldSvg.renameTo(newSvg)
+            
+            val oldThumb = getNotebookThumbFile(pageIdx)
+            val newThumb = getNotebookThumbFile(pageIdx - 1)
+            if (oldThumb.exists()) {
+                oldThumb.renameTo(newThumb)
+            }
+        }
+        
+        // If we deleted the current page, load the new current page
+        if (currentPageIndex == pageIndexToDelete) {
+            overviewDialog.dismiss()
+            if (currentPageIndex > 0 && !getNotebookSvgFile(currentPageIndex).exists()) {
+                currentPageIndex--
+            }
+            loadNotebookDrawing(currentPageIndex)
+            showOverviewDialog()
+            return
+        } else if (currentPageIndex > pageIndexToDelete) {
+            currentPageIndex--
+            val notebooks = NotebookManager.getNotebooks(this)
+            val notebook = notebooks.find { it.id == notebookId }
+            if (notebook != null) {
+                notebook.lastDisplayedPage = currentPageIndex
+                NotebookManager.updateNotebook(this, notebook)
+            }
+        }
+        
+        overviewDialog.dismiss()
+        showOverviewDialog()
+    }
     
     private fun showOverviewDialog() {
         performAutosave() // ensure current page is up to date
@@ -759,6 +808,8 @@ class MainActivity : AppCompatActivity() {
                 val tvPage = view.findViewById<TextView>(R.id.tvPageNumber)
                 val pageIdx = getItem(position)
                 
+                val btnRemovePage = view.findViewById<ImageButton>(R.id.btnRemovePage)
+                
                 tvPage.text = "Page ${pageIdx + 1}"
                 val thumbFile = getNotebookThumbFile(pageIdx)
                 if (thumbFile.exists()) {
@@ -772,6 +823,17 @@ class MainActivity : AppCompatActivity() {
                     view.setBackgroundResource(R.drawable.icon_btn_bg)
                 } else {
                     view.background = null
+                }
+                
+                btnRemovePage.setOnClickListener {
+                    AlertDialog.Builder(this@MainActivity, R.style.DarkDialogTheme)
+                        .setTitle("Remove Page")
+                        .setMessage("Are you sure you want to delete this page? This cannot be undone.")
+                        .setPositiveButton("Delete") { _, _ ->
+                            deletePageAndShift(pageIdx, dialog)
+                        }
+                        .setNegativeButton("Cancel", null)
+                        .show()
                 }
                 
                 view.setOnClickListener {

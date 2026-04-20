@@ -15,12 +15,29 @@
         app:cardElevation="8dp"
         app:cardBackgroundColor="#FFFFFF">
 
-        <ImageView
-            android:id="@+id/imgThumb"
+        <FrameLayout
             android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:scaleType="centerInside" />
-            
+            android:layout_height="match_parent">
+
+            <ImageView
+                android:id="@+id/imgThumb"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:scaleType="centerInside" />
+
+            <ImageButton
+                android:id="@+id/btnRemovePage"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:layout_gravity="top|end"
+                android:layout_margin="8dp"
+                android:background="@drawable/icon_btn_bg"
+                android:src="@android:drawable/ic_menu_delete"
+                android:contentDescription="Remove Page"
+                app:tint="#FF0000" />
+                
+        </FrameLayout>
+
     </androidx.cardview.widget.CardView>
 
     <TextView
