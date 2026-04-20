@@ -17,9 +17,9 @@
     <application
         android:name=".PenpalApplication"
         android:allowBackup="true"
-        android:icon="@drawable/ic_brush"
+        android:icon="@drawable/app_icon"
         android:label="@string/app_name"
-        android:roundIcon="@drawable/ic_brush"
+        android:roundIcon="@drawable/app_icon"
         android:supportsRtl="true"
         android:theme="@style/AppTheme">
 

@@ -26,6 +26,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnBrushSize: ImageButton
     private lateinit var btnColorPicker: View
     private lateinit var btnBack: ImageButton
+    private lateinit var btnSearch: ImageButton
     private lateinit var btnBackground: ImageButton
     private lateinit var colorSwatch: View
 
@@ -121,6 +122,7 @@ class MainActivity : AppCompatActivity() {
         btnPageUp           = findViewById(R.id.btnPageUp)
         btnPageDown         = findViewById(R.id.btnPageDown)
         btnOverview         = findViewById(R.id.btnOverview)
+        btnSearch           = findViewById(R.id.btnSearch)
         btnBackground       = findViewById(R.id.btnBackground)
         tvPageIndicator     = findViewById(R.id.tvPageIndicator)
 
@@ -391,6 +393,7 @@ class MainActivity : AppCompatActivity() {
             loadNotebookDrawing(currentPageIndex)
         }
         btnOverview.setOnClickListener { showOverviewDialog() }
+        btnSearch.setOnClickListener { showSearchDialog() }
 
         // Long-press ✦ to re-trigger model setup (inform user to do it from the main screen instead)
         recognitionIcon.setOnLongClickListener {
@@ -755,6 +758,31 @@ class MainActivity : AppCompatActivity() {
         }
     }
     
+    private fun showSearchDialog() {
+        val etSearch = EditText(this).apply {
+            hint = "Search recognized text..."
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.parseColor("#88FFFFFF"))
+            setPadding(48, 40, 48, 40)
+        }
+        
+        AlertDialog.Builder(this, R.style.DarkDialogTheme)
+            .setTitle("Search Notebook")
+            .setView(etSearch)
+            .setPositiveButton("Find") { _, _ ->
+                val query = etSearch.text.toString().trim()
+                if (query.isNotEmpty()) {
+                    if (fullRecognizedText.contains(query, ignoreCase = true)) {
+                        Toast.makeText(this, "Found '$query' in handwriting!", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(this, "'$query' not found in current page recognition.", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
     // ── Overview Dialog ───────────────────────────────────────────────────
 
     private fun deletePageAndShift(pageIndexToDelete: Int, overviewDialog: AlertDialog) {
