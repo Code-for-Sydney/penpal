@@ -97,6 +97,7 @@ class DrawingView @JvmOverloads constructor(
 
     private var currentPath = Path()
     private var currentCommands = mutableListOf<PathCommand>()
+    private val currentPoints = mutableListOf<PointF>()
     private var lastX = 0f
     private var lastY = 0f
 
@@ -676,6 +677,8 @@ class DrawingView @JvmOverloads constructor(
     private fun touchStart(x: Float, y: Float) {
         currentPath = Path()
         currentCommands = mutableListOf()
+        currentPoints.clear()
+        currentPoints.add(PointF(x, y))
         currentPath.moveTo(x, y)
         currentCommands.add(PathCommand.MoveTo(x, y))
         lastX = x
@@ -686,6 +689,7 @@ class DrawingView @JvmOverloads constructor(
         val dx = abs(x - lastX)
         val dy = abs(y - lastY)
         if (dx >= TOUCH_TOLERANCE / scaleFactor || dy >= TOUCH_TOLERANCE / scaleFactor) {
+            currentPoints.add(PointF(x, y))
             val midX = (x + lastX) / 2
             val midY = (y + lastY) / 2
             currentPath.quadTo(lastX, lastY, midX, midY)
@@ -697,21 +701,84 @@ class DrawingView @JvmOverloads constructor(
 
     private fun touchUp() {
         currentPath.lineTo(lastX, lastY)
-        currentCommands.add(PathCommand.LineTo(lastX, lastY))
+        currentPoints.add(PointF(lastX, lastY))
+
+        // --- Smoothing ---
+        val smoothedCommands = if (currentPoints.size > 2) {
+            smoothPoints(currentPoints)
+        } else {
+            currentCommands.toList()
+        }
+
+        // Rebuild path from smoothed commands
+        val smoothedPath = Path()
+        for (cmd in smoothedCommands) {
+            when (cmd) {
+                is PathCommand.MoveTo -> smoothedPath.moveTo(cmd.x, cmd.y)
+                is PathCommand.QuadTo -> smoothedPath.quadTo(cmd.x1, cmd.y1, cmd.x2, cmd.y2)
+                is PathCommand.CubicTo -> smoothedPath.cubicTo(cmd.x1, cmd.y1, cmd.x2, cmd.y2, cmd.x3, cmd.y3)
+                is PathCommand.LineTo -> smoothedPath.lineTo(cmd.x, cmd.y)
+            }
+        }
 
         val strokePaint = buildPaint()
         val bounds = RectF()
-        currentPath.computeBounds(bounds, true)
+        smoothedPath.computeBounds(bounds, true)
         val halfWidth = strokePaint.strokeWidth / 2f
         bounds.inset(-halfWidth, -halfWidth)
 
-        drawItems.add(StrokeItem(currentPath, strokePaint, bounds, currentCommands.toList(), isEraser))
+        drawItems.add(StrokeItem(smoothedPath, strokePaint, bounds, smoothedCommands, isEraser))
         redoStack.clear()
 
         currentPath = Path()
         currentCommands = mutableListOf()
+        currentPoints.clear()
 
         onStrokeCompleted?.invoke()
+    }
+
+    private fun smoothPoints(points: List<PointF>): List<PathCommand> {
+        if (points.size < 3) return listOf(PathCommand.MoveTo(points[0].x, points[0].y)) + 
+                points.drop(1).map { PathCommand.LineTo(it.x, it.y) }
+
+        // 1. Simplify points (remove points that are too close to each other)
+        val simplified = mutableListOf<PointF>()
+        simplified.add(points[0])
+        var lastPoint = points[0]
+        val minDistance = 2f / scaleFactor
+        for (i in 1 until points.size) {
+            val p = points[i]
+            val dx = p.x - lastPoint.x
+            val dy = p.y - lastPoint.y
+            if (dx * dx + dy * dy > minDistance * minDistance || i == points.size - 1) {
+                simplified.add(p)
+                lastPoint = p
+            }
+        }
+
+        if (simplified.size < 3) return listOf(PathCommand.MoveTo(simplified[0].x, simplified[0].y)) + 
+                simplified.drop(1).map { PathCommand.LineTo(it.x, it.y) }
+
+        // 2. Catmull-Rom to Cubic Bezier conversion for smoothing
+        val result = mutableListOf<PathCommand>()
+        result.add(PathCommand.MoveTo(simplified[0].x, simplified[0].y))
+
+        for (i in 0 until simplified.size - 1) {
+            val p0 = if (i == 0) simplified[i] else simplified[i - 1]
+            val p1 = simplified[i]
+            val p2 = simplified[i + 1]
+            val p3 = if (i + 2 < simplified.size) simplified[i + 2] else p2
+
+            // Catmull-Rom to Bezier control points
+            val cp1x = p1.x + (p2.x - p0.x) / 6f
+            val cp1y = p1.y + (p2.y - p0.y) / 6f
+            val cp2x = p2.x - (p3.x - p1.x) / 6f
+            val cp2y = p2.y - (p3.y - p1.y) / 6f
+
+            result.add(PathCommand.CubicTo(cp1x, cp1y, cp2x, cp2y, p2.x, p2.y))
+        }
+
+        return result
     }
 
     private fun cancelCurrentStroke() {
@@ -1076,6 +1143,7 @@ class DrawingView @JvmOverloads constructor(
             when (cmd) {
                 is PathCommand.MoveTo -> path.moveTo(cmd.x, cmd.y)
                 is PathCommand.QuadTo -> path.quadTo(cmd.x1, cmd.y1, cmd.x2, cmd.y2)
+                is PathCommand.CubicTo -> path.cubicTo(cmd.x1, cmd.y1, cmd.x2, cmd.y2, cmd.x3, cmd.y3)
                 is PathCommand.LineTo -> path.lineTo(cmd.x, cmd.y)
             }
         }

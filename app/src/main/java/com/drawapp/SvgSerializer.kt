@@ -10,6 +10,7 @@ import java.io.StringReader
 sealed class PathCommand {
     data class MoveTo(val x: Float, val y: Float) : PathCommand()
     data class QuadTo(val x1: Float, val y1: Float, val x2: Float, val y2: Float) : PathCommand()
+    data class CubicTo(val x1: Float, val y1: Float, val x2: Float, val y2: Float, val x3: Float, val y3: Float) : PathCommand()
     data class LineTo(val x: Float, val y: Float) : PathCommand()
 }
 
@@ -230,6 +231,7 @@ object SvgSerializer {
             when (cmd) {
                 is PathCommand.MoveTo -> sb.append("M ${cmd.x} ${cmd.y} ")
                 is PathCommand.QuadTo -> sb.append("Q ${cmd.x1} ${cmd.y1} ${cmd.x2} ${cmd.y2} ")
+                is PathCommand.CubicTo -> sb.append("C ${cmd.x1} ${cmd.y1} ${cmd.x2} ${cmd.y2} ${cmd.x3} ${cmd.y3} ")
                 is PathCommand.LineTo -> sb.append("L ${cmd.x} ${cmd.y} ")
             }
         }
@@ -255,6 +257,16 @@ object SvgSerializer {
                             tokens[i+3].toFloat(), tokens[i+4].toFloat()
                         ))
                         i += 5
+                    } else i++
+                }
+                "C" -> {
+                    if (i + 6 < tokens.size) {
+                        commands.add(PathCommand.CubicTo(
+                            tokens[i+1].toFloat(), tokens[i+2].toFloat(),
+                            tokens[i+3].toFloat(), tokens[i+4].toFloat(),
+                            tokens[i+5].toFloat(), tokens[i+6].toFloat()
+                        ))
+                        i += 7
                     } else i++
                 }
                 "L" -> {

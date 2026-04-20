@@ -793,6 +793,7 @@ class MainActivity : AppCompatActivity() {
                         when (cmd) {
                             is com.drawapp.PathCommand.MoveTo -> path.moveTo(cmd.x, cmd.y)
                             is com.drawapp.PathCommand.QuadTo -> path.quadTo(cmd.x1, cmd.y1, cmd.x2, cmd.y2)
+                            is com.drawapp.PathCommand.CubicTo -> path.cubicTo(cmd.x1, cmd.y1, cmd.x2, cmd.y2, cmd.x3, cmd.y3)
                             is com.drawapp.PathCommand.LineTo -> path.lineTo(cmd.x, cmd.y)
                         }
                     }
@@ -835,11 +836,12 @@ class MainActivity : AppCompatActivity() {
                         for (stroke in item.strokes) {
                             val path = android.graphics.Path()
                             for (cmd in stroke.commands) {
-                                when (cmd) {
-                                    is com.drawapp.PathCommand.MoveTo -> path.moveTo(cmd.x, cmd.y)
-                                    is com.drawapp.PathCommand.QuadTo -> path.quadTo(cmd.x1, cmd.y1, cmd.x2, cmd.y2)
-                                    is com.drawapp.PathCommand.LineTo -> path.lineTo(cmd.x, cmd.y)
-                                }
+                                    when (cmd) {
+                                        is com.drawapp.PathCommand.MoveTo -> path.moveTo(cmd.x, cmd.y)
+                                        is com.drawapp.PathCommand.QuadTo -> path.quadTo(cmd.x1, cmd.y1, cmd.x2, cmd.y2)
+                                        is com.drawapp.PathCommand.CubicTo -> path.cubicTo(cmd.x1, cmd.y1, cmd.x2, cmd.y2, cmd.x3, cmd.y3)
+                                        is com.drawapp.PathCommand.LineTo -> path.lineTo(cmd.x, cmd.y)
+                                    }
                             }
                             val b = RectF()
                             path.computeBounds(b, true)
@@ -867,11 +869,12 @@ class MainActivity : AppCompatActivity() {
                         for (stroke in item.strokes) {
                             val path = android.graphics.Path()
                             for (cmd in stroke.commands) {
-                                when (cmd) {
-                                    is com.drawapp.PathCommand.MoveTo -> path.moveTo(cmd.x, cmd.y)
-                                    is com.drawapp.PathCommand.QuadTo -> path.quadTo(cmd.x1, cmd.y1, cmd.x2, cmd.y2)
-                                    is com.drawapp.PathCommand.LineTo -> path.lineTo(cmd.x, cmd.y)
-                                }
+                                    when (cmd) {
+                                        is com.drawapp.PathCommand.MoveTo -> path.moveTo(cmd.x, cmd.y)
+                                        is com.drawapp.PathCommand.QuadTo -> path.quadTo(cmd.x1, cmd.y1, cmd.x2, cmd.y2)
+                                        is com.drawapp.PathCommand.CubicTo -> path.cubicTo(cmd.x1, cmd.y1, cmd.x2, cmd.y2, cmd.x3, cmd.y3)
+                                        is com.drawapp.PathCommand.LineTo -> path.lineTo(cmd.x, cmd.y)
+                                    }
                             }
                             val paint = android.graphics.Paint().apply {
                                 color = if (stroke.isEraser) drawingView.canvasBackgroundColor else stroke.color
