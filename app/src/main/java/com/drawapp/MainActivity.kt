@@ -47,7 +47,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var recognizer: HandwritingRecognizer
     private val recognitionHandler = Handler(Looper.getMainLooper())
     private val DEBOUNCE_MS = 1500L
-    private val recognitionRunnable = Runnable { triggerRecognition() }
+    private var hasPendingRecognition = false
+    private val recognitionRunnable = Runnable { 
+        hasPendingRecognition = false
+        triggerRecognition() 
+    }
     private val autosaveRunnable = Runnable { performAutosave() }
     private val AUTOSAVE_DEBOUNCE_MS = 2000L
     private var notebookName: String = "My Notebook"
@@ -137,6 +141,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onPause() {
         super.onPause()
+        flushPendingRecognition()
         performAutosave()
     }
 
@@ -160,6 +165,7 @@ class MainActivity : AppCompatActivity() {
             if (recognizer.isReady) {
                 recognitionHandler.removeCallbacks(recognitionRunnable)
                 recognitionHandler.postDelayed(recognitionRunnable, DEBOUNCE_MS)
+                hasPendingRecognition = true
             }
             // Always schedule autosave when a stroke is completed
             recognitionHandler.removeCallbacks(autosaveRunnable)
@@ -302,7 +308,10 @@ class MainActivity : AppCompatActivity() {
     // ══════════════════════════════════════════════════════════════════════
 
     private fun setupListeners() {
-        btnBack.setOnClickListener { finish() }
+        btnBack.setOnClickListener { 
+            flushPendingRecognition()
+            finish() 
+        }
         btnUndo.setOnClickListener {
             drawingView.undo(); updateButtonStates()
             scheduleRecognition()
@@ -333,12 +342,14 @@ class MainActivity : AppCompatActivity() {
         btnPageUp.setOnClickListener {
 
             if (currentPageIndex > 0) {
+                flushPendingRecognition()
                 performAutosave() // Save current
                 currentPageIndex--
                 loadNotebookDrawing(currentPageIndex)
             }
         }
         btnPageDown.setOnClickListener {
+            flushPendingRecognition()
             performAutosave() // Save current
             currentPageIndex++
             loadNotebookDrawing(currentPageIndex)
@@ -356,6 +367,15 @@ class MainActivity : AppCompatActivity() {
         if (recognizer.isReady) {
             recognitionHandler.removeCallbacks(recognitionRunnable)
             recognitionHandler.postDelayed(recognitionRunnable, DEBOUNCE_MS)
+            hasPendingRecognition = true
+        }
+    }
+
+    private fun flushPendingRecognition() {
+        if (hasPendingRecognition) {
+            recognitionHandler.removeCallbacks(recognitionRunnable)
+            hasPendingRecognition = false
+            triggerRecognition()
         }
     }
 
@@ -755,6 +775,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 
                 view.setOnClickListener {
+                    flushPendingRecognition()
                     currentPageIndex = pageIdx
                     loadNotebookDrawing(currentPageIndex)
                     dialog.dismiss()
