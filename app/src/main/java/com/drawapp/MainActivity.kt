@@ -2,6 +2,7 @@ package com.drawapp
 
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.graphics.RectF
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -766,28 +767,72 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 is WordData -> {
-                    for (stroke in item.strokes) {
-                        val path = android.graphics.Path()
-                        for (cmd in stroke.commands) {
-                            when (cmd) {
-                                is com.drawapp.PathCommand.MoveTo -> path.moveTo(cmd.x, cmd.y)
-                                is com.drawapp.PathCommand.QuadTo -> path.quadTo(cmd.x1, cmd.y1, cmd.x2, cmd.y2)
-                                is com.drawapp.PathCommand.LineTo -> path.lineTo(cmd.x, cmd.y)
-                            }
-                        }
+                    if (item.isShowingText && item.text.isNotEmpty()) {
+                        // Render text for thumbnail
                         val paint = android.graphics.Paint().apply {
-                            color = if (stroke.isEraser) drawingView.canvasBackgroundColor else stroke.color
-                            style = android.graphics.Paint.Style.STROKE
-                            strokeJoin = android.graphics.Paint.Join.ROUND
-                            strokeCap = android.graphics.Paint.Cap.ROUND
-                            strokeWidth = stroke.strokeWidth
+                            color = if (item.strokes.isNotEmpty()) item.strokes[0].color else Color.BLACK
                             isAntiAlias = true
-                            alpha = stroke.opacity
+                            textAlign = android.graphics.Paint.Align.CENTER
+                            typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD)
                         }
+                        
+                        // Calculate local bounds of strokes
+                        val localBounds = RectF()
+                        for (stroke in item.strokes) {
+                            val path = android.graphics.Path()
+                            for (cmd in stroke.commands) {
+                                when (cmd) {
+                                    is com.drawapp.PathCommand.MoveTo -> path.moveTo(cmd.x, cmd.y)
+                                    is com.drawapp.PathCommand.QuadTo -> path.quadTo(cmd.x1, cmd.y1, cmd.x2, cmd.y2)
+                                    is com.drawapp.PathCommand.LineTo -> path.lineTo(cmd.x, cmd.y)
+                                }
+                            }
+                            val b = RectF()
+                            path.computeBounds(b, true)
+                            localBounds.union(b)
+                        }
+                        
+                        val text = item.text
+                        paint.textSize = 100f
+                        val textWidth = paint.measureText(text)
+                        val fontMetrics = paint.fontMetrics
+                        val textHeight = fontMetrics.descent - fontMetrics.ascent
+                        val scaleX = localBounds.width() / textWidth
+                        val scaleY = localBounds.height() / textHeight
+                        val scaleT = minOf(scaleX, scaleY) * 0.9f
+                        paint.textSize = 100f * scaleT
+                        
                         val matrix = android.graphics.Matrix()
                         matrix.setValues(item.matrix)
-                        path.transform(matrix)
-                        canvas.drawPath(path, paint)
+                        canvas.save()
+                        canvas.concat(matrix)
+                        val baseline = localBounds.centerY() - (paint.fontMetrics.ascent + paint.fontMetrics.descent) / 2
+                        canvas.drawText(text, localBounds.centerX(), baseline, paint)
+                        canvas.restore()
+                    } else {
+                        for (stroke in item.strokes) {
+                            val path = android.graphics.Path()
+                            for (cmd in stroke.commands) {
+                                when (cmd) {
+                                    is com.drawapp.PathCommand.MoveTo -> path.moveTo(cmd.x, cmd.y)
+                                    is com.drawapp.PathCommand.QuadTo -> path.quadTo(cmd.x1, cmd.y1, cmd.x2, cmd.y2)
+                                    is com.drawapp.PathCommand.LineTo -> path.lineTo(cmd.x, cmd.y)
+                                }
+                            }
+                            val paint = android.graphics.Paint().apply {
+                                color = if (stroke.isEraser) drawingView.canvasBackgroundColor else stroke.color
+                                style = android.graphics.Paint.Style.STROKE
+                                strokeJoin = android.graphics.Paint.Join.ROUND
+                                strokeCap = android.graphics.Paint.Cap.ROUND
+                                strokeWidth = stroke.strokeWidth
+                                isAntiAlias = true
+                                alpha = stroke.opacity
+                            }
+                            val matrix = android.graphics.Matrix()
+                            matrix.setValues(item.matrix)
+                            path.transform(matrix)
+                            canvas.drawPath(path, paint)
+                        }
                     }
                 }
             }

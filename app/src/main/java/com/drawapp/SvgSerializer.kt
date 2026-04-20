@@ -32,7 +32,8 @@ data class ImageData(
 data class WordData(
     val strokes: List<StrokeData>,
     val matrix: FloatArray,
-    val text: String
+    val text: String,
+    val isShowingText: Boolean = false
 ) : SvgData()
 
 data class SvgResult(
@@ -97,7 +98,7 @@ object SvgSerializer {
                 is WordData -> {
                     val m = item.matrix
                     val transform = "matrix(${m[0]},${m[3]},${m[1]},${m[4]},${m[2]},${m[5]})"
-                    sb.appendLine("""  <g id="word-$index" transform="$transform" data-text="${item.text}">""")
+                    sb.appendLine("""  <g id="word-$index" transform="$transform" data-text="${item.text}" data-showing-text="${item.isShowingText}">""")
                     for (stroke in item.strokes) {
                         val d = commandsToSvgPath(stroke.commands)
                         if (d.isBlank()) continue
@@ -156,9 +157,10 @@ object SvgSerializer {
                     } else href
                     items.add(ImageData(base64Data, m))
                 } else if (parser.name == "g") {
-                    val transform = parser.getAttributeValue(null, "transform") ?: ""
                     val text = parser.getAttributeValue(null, "data-text") ?: ""
+                    val transform = parser.getAttributeValue(null, "transform") ?: ""
                     val m = parseMatrix(transform)
+                    val isShowingText = parser.getAttributeValue(null, "data-showing-text") == "true"
                     
                     val strokes = mutableListOf<StrokeData>()
                     var innerEvent = parser.next()
@@ -169,7 +171,7 @@ object SvgSerializer {
                         }
                         innerEvent = parser.next()
                     }
-                    items.add(WordData(strokes, m, text))
+                    items.add(WordData(strokes, m, text, isShowingText))
                 }
             }
             eventType = parser.next()

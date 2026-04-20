@@ -74,7 +74,8 @@ class DrawingView @JvmOverloads constructor(
     data class WordItem(
         val strokes: List<StrokeItem>,
         val matrix: Matrix,
-        var text: String = ""
+        var text: String = "",
+        var isShowingText: Boolean = false
     ) : CanvasItem() {
         override val bounds: RectF
             get() {
@@ -136,6 +137,26 @@ class DrawingView @JvmOverloads constructor(
         isAntiAlias = true
     }
 
+
+    private val textPaint = Paint().apply {
+        color = Color.BLACK
+        isAntiAlias = true
+        textAlign = Paint.Align.CENTER
+        typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+    }
+
+    private val toggleBgPaint = Paint().apply {
+        color = Color.parseColor("#7C4DFF")
+        style = Paint.Style.FILL
+        isAntiAlias = true
+    }
+
+    private val toggleIconPaint = Paint().apply {
+        color = Color.WHITE
+        isAntiAlias = true
+        textAlign = Paint.Align.CENTER
+        typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+    }
 
     private var currentPaint = buildPaint()
 
@@ -335,8 +356,12 @@ class DrawingView @JvmOverloads constructor(
                 is WordItem -> {
                     canvas.save()
                     canvas.concat(item.matrix)
-                    for (stroke in item.strokes) {
-                        canvas.drawPath(stroke.path, stroke.paint)
+                    if (item.isShowingText && item.text.isNotEmpty()) {
+                        drawWordText(canvas, item)
+                    } else {
+                        for (stroke in item.strokes) {
+                            canvas.drawPath(stroke.path, stroke.paint)
+                        }
                     }
                     canvas.restore()
                     if (item == selectedWord) {
@@ -359,17 +384,66 @@ class DrawingView @JvmOverloads constructor(
         // Draw dashed bounding box
         canvas.drawRect(bounds, selectionPaint)
 
-        // Draw delete button at top-right corner
         val radius = 24f / scaleFactor
-        val cx = bounds.right
-        val cy = bounds.top
-
-        canvas.drawCircle(cx, cy, radius, deleteBgPaint)
+        
+        // Draw delete button at top-right corner
+        val deleteX = bounds.right
+        val deleteY = bounds.top
+        canvas.drawCircle(deleteX, deleteY, radius, deleteBgPaint)
 
         val crossSize = 10f / scaleFactor
         val iconPaint = Paint(deleteIconPaint).apply { strokeWidth = 3f / scaleFactor }
-        canvas.drawLine(cx - crossSize, cy - crossSize, cx + crossSize, cy + crossSize, iconPaint)
-        canvas.drawLine(cx + crossSize, cy - crossSize, cx - crossSize, cy + crossSize, iconPaint)
+        canvas.drawLine(deleteX - crossSize, deleteY - crossSize, deleteX + crossSize, deleteY + crossSize, iconPaint)
+        canvas.drawLine(deleteX + crossSize, deleteY - crossSize, deleteX - crossSize, deleteY + crossSize, iconPaint)
+        
+        // Draw toggle button at top-left corner (only for WordItems)
+        if (selectedWord != null) {
+            val toggleX = bounds.left
+            val toggleY = bounds.top
+            canvas.drawCircle(toggleX, toggleY, radius, toggleBgPaint)
+            
+            val tSize = 16f / scaleFactor
+            toggleIconPaint.textSize = tSize
+            // Center "T" vertically
+            val fontMetrics = toggleIconPaint.fontMetrics
+            val baseline = toggleY - (fontMetrics.ascent + fontMetrics.descent) / 2
+            canvas.drawText("T", toggleX, baseline, toggleIconPaint)
+        }
+    }
+
+    private fun drawWordText(canvas: Canvas, item: WordItem) {
+        if (item.strokes.isEmpty()) return
+        
+        // Calculate local bounds of strokes
+        val localBounds = RectF(item.strokes[0].bounds)
+        for (i in 1 until item.strokes.size) {
+            localBounds.union(item.strokes[i].bounds)
+        }
+        
+        // Use the color of the first stroke
+        textPaint.color = item.strokes[0].paint.color
+        
+        // Scale text to fit bounds (approximated)
+        val text = item.text
+        textPaint.textSize = 100f // Base size for measurement
+        val textWidth = textPaint.measureText(text)
+        val fontMetrics = textPaint.fontMetrics
+        val textHeight = fontMetrics.descent - fontMetrics.ascent
+        
+        val scaleX = localBounds.width() / textWidth
+        val scaleY = localBounds.height() / textHeight
+        val scale = min(scaleX, scaleY) * 0.9f // small margin
+        
+        textPaint.textSize = 100f * scale
+        
+        val centerX = localBounds.centerX()
+        val centerY = localBounds.centerY()
+        
+        // Center text vertically
+        val finalMetrics = textPaint.fontMetrics
+        val baseline = centerY - (finalMetrics.ascent + finalMetrics.descent) / 2
+        
+        canvas.drawText(text, centerX, baseline, textPaint)
     }
 
     private fun drawPaperLines(canvas: Canvas) {
@@ -445,14 +519,30 @@ class DrawingView @JvmOverloads constructor(
                 // Check if user tapped the delete cross of the selected image/word
                 val selectedItem = selectedImage ?: selectedWord
                 if (selectedItem != null) {
-                    val cx = selectedItem.bounds.right
-                    val cy = selectedItem.bounds.top
                     val touchRadius = 60f / scaleFactor // generous touch target
-                    val dx = canvasCoords[0] - cx
-                    val dy = canvasCoords[1] - cy
-                    if (dx * dx + dy * dy <= touchRadius * touchRadius) {
+                    
+                    // Check delete button (top-right)
+                    val delCx = selectedItem.bounds.right
+                    val delCy = selectedItem.bounds.top
+                    val dDelX = canvasCoords[0] - delCx
+                    val dDelY = canvasCoords[1] - delCy
+                    if (dDelX * dDelX + dDelY * dDelY <= touchRadius * touchRadius) {
                         deleteSelectedItem()
                         return true
+                    }
+                    
+                    // Check toggle button (top-left) - only for WordItem
+                    if (selectedItem is WordItem) {
+                        val togCx = selectedItem.bounds.left
+                        val togCy = selectedItem.bounds.top
+                        val dTogX = canvasCoords[0] - togCx
+                        val dTogY = canvasCoords[1] - togCy
+                        if (dTogX * dTogX + dTogY * dTogY <= touchRadius * touchRadius) {
+                            selectedItem.isShowingText = !selectedItem.isShowingText
+                            invalidate()
+                            onStrokeCompleted?.invoke() // Trigger autosave
+                            return true
+                        }
                     }
                 }
                 
@@ -867,7 +957,7 @@ class DrawingView @JvmOverloads constructor(
                     }
                     val m = FloatArray(9)
                     item.matrix.getValues(m)
-                    WordData(strokeDataList, m, item.text)
+                    WordData(strokeDataList, m, item.text, item.isShowingText)
                 }
             }
         }
@@ -902,7 +992,7 @@ class DrawingView @JvmOverloads constructor(
                     val strokes = data.strokes.map { createStrokeItem(it) }
                     val matrix = Matrix()
                     matrix.setValues(data.matrix)
-                    drawItems.add(WordItem(strokes, matrix, data.text))
+                    drawItems.add(WordItem(strokes, matrix, data.text, data.isShowingText))
                 }
             }
         }
