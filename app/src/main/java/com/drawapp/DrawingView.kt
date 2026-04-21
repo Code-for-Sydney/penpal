@@ -72,10 +72,12 @@ class DrawingView @JvmOverloads constructor(
     }
 
     data class WordItem(
-        val strokes: List<StrokeItem>,
+        var strokes: List<StrokeItem>,
         val matrix: Matrix,
         var text: String = "",
-        var isShowingText: Boolean = false
+        var isShowingText: Boolean = false,
+        var textMatrix: Matrix = Matrix(),
+        var textBounds: RectF = RectF()
     ) : CanvasItem() {
         override val bounds: RectF
             get() {
@@ -377,14 +379,18 @@ class DrawingView @JvmOverloads constructor(
                     
                     // Draw search highlight if this is the focused word
                     if (item == searchHighlightedWord) {
-                        val localBounds = RectF()
+                        val localBounds = item.bounds // This uses the full matrix calculation
+                        // But for highlight we want to draw in the word's space
+                        // Actually WordItem.bounds is already in world space if we don't concat.
+                        // Since we ALREADY concatted item.matrix, we should draw in local space.
+                        val localBoundsRect = RectF()
                         if (item.strokes.isNotEmpty()) {
-                            localBounds.set(item.strokes[0].bounds)
+                            localBoundsRect.set(item.strokes[0].bounds)
                             for (i in 1 until item.strokes.size) {
-                                localBounds.union(item.strokes[i].bounds)
+                                localBoundsRect.union(item.strokes[i].bounds)
                             }
                         }
-                        canvas.drawRect(localBounds, searchHighlightPaint)
+                        canvas.drawRect(localBoundsRect, searchHighlightPaint)
                     }
 
                     if (item.isShowingText && item.text.isNotEmpty()) {
@@ -443,16 +449,28 @@ class DrawingView @JvmOverloads constructor(
     }
 
     private fun drawWordText(canvas: Canvas, item: WordItem) {
-        if (item.strokes.isEmpty()) return
+        if (item.strokes.isEmpty() && item.textBounds.isEmpty) return
         
-        // Calculate local bounds of strokes
-        val localBounds = RectF(item.strokes[0].bounds)
-        for (i in 1 until item.strokes.size) {
-            localBounds.union(item.strokes[i].bounds)
+        canvas.save()
+        canvas.concat(item.textMatrix)
+
+        val localBounds = if (!item.textBounds.isEmpty) {
+            item.textBounds
+        } else {
+            // Fallback to current strokes if textBounds is missing (legacy support)
+            val b = RectF(item.strokes[0].bounds)
+            for (i in 1 until item.strokes.size) {
+                b.union(item.strokes[i].bounds)
+            }
+            b
         }
         
         // Use the color of the first stroke
-        textPaint.color = item.strokes[0].paint.color
+        if (item.strokes.isNotEmpty()) {
+            textPaint.color = item.strokes[0].paint.color
+        } else {
+            textPaint.color = Color.BLACK
+        }
         
         // Scale text to fit bounds (approximated)
         val text = item.text
@@ -461,8 +479,8 @@ class DrawingView @JvmOverloads constructor(
         val fontMetrics = textPaint.fontMetrics
         val textHeight = fontMetrics.descent - fontMetrics.ascent
         
-        val scaleX = localBounds.width() / textWidth
-        val scaleY = localBounds.height() / textHeight
+        val scaleX = if (textWidth > 0) localBounds.width() / textWidth else 1f
+        val scaleY = if (textHeight > 0) localBounds.height() / textHeight else 1f
         val scale = min(scaleX, scaleY) * 0.9f // small margin
         
         textPaint.textSize = 100f * scale
@@ -475,6 +493,7 @@ class DrawingView @JvmOverloads constructor(
         val baseline = centerY - (finalMetrics.ascent + finalMetrics.descent) / 2
         
         canvas.drawText(text, centerX, baseline, textPaint)
+        canvas.restore()
     }
 
     private fun drawPaperLines(canvas: Canvas) {
@@ -666,6 +685,10 @@ class DrawingView @JvmOverloads constructor(
                     touchUp()
                     isDrawing = false
                     invalidate()
+                }
+                if (isWordManipulating && selectedWord != null) {
+                    freezeWordTransform(selectedWord!!)
+                    onStrokeCompleted?.invoke()
                 }
                 isPanning = false
                 isImageManipulating = false
@@ -859,8 +882,14 @@ class DrawingView @JvmOverloads constructor(
         
         if (strokesToGroup.isEmpty()) return null
         
+        // Calculate initial text orientation and bounds
+        val (writingAngle, center) = calculateWritingAngle(strokesToGroup)
+        val textBounds = calculateRotatedBounds(strokesToGroup, writingAngle, center)
+        val textMatrix = Matrix()
+        textMatrix.postRotate(writingAngle, center.x, center.y)
+
         // Create WordItem with identity matrix (strokes are already in canvas space)
-        val wordItem = WordItem(strokesToGroup, Matrix(), text)
+        val wordItem = WordItem(strokesToGroup, Matrix(), text, false, textMatrix, textBounds)
         drawItems.add(wordItem)
         
         // Clear redo stack as we modified the item structure
@@ -868,6 +897,77 @@ class DrawingView @JvmOverloads constructor(
         invalidate()
         onStrokeCompleted?.invoke()
         return wordItem
+    }
+
+    private fun calculateWritingAngle(strokes: List<StrokeItem>): Pair<Float, PointF> {
+        if (strokes.isEmpty()) return Pair(0f, PointF())
+
+        val allPoints = mutableListOf<PointF>()
+        for (stroke in strokes) {
+            for (cmd in stroke.commands) {
+                when (cmd) {
+                    is PathCommand.MoveTo -> allPoints.add(PointF(cmd.x, cmd.y))
+                    is PathCommand.LineTo -> allPoints.add(PointF(cmd.x, cmd.y))
+                    is PathCommand.QuadTo -> allPoints.add(PointF(cmd.x2, cmd.y2))
+                    is PathCommand.CubicTo -> allPoints.add(PointF(cmd.x3, cmd.y3))
+                }
+            }
+        }
+        if (allPoints.isEmpty()) {
+            // Fallback to center of bounds if no points found
+            val b = getRecentClusterBounds(strokes)
+            return Pair(0f, PointF(b.centerX(), b.centerY()))
+        }
+
+        var centerX = 0f
+        var centerY = 0f
+        for (p in allPoints) {
+            centerX += p.x
+            centerY += p.y
+        }
+        centerX /= allPoints.size
+        centerY /= allPoints.size
+
+        var covXX = 0f
+        var covYY = 0f
+        var covXY = 0f
+        for (p in allPoints) {
+            val dx = p.x - centerX
+            val dy = p.y - centerY
+            covXX += dx * dx
+            covYY += dy * dy
+            covXY += dx * dy
+        }
+        
+        // PCA to find principal axis
+        val angle = 0.5 * atan2(2 * covXY.toDouble(), (covXX - covYY).toDouble())
+        val degrees = Math.toDegrees(angle).toFloat()
+        
+        return Pair(degrees, PointF(centerX, centerY))
+    }
+
+    private fun calculateRotatedBounds(strokes: List<StrokeItem>, angleDeg: Float, center: PointF): RectF {
+        val rotationMatrix = Matrix()
+        rotationMatrix.postRotate(-angleDeg, center.x, center.y)
+        
+        val totalBounds = RectF()
+        var first = true
+        for (stroke in strokes) {
+            val path = Path(stroke.path)
+            path.transform(rotationMatrix)
+            val b = RectF()
+            path.computeBounds(b, true)
+            val halfWidth = stroke.paint.strokeWidth / 2f
+            b.inset(-halfWidth, -halfWidth)
+            
+            if (first) {
+                totalBounds.set(b)
+                first = false
+            } else {
+                totalBounds.union(b)
+            }
+        }
+        return totalBounds
     }
 
     // --- Undo / Redo ---
@@ -1038,12 +1138,63 @@ class DrawingView @JvmOverloads constructor(
         return word.strokes.map { stroke ->
             val newPath = Path(stroke.path)
             newPath.transform(word.matrix)
+            
+            val newCommands = stroke.commands.map { cmd ->
+                transformCommand(cmd, word.matrix)
+            }
+
             val newBounds = RectF()
             newPath.computeBounds(newBounds, true)
             val halfWidth = stroke.paint.strokeWidth / 2f
             newBounds.inset(-halfWidth, -halfWidth)
-            stroke.copy(path = newPath, boundsRect = newBounds)
+            stroke.copy(path = newPath, commands = newCommands, boundsRect = newBounds)
         }
+    }
+    
+    private fun transformCommand(cmd: PathCommand, matrix: Matrix): PathCommand {
+        val pts = when (cmd) {
+            is PathCommand.MoveTo -> floatArrayOf(cmd.x, cmd.y)
+            is PathCommand.LineTo -> floatArrayOf(cmd.x, cmd.y)
+            is PathCommand.QuadTo -> floatArrayOf(cmd.x1, cmd.y1, cmd.x2, cmd.y2)
+            is PathCommand.CubicTo -> floatArrayOf(cmd.x1, cmd.y1, cmd.x2, cmd.y2, cmd.x3, cmd.y3)
+        }
+        matrix.mapPoints(pts)
+        return when (cmd) {
+            is PathCommand.MoveTo -> PathCommand.MoveTo(pts[0], pts[1])
+            is PathCommand.LineTo -> PathCommand.LineTo(pts[0], pts[1])
+            is PathCommand.QuadTo -> PathCommand.QuadTo(pts[0], pts[1], pts[2], pts[3])
+            is PathCommand.CubicTo -> PathCommand.CubicTo(pts[0], pts[1], pts[2], pts[3], pts[4], pts[5])
+        }
+    }
+
+    private fun freezeWordTransform(word: WordItem) {
+        if (word.matrix.isIdentity) return
+
+        word.strokes = word.strokes.map { stroke ->
+            val newPath = Path(stroke.path)
+            newPath.transform(word.matrix)
+
+            val newCommands = stroke.commands.map { cmd ->
+                transformCommand(cmd, word.matrix)
+            }
+
+            val newBounds = RectF()
+            newPath.computeBounds(newBounds, true)
+            val halfWidth = stroke.paint.strokeWidth / 2f
+            newBounds.inset(-halfWidth, -halfWidth)
+
+            stroke.copy(
+                path = newPath,
+                commands = newCommands,
+                boundsRect = newBounds
+            )
+        }
+        
+        // Accumulate transformation for text
+        word.textMatrix.postConcat(word.matrix)
+        
+        word.matrix.reset()
+        invalidate()
     }
 
     fun getRecentClusterStrokes(): List<StrokeItem>? = getRecentClusterItems()?.first
@@ -1098,7 +1249,12 @@ class DrawingView @JvmOverloads constructor(
                     }
                     val m = FloatArray(9)
                     item.matrix.getValues(m)
-                    WordData(strokeDataList, m, item.text, item.isShowingText)
+                    
+                    val tm = FloatArray(9)
+                    item.textMatrix.getValues(tm)
+                    val tb = FloatRect(item.textBounds.left, item.textBounds.top, item.textBounds.right, item.textBounds.bottom)
+                    
+                    WordData(strokeDataList, m, item.text, item.isShowingText, tm, tb)
                 }
             }
         }
@@ -1133,7 +1289,18 @@ class DrawingView @JvmOverloads constructor(
                     val strokes = data.strokes.map { createStrokeItem(it) }
                     val matrix = Matrix()
                     matrix.setValues(data.matrix)
-                    drawItems.add(WordItem(strokes, matrix, data.text, data.isShowingText))
+                    
+                    val textMatrix = Matrix()
+                    if (data.textMatrix != null) {
+                        textMatrix.setValues(data.textMatrix)
+                    }
+                    
+                    val textBounds = RectF()
+                    data.textBounds?.let {
+                        textBounds.set(it.left, it.top, it.right, it.bottom)
+                    }
+                    
+                    drawItems.add(WordItem(strokes, matrix, data.text, data.isShowingText, textMatrix, textBounds))
                 }
             }
         }

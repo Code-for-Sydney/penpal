@@ -34,8 +34,12 @@ data class WordData(
     val strokes: List<StrokeData>,
     val matrix: FloatArray,
     val text: String,
-    val isShowingText: Boolean = false
+    val isShowingText: Boolean = false,
+    val textMatrix: FloatArray? = null,
+    val textBounds: FloatRect? = null
 ) : SvgData()
+
+data class FloatRect(val left: Float, val top: Float, val right: Float, val bottom: Float)
 
 data class SvgResult(
     val items: List<SvgData>,
@@ -99,7 +103,17 @@ object SvgSerializer {
                 is WordData -> {
                     val m = item.matrix
                     val transform = "matrix(${m[0]},${m[3]},${m[1]},${m[4]},${m[2]},${m[5]})"
-                    sb.appendLine("""  <g id="word-$index" transform="$transform" data-text="${item.text}" data-showing-text="${item.isShowingText}">""")
+                    sb.append("""  <g id="word-$index" transform="$transform" data-text="${item.text}" data-showing-text="${item.isShowingText}"""")
+                    
+                    item.textMatrix?.let { tm ->
+                        val tmStr = "matrix(${tm[0]},${tm[3]},${tm[1]},${tm[4]},${tm[2]},${tm[5]})"
+                        sb.append(""" data-text-transform="$tmStr"""")
+                    }
+                    item.textBounds?.let { tb ->
+                        sb.append(""" data-text-bounds="${tb.left},${tb.top},${tb.right},${tb.bottom}"""")
+                    }
+                    sb.appendLine(">")
+
                     for (stroke in item.strokes) {
                         val d = commandsToSvgPath(stroke.commands)
                         if (d.isBlank()) continue
@@ -163,6 +177,17 @@ object SvgSerializer {
                     val m = parseMatrix(transform)
                     val isShowingText = parser.getAttributeValue(null, "data-showing-text") == "true"
                     
+                    val textMatrixStr = parser.getAttributeValue(null, "data-text-transform")
+                    val textMatrix = if (textMatrixStr != null) parseMatrix(textMatrixStr) else null
+                    
+                    val textBoundsStr = parser.getAttributeValue(null, "data-text-bounds")
+                    val textBounds = if (textBoundsStr != null) {
+                        val parts = textBoundsStr.split(",")
+                        if (parts.size == 4) {
+                            FloatRect(parts[0].toFloat(), parts[1].toFloat(), parts[2].toFloat(), parts[3].toFloat())
+                        } else null
+                    } else null
+                    
                     val strokes = mutableListOf<StrokeData>()
                     var innerEvent = parser.next()
                     while (!(innerEvent == XmlPullParser.END_TAG && parser.name == "g")) {
@@ -172,7 +197,7 @@ object SvgSerializer {
                         }
                         innerEvent = parser.next()
                     }
-                    items.add(WordData(strokes, m, text, isShowingText))
+                    items.add(WordData(strokes, m, text, isShowingText, textMatrix, textBounds))
                 }
             }
             eventType = parser.next()
