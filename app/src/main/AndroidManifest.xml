@@ -38,6 +38,11 @@
             android:exported="false"
             android:configChanges="orientation|screenSize" />
 
+        <activity
+            android:name=".PdfSelectionActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize" />
+
         <!-- BroadcastReceiver that fires when DownloadManager finishes the model -->
         <receiver
             android:name=".ModelDownloadReceiver"

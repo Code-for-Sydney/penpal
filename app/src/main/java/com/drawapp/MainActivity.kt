@@ -101,6 +101,35 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private val pickPdf = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) {
+            val intent = android.content.Intent(this, PdfSelectionActivity::class.java)
+            intent.putExtra("PDF_URI", uri.toString())
+            pdfSelectionLauncher.launch(intent)
+        }
+    }
+
+    private val pdfSelectionLauncher = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == RESULT_OK) {
+            val snippetPath = result.data?.getStringExtra("SNIPPET_PATH")
+            if (snippetPath != null) {
+                try {
+                    val bitmap = android.graphics.BitmapFactory.decodeFile(snippetPath)
+                    if (bitmap != null) {
+                        drawingView.addImage(bitmap)
+                        updateButtonStates()
+                        scheduleAutosave()
+                        // Clean up temp file
+                        java.io.File(snippetPath).delete()
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                    Toast.makeText(this, "Failed to load snippet", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
     private val STORAGE_PERMISSION_CODE = 101
     private val colors = listOf(
         "#000000", "#1A237E", "#1B5E20", "#B71C1C", "#4A148C",
@@ -429,6 +458,9 @@ class MainActivity : AppCompatActivity() {
         btnColorPicker.setOnClickListener { showColorPickerDialog() }
         findViewById<ImageButton>(R.id.btnAddImage).setOnClickListener {
             pickMedia.launch(androidx.activity.result.PickVisualMediaRequest(androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly))
+        }
+        findViewById<ImageButton>(R.id.btnAddPdf).setOnClickListener {
+            pickPdf.launch("application/pdf")
         }
         btnBackground.setOnClickListener { showBackgroundDialog() }
         

@@ -36,6 +36,7 @@ class HandwritingRecognizer private constructor(private val context: Context) {
 
     private data class RecognitionRequest(
         val bitmap: Bitmap,
+        val prompt: String? = null,
         val onPartialResult: (String) -> Unit,
         val onDone: () -> Unit,
         val onError: (String) -> Unit
@@ -141,11 +142,12 @@ class HandwritingRecognizer private constructor(private val context: Context) {
      */
     fun recognize(
         bitmap: Bitmap,
+        prompt: String? = null,
         onPartialResult: (String) -> Unit,
         onDone: () -> Unit,
         onError: (String) -> Unit
     ) {
-        val request = RecognitionRequest(bitmap, onPartialResult, onDone, onError)
+        val request = RecognitionRequest(bitmap, prompt, onPartialResult, onDone, onError)
         requestChannel.trySend(request)
     }
 
@@ -174,7 +176,7 @@ class HandwritingRecognizer private constructor(private val context: Context) {
             if (scaledBitmap != request.bitmap) scaledBitmap.recycle()
 
             // Construct multimodal message
-            val prompt = "Analyze the handwriting in this image. What word, letter, number, or text is drawn? Reply with ONLY the recognized text."
+            val prompt = request.prompt ?: "Analyze the handwriting in this image. What word, letter, number, or text is drawn? Reply with ONLY the recognized text."
             val content = Contents.of(
                 Content.ImageBytes(imageBytes),
                 Content.Text(prompt)

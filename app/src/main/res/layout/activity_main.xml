@@ -317,6 +317,16 @@
             android:tint="#CCCCCC"
             android:layout_marginStart="8dp" />
 
+        <ImageButton
+            android:id="@+id/btnAddPdf"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:src="@drawable/ic_pdf"
+            android:background="@drawable/icon_btn_bg"
+            android:contentDescription="Insert PDF Snippet"
+            android:tint="#CCCCCC"
+            android:layout_marginStart="8dp" />
+
         <!-- Spacer -->
         <View
             android:layout_width="0dp"
