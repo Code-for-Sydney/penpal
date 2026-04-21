@@ -61,8 +61,49 @@ class DrawingView @JvmOverloads constructor(
 
     data class ImageItem(
         val bitmap: Bitmap,
-        var matrix: Matrix
+        var matrix: Matrix,
+        var tintColor: Int? = null,
+        var removeBackground: Boolean = true,
+        var backgroundColor: Int? = null
     ) : CanvasItem() {
+        private var _processedBitmap: Bitmap? = null
+        val displayBitmap: Bitmap
+            get() {
+                if (!removeBackground && tintColor == null) return bitmap
+                return _processedBitmap ?: processBitmap().also { _processedBitmap = it }
+            }
+
+        fun invalidateCache() {
+            _processedBitmap = null
+        }
+
+        private fun processBitmap(): Bitmap {
+            val result = bitmap.copy(Bitmap.Config.ARGB_8888, true)
+            if (removeBackground) {
+                // Make white-ish pixels transparent
+                for (y in 0 until result.height) {
+                    for (x in 0 until result.width) {
+                        val color = result.getPixel(x, y)
+                        val r = Color.red(color)
+                        val g = Color.green(color)
+                        val b = Color.blue(color)
+                        // If it's very bright, make it transparent
+                        if (r > 240 && g > 240 && b > 240) {
+                            result.setPixel(x, y, Color.TRANSPARENT)
+                        }
+                    }
+                }
+            }
+            if (tintColor != null) {
+                // Apply tint to non-transparent pixels
+                val canvas = Canvas(result)
+                val paint = Paint()
+                paint.colorFilter = PorterDuffColorFilter(tintColor!!, PorterDuff.Mode.SRC_IN)
+                canvas.drawBitmap(result, 0f, 0f, paint)
+            }
+            return result
+        }
+
         override val bounds: RectF
             get() {
                 val r = RectF(0f, 0f, bitmap.width.toFloat(), bitmap.height.toFloat())
@@ -77,7 +118,9 @@ class DrawingView @JvmOverloads constructor(
         var text: String = "",
         var isShowingText: Boolean = false,
         var textMatrix: Matrix = Matrix(),
-        var textBounds: RectF = RectF()
+        var textBounds: RectF = RectF(),
+        var tintColor: Int? = null,
+        var backgroundColor: Int? = null
     ) : CanvasItem() {
         override val bounds: RectF
             get() {
@@ -125,6 +168,8 @@ class DrawingView @JvmOverloads constructor(
 
     /** Called once each time the user lifts their finger after a stroke. */
     var onStrokeCompleted: (() -> Unit)? = null
+    var onStateChanged: (() -> Unit)? = null
+    var onShowItemColorPicker: ((CanvasItem) -> Unit)? = null
 
     
     private val selectionPaint = Paint().apply {
@@ -368,7 +413,15 @@ class DrawingView @JvmOverloads constructor(
             when (item) {
                 is StrokeItem -> canvas.drawPath(item.path, item.paint)
                 is ImageItem -> {
-                    canvas.drawBitmap(item.bitmap, item.matrix, null)
+                    if (item.backgroundColor != null) {
+                        val bgPaint = Paint().apply { color = item.backgroundColor!!; style = Paint.Style.FILL }
+                        val localRect = RectF(0f, 0f, item.bitmap.width.toFloat(), item.bitmap.height.toFloat())
+                        canvas.save()
+                        canvas.concat(item.matrix)
+                        canvas.drawRect(localRect, bgPaint)
+                        canvas.restore()
+                    }
+                    canvas.drawBitmap(item.displayBitmap, item.matrix, null)
                     if (item == selectedImage) {
                         drawSelectionBox(canvas, item.bounds)
                     }
@@ -376,6 +429,18 @@ class DrawingView @JvmOverloads constructor(
                 is WordItem -> {
                     canvas.save()
                     canvas.concat(item.matrix)
+
+                    if (item.backgroundColor != null) {
+                        val bgPaint = Paint().apply { color = item.backgroundColor!!; style = Paint.Style.FILL }
+                        val localRect = RectF()
+                        if (item.strokes.isNotEmpty()) {
+                            localRect.set(item.strokes[0].bounds)
+                            for (i in 1 until item.strokes.size) {
+                                localRect.union(item.strokes[i].bounds)
+                            }
+                        }
+                        canvas.drawRect(localRect, bgPaint)
+                    }
                     
                     // Draw search highlight if this is the focused word
                     if (item == searchHighlightedWord) {
@@ -396,8 +461,19 @@ class DrawingView @JvmOverloads constructor(
                     if (item.isShowingText && item.text.isNotEmpty()) {
                         drawWordText(canvas, item)
                     } else {
+                        val wordPaint = if (item.tintColor != null) {
+                            Paint().apply { 
+                                color = item.tintColor!!
+                                style = Paint.Style.STROKE
+                                strokeWidth = item.strokes.firstOrNull()?.paint?.strokeWidth ?: 5f
+                                isAntiAlias = true
+                                strokeCap = Paint.Cap.ROUND
+                                strokeJoin = Paint.Join.ROUND
+                            }
+                        } else null
+
                         for (stroke in item.strokes) {
-                            canvas.drawPath(stroke.path, stroke.paint)
+                            canvas.drawPath(stroke.path, wordPaint ?: stroke.paint)
                         }
                     }
                     canvas.restore()
@@ -433,18 +509,43 @@ class DrawingView @JvmOverloads constructor(
         canvas.drawLine(deleteX - crossSize, deleteY - crossSize, deleteX + crossSize, deleteY + crossSize, iconPaint)
         canvas.drawLine(deleteX + crossSize, deleteY - crossSize, deleteX - crossSize, deleteY + crossSize, iconPaint)
         
-        // Draw toggle button at top-left corner (only for WordItems)
+        // Draw color button (foreground/tint) at bottom-right corner
+        val colorX = bounds.right
+        val colorY = bounds.bottom
+        canvas.drawCircle(colorX, colorY, radius, Paint().apply { color = Color.WHITE; style = Paint.Style.FILL; setShadowLayer(4f, 0f, 2f, Color.BLACK) })
+        canvas.drawCircle(colorX, colorY, radius * 0.7f, Paint().apply { 
+            color = if (selectedImage != null) (selectedImage!!.tintColor ?: Color.BLACK) else (selectedWord!!.tintColor ?: selectedWord!!.strokes.firstOrNull()?.paint?.color ?: Color.BLACK)
+            style = Paint.Style.FILL 
+        })
+
+        // Draw fill color button (background) at bottom-left corner
+        val fillX = bounds.left
+        val fillY = bounds.bottom
+        canvas.drawCircle(fillX, fillY, radius, Paint().apply { color = Color.WHITE; style = Paint.Style.FILL; setShadowLayer(4f, 0f, 2f, Color.BLACK) })
+        canvas.drawCircle(fillX, fillY, radius * 0.7f, Paint().apply { 
+            color = (selectedImage?.backgroundColor ?: selectedWord?.backgroundColor ?: Color.TRANSPARENT)
+            style = Paint.Style.FILL 
+        })
+        if ((selectedImage?.backgroundColor ?: selectedWord?.backgroundColor) == null) {
+            // Draw a red slash for "transparent"
+            val slashPaint = Paint().apply { color = Color.RED; strokeWidth = 3f / scaleFactor; style = Paint.Style.STROKE }
+            canvas.drawLine(fillX - radius * 0.5f, fillY + radius * 0.5f, fillX + radius * 0.5f, fillY - radius * 0.5f, slashPaint)
+        }
+
+        // Draw toggle button at top-left corner
+        // For Word: Toggle Text
+        // For Image: Toggle Background Removal
+        val toggleX = bounds.left
+        val toggleY = bounds.top
+        canvas.drawCircle(toggleX, toggleY, radius, Paint().apply { color = Color.WHITE; style = Paint.Style.FILL; setShadowLayer(4f, 0f, 2f, Color.BLACK) })
+        val toggleIconPaint = Paint().apply { color = Color.BLACK; textSize = 16f / scaleFactor; textAlign = Paint.Align.CENTER; typeface = Typeface.DEFAULT_BOLD }
+        val tMetrics = toggleIconPaint.fontMetrics
+        val tBaseline = toggleY - (tMetrics.ascent + tMetrics.descent) / 2
+        
         if (selectedWord != null) {
-            val toggleX = bounds.left
-            val toggleY = bounds.top
-            canvas.drawCircle(toggleX, toggleY, radius, toggleBgPaint)
-            
-            val tSize = 16f / scaleFactor
-            toggleIconPaint.textSize = tSize
-            // Center "T" vertically
-            val fontMetrics = toggleIconPaint.fontMetrics
-            val baseline = toggleY - (fontMetrics.ascent + fontMetrics.descent) / 2
-            canvas.drawText("T", toggleX, baseline, toggleIconPaint)
+            canvas.drawText("T", toggleX, tBaseline, toggleIconPaint)
+        } else if (selectedImage != null) {
+            canvas.drawText(if (selectedImage!!.removeBackground) "B" else "W", toggleX, tBaseline, toggleIconPaint)
         }
     }
 
@@ -465,11 +566,11 @@ class DrawingView @JvmOverloads constructor(
             b
         }
         
-        // Use the color of the first stroke
-        if (item.strokes.isNotEmpty()) {
-            textPaint.color = item.strokes[0].paint.color
+        // Use the color of the first stroke or the tint color
+        textPaint.color = item.tintColor ?: if (item.strokes.isNotEmpty()) {
+            item.strokes[0].paint.color
         } else {
-            textPaint.color = Color.BLACK
+            Color.BLACK
         }
         
         // Scale text to fit bounds (approximated)
@@ -581,18 +682,41 @@ class DrawingView @JvmOverloads constructor(
                         return true
                     }
                     
-                    // Check toggle button (top-left) - only for WordItem
-                    if (selectedItem is WordItem) {
-                        val togCx = selectedItem.bounds.left
-                        val togCy = selectedItem.bounds.top
-                        val dTogX = canvasCoords[0] - togCx
-                        val dTogY = canvasCoords[1] - togCy
-                        if (dTogX * dTogX + dTogY * dTogY <= touchRadius * touchRadius) {
+                    // Check toggle button (top-left)
+                    val togCx = selectedItem.bounds.left
+                    val togCy = selectedItem.bounds.top
+                    val dTogX = canvasCoords[0] - togCx
+                    val dTogY = canvasCoords[1] - togCy
+                    if (dTogX * dTogX + dTogY * dTogY <= touchRadius * touchRadius) {
+                        if (selectedItem is WordItem) {
                             selectedItem.isShowingText = !selectedItem.isShowingText
-                            invalidate()
-                            onStrokeCompleted?.invoke() // Trigger autosave
-                            return true
+                        } else if (selectedItem is ImageItem) {
+                            selectedItem.removeBackground = !selectedItem.removeBackground
+                            selectedItem.invalidateCache()
                         }
+                        invalidate()
+                        onStateChanged?.invoke()
+                        return true
+                    }
+
+                    // Check color button (bottom-right)
+                    val colorCx = selectedItem.bounds.right
+                    val colorCy = selectedItem.bounds.bottom
+                    val dColX = canvasCoords[0] - colorCx
+                    val dColY = canvasCoords[1] - colorCy
+                    if (dColX * dColX + dColY * dColY <= touchRadius * touchRadius) {
+                        onShowItemColorPicker?.invoke(selectedItem)
+                        return true
+                    }
+
+                    // Check fill color button (bottom-left)
+                    val fillCx = selectedItem.bounds.left
+                    val fillCy = selectedItem.bounds.bottom
+                    val dFillX = canvasCoords[0] - fillCx
+                    val dFillY = canvasCoords[1] - fillCy
+                    if (dFillX * dFillX + dFillY * dFillY <= touchRadius * touchRadius) {
+                        showItemColorPicker(selectedItem, isBackground = true)
+                        return true
                     }
                 }
                 
@@ -1235,7 +1359,7 @@ class DrawingView @JvmOverloads constructor(
                     val base64 = Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
                     val m = FloatArray(9)
                     item.matrix.getValues(m)
-                    ImageData(base64, m)
+                    ImageData(base64, m, item.tintColor, item.removeBackground, item.backgroundColor)
                 }
                 is WordItem -> {
                     val strokeDataList = item.strokes.map {
@@ -1254,7 +1378,7 @@ class DrawingView @JvmOverloads constructor(
                     item.textMatrix.getValues(tm)
                     val tb = FloatRect(item.textBounds.left, item.textBounds.top, item.textBounds.right, item.textBounds.bottom)
                     
-                    WordData(strokeDataList, m, item.text, item.isShowingText, tm, tb)
+                    WordData(strokeDataList, m, item.text, item.isShowingText, tm, tb, item.tintColor, item.backgroundColor)
                 }
             }
         }
@@ -1279,7 +1403,7 @@ class DrawingView @JvmOverloads constructor(
                         if (bitmap != null) {
                             val matrix = Matrix()
                             matrix.setValues(data.matrix)
-                            drawItems.add(ImageItem(bitmap, matrix))
+                            drawItems.add(ImageItem(bitmap, matrix, data.tintColor, data.removeBackground, data.backgroundColor))
                         }
                     } catch (e: Exception) {
                         e.printStackTrace()
@@ -1300,7 +1424,7 @@ class DrawingView @JvmOverloads constructor(
                         textBounds.set(it.left, it.top, it.right, it.bottom)
                     }
                     
-                    drawItems.add(WordItem(strokes, matrix, data.text, data.isShowingText, textMatrix, textBounds))
+                    drawItems.add(WordItem(strokes, matrix, data.text, data.isShowingText, textMatrix, textBounds, data.tintColor, data.backgroundColor))
                 }
             }
         }
@@ -1309,6 +1433,78 @@ class DrawingView @JvmOverloads constructor(
             centerOnContent()
             invalidate()
         }
+    }
+
+    private fun showItemColorPicker(item: CanvasItem, isBackground: Boolean = false) {
+        val colors = mutableListOf(
+            "#000000", "#FFFFFF", "#1A237E", "#1B5E20", "#B71C1C", "#4A148C",
+            "#FF4081", "#F44336", "#FF9800", "#FFEB3B", "#4CAF50",
+            "#00BCD4", "#2196F3", "#9C27B0", "#795548", "#607D8B"
+        )
+        if (isBackground) colors.add(0, "TRANSPARENT")
+        
+        val dialog = android.app.AlertDialog.Builder(context).create()
+        val scroll = android.widget.HorizontalScrollView(context)
+        val container = android.widget.LinearLayout(context).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            setPadding(40, 40, 40, 40)
+        }
+        
+        for (colorStr in colors) {
+            val color = if (colorStr == "TRANSPARENT") null else Color.parseColor(colorStr)
+            val colorView = View(context).apply {
+                val size = 100
+                layoutParams = android.widget.LinearLayout.LayoutParams(size, size).apply {
+                    setMargins(10, 0, 10, 0)
+                }
+                setBackground(if (color == null) {
+                    val base = android.graphics.drawable.GradientDrawable().apply {
+                        shape = android.graphics.drawable.GradientDrawable.OVAL
+                        setColor(Color.WHITE)
+                        setStroke(2, Color.LTGRAY)
+                    }
+                    val slash = object : android.graphics.drawable.Drawable() {
+                        override fun draw(canvas: Canvas) {
+                            val p = Paint().apply { setColor(Color.RED); strokeWidth = 5f; isAntiAlias = true }
+                            canvas.drawLine(bounds.width() * 0.2f, bounds.height() * 0.8f, bounds.width() * 0.8f, bounds.height() * 0.2f, p)
+                        }
+                        override fun setAlpha(alpha: Int) {}
+                        override fun setColorFilter(colorFilter: ColorFilter?) {}
+                        override fun getOpacity(): Int = android.graphics.PixelFormat.TRANSLUCENT
+                    }
+                    android.graphics.drawable.LayerDrawable(arrayOf(base, slash))
+                } else {
+                    android.graphics.drawable.GradientDrawable().apply {
+                        shape = android.graphics.drawable.GradientDrawable.OVAL
+                        setColor(color)
+                        setStroke(2, Color.LTGRAY)
+                    }
+                })
+                
+                setOnClickListener {
+                    if (isBackground) {
+                        if (item is ImageItem) item.backgroundColor = color
+                        else if (item is WordItem) item.backgroundColor = color
+                    } else {
+                        if (item is ImageItem) {
+                            item.tintColor = color
+                            item.invalidateCache()
+                        } else if (item is WordItem) {
+                            item.tintColor = color
+                        }
+                    }
+                    this@DrawingView.postInvalidate()
+                    onStateChanged?.invoke()
+                    dialog.dismiss()
+                }
+            }
+            container.addView(colorView)
+        }
+        
+        scroll.addView(container)
+        dialog.setView(scroll)
+        dialog.setTitle(if (isBackground) "Select Fill Color" else "Select Tint Color")
+        dialog.show()
     }
 
     fun centerOnContent() {

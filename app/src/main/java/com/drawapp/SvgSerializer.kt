@@ -27,7 +27,10 @@ data class StrokeData(
 
 data class ImageData(
     val base64: String,
-    val matrix: FloatArray
+    val matrix: FloatArray,
+    val tintColor: Int? = null,
+    val removeBackground: Boolean = true,
+    val backgroundColor: Int? = null
 ) : SvgData()
 
 data class WordData(
@@ -36,7 +39,9 @@ data class WordData(
     val text: String,
     val isShowingText: Boolean = false,
     val textMatrix: FloatArray? = null,
-    val textBounds: FloatRect? = null
+    val textBounds: FloatRect? = null,
+    val tintColor: Int? = null,
+    val backgroundColor: Int? = null
 ) : SvgData()
 
 data class FloatRect(val left: Float, val top: Float, val right: Float, val bottom: Float)
@@ -98,12 +103,18 @@ object SvgSerializer {
                 is ImageData -> {
                     val m = item.matrix
                     val transform = "matrix(${m[0]},${m[3]},${m[1]},${m[4]},${m[2]},${m[5]})"
-                    sb.appendLine("""  <image id="image-$index" transform="$transform" href="data:image/png;base64,${item.base64}"/>""")
+                    sb.append("""  <image id="image-$index" transform="$transform" href="data:image/png;base64,${item.base64}"""")
+                    item.tintColor?.let { sb.append(""" data-tint="${colorToHex(it)}"""") }
+                    item.backgroundColor?.let { sb.append(""" data-bg-fill="${colorToHex(it)}"""") }
+                    sb.append(""" data-remove-bg="${item.removeBackground}"""")
+                    sb.appendLine("/>")
                 }
                 is WordData -> {
                     val m = item.matrix
                     val transform = "matrix(${m[0]},${m[3]},${m[1]},${m[4]},${m[2]},${m[5]})"
                     sb.append("""  <g id="word-$index" transform="$transform" data-text="${item.text}" data-showing-text="${item.isShowingText}"""")
+                    item.tintColor?.let { sb.append(""" data-tint="${colorToHex(it)}"""") }
+                    item.backgroundColor?.let { sb.append(""" data-bg-fill="${colorToHex(it)}"""") }
                     
                     item.textMatrix?.let { tm ->
                         val tmStr = "matrix(${tm[0]},${tm[3]},${tm[1]},${tm[4]},${tm[2]},${tm[5]})"
@@ -170,7 +181,10 @@ object SvgSerializer {
                     val base64Data = if (href.startsWith("data:image/png;base64,")) {
                         href.substring("data:image/png;base64,".length)
                     } else href
-                    items.add(ImageData(base64Data, m))
+                    val tintColor = parser.getAttributeValue(null, "data-tint")?.let { parseHexColor(it) }
+                    val backgroundColor = parser.getAttributeValue(null, "data-bg-fill")?.let { parseHexColor(it) }
+                    val removeBg = parser.getAttributeValue(null, "data-remove-bg") != "false"
+                    items.add(ImageData(base64Data, m, tintColor, removeBg, backgroundColor))
                 } else if (parser.name == "g") {
                     val text = parser.getAttributeValue(null, "data-text") ?: ""
                     val transform = parser.getAttributeValue(null, "transform") ?: ""
@@ -179,6 +193,8 @@ object SvgSerializer {
                     
                     val textMatrixStr = parser.getAttributeValue(null, "data-text-transform")
                     val textMatrix = if (textMatrixStr != null) parseMatrix(textMatrixStr) else null
+                    val tintColor = parser.getAttributeValue(null, "data-tint")?.let { parseHexColor(it) }
+                    val backgroundColor = parser.getAttributeValue(null, "data-bg-fill")?.let { parseHexColor(it) }
                     
                     val textBoundsStr = parser.getAttributeValue(null, "data-text-bounds")
                     val textBounds = if (textBoundsStr != null) {
@@ -197,7 +213,7 @@ object SvgSerializer {
                         }
                         innerEvent = parser.next()
                     }
-                    items.add(WordData(strokes, m, text, isShowingText, textMatrix, textBounds))
+                    items.add(WordData(strokes, m, text, isShowingText, textMatrix, textBounds, tintColor, backgroundColor))
                 }
             }
             eventType = parser.next()

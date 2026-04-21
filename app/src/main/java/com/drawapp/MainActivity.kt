@@ -193,6 +193,8 @@ class MainActivity : AppCompatActivity() {
 
         setupListeners()
         drawingView.brushColor = activeColor
+        drawingView.onShowItemColorPicker = { item -> showColorPickerDialog(item) }
+        drawingView.onStateChanged = { scheduleAutosave() }
         updateColorSwatch()
         setupRecognizer()
         loadNotebookDrawing(currentPageIndex)
@@ -561,7 +563,7 @@ class MainActivity : AppCompatActivity() {
 
     // ── Color picker ──────────────────────────────────────────────────────
 
-    private fun showColorPickerDialog() {
+    private fun showColorPickerDialog(item: DrawingView.CanvasItem? = null) {
         val dialogView = layoutInflater.inflate(R.layout.dialog_color_picker, null)
         val gridLayout = dialogView.findViewById<GridLayout>(R.id.colorGrid)
         val dialog = AlertDialog.Builder(this, R.style.DarkDialogTheme)
@@ -576,19 +578,42 @@ class MainActivity : AppCompatActivity() {
                 }
                 background = circleDrawable(Color.parseColor(hex))
                 setOnClickListener {
-                    activeColor = Color.parseColor(hex)
-                    drawingView.brushColor = activeColor
-                    isEraserActive = false
-                    drawingView.isEraser = false
-                    updateEraserButton(); updateColorSwatch(); dialog.dismiss()
+                    val color = Color.parseColor(hex)
+                    if (item == null) {
+                        activeColor = color
+                        drawingView.brushColor = activeColor
+                        isEraserActive = false
+                        drawingView.isEraser = false
+                        updateEraserButton(); updateColorSwatch()
+                    } else {
+                        updateItemColor(item, color)
+                    }
+                    dialog.dismiss()
                 }
             }
             gridLayout.addView(swatch)
         }
         dialogView.findViewById<Button>(R.id.btnCustomColor).setOnClickListener {
-            dialog.dismiss(); showHsvColorDialog()
+            dialog.dismiss(); showHsvColorDialog(item)
         }
         dialog.show()
+    }
+
+    private fun updateItemColor(item: DrawingView.CanvasItem, color: Int) {
+        when (item) {
+            is DrawingView.WordItem -> {
+                item.tintColor = color
+            }
+            is DrawingView.ImageItem -> {
+                item.tintColor = color
+                item.invalidateCache()
+            }
+            is DrawingView.StrokeItem -> {
+                item.paint.color = color
+            }
+        }
+        drawingView.invalidate()
+        scheduleAutosave()
     }
 
     private fun circleDrawable(color: Int): android.graphics.drawable.Drawable =
@@ -600,7 +625,7 @@ class MainActivity : AppCompatActivity() {
 
     // ── HSV picker ────────────────────────────────────────────────────────
 
-    private fun showHsvColorDialog() {
+    private fun showHsvColorDialog(item: DrawingView.CanvasItem? = null) {
         val v = layoutInflater.inflate(R.layout.dialog_hsv_picker, null)
         val hue = v.findViewById<SeekBar>(R.id.sliderHue)
         val sat = v.findViewById<SeekBar>(R.id.sliderSaturation)
@@ -628,11 +653,16 @@ class MainActivity : AppCompatActivity() {
                 hsv[0] = hue.progress.toFloat()
                 hsv[1] = sat.progress / 100f
                 hsv[2] = bri.progress / 100f
-                activeColor = Color.HSVToColor(hsv)
-                drawingView.brushColor = activeColor
-                drawingView.brushOpacity = opa.progress
-                isEraserActive = false; drawingView.isEraser = false
-                updateEraserButton(); updateColorSwatch()
+                val color = Color.HSVToColor(hsv)
+                if (item == null) {
+                    activeColor = color
+                    drawingView.brushColor = activeColor
+                    drawingView.brushOpacity = opa.progress
+                    isEraserActive = false; drawingView.isEraser = false
+                    updateEraserButton(); updateColorSwatch()
+                } else {
+                    updateItemColor(item, color)
+                }
             }
             .setNegativeButton("Cancel", null).show()
     }
@@ -716,6 +746,39 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun performAutosave() {
+        val svgData = drawingView.getSvgDataList()
+        val file = getNotebookSvgFile(currentPageIndex)
+        val thumbFile = getNotebookThumbFile(currentPageIndex)
+        val width = drawingView.width
+        val height = drawingView.height
+        val bgColor = drawingView.canvasBackgroundColor
+        val bgType = drawingView.backgroundType.name
+        val contentBounds = drawingView.getContentBounds()
+
+        activityScope.launch(Dispatchers.IO) {
+            try {
+                val svgContent = SvgSerializer.serialize(
+                    items = svgData,
+                    width = width,
+                    height = height,
+                    backgroundColor = bgColor,
+                    backgroundType = bgType,
+                    contentBounds = contentBounds
+                )
+
+                file.writeText(svgContent)
+                
+                // Generate and save thumbnail
+                if (contentBounds != null && !contentBounds.isEmpty) {
+                    saveThumbnail(thumbFile, svgData, bgColor, contentBounds)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
     private fun getNotebookSvgFile(pageIndex: Int): File {
         val dir = File(filesDir, "notebooks")
         dir.mkdirs()
@@ -776,42 +839,8 @@ class MainActivity : AppCompatActivity() {
             e.printStackTrace()
         }
     }
-
-
-    private fun performAutosave() {
-        val svgData = drawingView.getSvgDataList()
-        val file = getNotebookSvgFile(currentPageIndex)
-        val thumbFile = getNotebookThumbFile(currentPageIndex)
-
-        // Only delete if absolutely everything is default (empty items AND default background)
-        // But actually, it's safer to always save if the user interacted.
-        // Let's at least save if svgData is not empty OR if background is set.
-        // Actually, let's just remove the delete-on-empty logic for now to ensure persistence.
-        
-        try {
-
-            val svgContent = SvgSerializer.serialize(
-                items = svgData,
-                width = drawingView.width,
-                height = drawingView.height,
-                backgroundColor = drawingView.canvasBackgroundColor,
-                backgroundType = drawingView.backgroundType.name,
-                contentBounds = drawingView.getContentBounds()
-            )
-
-            file.writeText(svgContent)
-            
-            // Generate and save thumbnail
-            saveThumbnail(thumbFile)
-            
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-    }
     
-    private fun saveThumbnail(file: File) {
-        val bounds = drawingView.getContentBounds() ?: return
-        if (bounds.isEmpty) return
+    private fun saveThumbnail(file: File, svgData: List<SvgData>, bgColor: Int, bounds: RectF) {
         
         // Render to a 400x400 thumbnail max bounds
         val thumbSize = 400
@@ -821,12 +850,12 @@ class MainActivity : AppCompatActivity() {
         
         val bitmap = Bitmap.createBitmap(scaledW, scaledH, Bitmap.Config.ARGB_8888)
         val canvas = android.graphics.Canvas(bitmap)
-        canvas.drawColor(drawingView.canvasBackgroundColor)
+        canvas.drawColor(bgColor)
         
         canvas.scale(scale, scale)
         canvas.translate(-bounds.left, -bounds.top)
         
-        for (item in drawingView.getSvgDataList()) {
+        for (item in svgData) {
             when (item) {
                 is StrokeData -> {
                     val path = android.graphics.Path()
@@ -839,7 +868,7 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                     val paint = android.graphics.Paint().apply {
-                        color = if (item.isEraser) drawingView.canvasBackgroundColor else item.color
+                        color = if (item.isEraser) bgColor else item.color
                         style = android.graphics.Paint.Style.STROKE
                         strokeJoin = android.graphics.Paint.Join.ROUND
                         strokeCap = android.graphics.Paint.Cap.ROUND
@@ -918,7 +947,7 @@ class MainActivity : AppCompatActivity() {
                                     }
                             }
                             val paint = android.graphics.Paint().apply {
-                                color = if (stroke.isEraser) drawingView.canvasBackgroundColor else stroke.color
+                                color = if (stroke.isEraser) bgColor else stroke.color
                                 style = android.graphics.Paint.Style.STROKE
                                 strokeJoin = android.graphics.Paint.Join.ROUND
                                 strokeCap = android.graphics.Paint.Cap.ROUND
@@ -936,8 +965,12 @@ class MainActivity : AppCompatActivity() {
             }
         }
         
-        file.outputStream().use { 
-            bitmap.compress(Bitmap.CompressFormat.PNG, 90, it)
+        try {
+            val out = java.io.FileOutputStream(file)
+            bitmap.compress(Bitmap.CompressFormat.PNG, 90, out)
+            out.close()
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 
