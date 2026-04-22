@@ -545,84 +545,101 @@ class DrawingView @JvmOverloads constructor(
 
         // Draw dashed bounding box
         canvas.drawRect(localBounds, selectionPaint)
+        canvas.restore()
 
-        val radius = 24f / scaleFactor
+        // --- Draw Fixed-Size Buttons ---
+        val buttonRadius = 24f // Fixed size in pixels
         
-        // --- Rotation Handle (Lollipop) ---
-        val handleDist = 60f / scaleFactor
-        val rotX = localBounds.centerX()
-        val rotY = localBounds.top - handleDist
-        canvas.drawLine(rotX, localBounds.top, rotX, rotY, selectionPaint)
-        canvas.drawCircle(rotX, rotY, radius, Paint().apply { 
+        val itemTransform = Matrix(matrix)
+        if (item is WordItem) itemTransform.preConcat(item.textMatrix)
+        
+        fun getButtonScreenPos(lx: Float, ly: Float): PointF {
+            val pts = floatArrayOf(lx, ly)
+            itemTransform.mapPoints(pts)
+            val screenPts = floatArrayOf(pts[0], pts[1])
+            viewMatrix.mapPoints(screenPts)
+            return PointF(screenPts[0], screenPts[1])
+        }
+
+        val delPos = getButtonScreenPos(localBounds.right, localBounds.top)
+        val colPos = getButtonScreenPos(localBounds.right, localBounds.bottom)
+        val filPos = getButtonScreenPos(localBounds.left, localBounds.bottom)
+        val togPos = getButtonScreenPos(localBounds.left, localBounds.top)
+        
+        val rotLocalX = localBounds.centerX()
+        val rotLocalY = localBounds.top
+        val rotBasePos = getButtonScreenPos(rotLocalX, rotLocalY)
+        
+        val upVec = floatArrayOf(0f, -1f)
+        itemTransform.mapVectors(upVec)
+        viewMatrix.mapVectors(upVec)
+        val upLen = Math.sqrt((upVec[0] * upVec[0] + upVec[1] * upVec[1]).toDouble()).toFloat()
+        val ux = upVec[0] / (if (upLen == 0f) 1f else upLen)
+        val uy = upVec[1] / (if (upLen == 0f) 1f else upLen)
+        val rotPos = PointF(rotBasePos.x + ux * 60f, rotBasePos.y + uy * 60f)
+
+        canvas.save()
+        canvas.setMatrix(Matrix()) // Reset to screen space
+
+        // Lollipop line
+        canvas.drawLine(rotBasePos.x, rotBasePos.y, rotPos.x, rotPos.y, selectionPaint)
+
+        // Rotation Button
+        canvas.drawCircle(rotPos.x, rotPos.y, buttonRadius, Paint().apply { 
             color = Color.WHITE
             style = Paint.Style.FILL
             setShadowLayer(4f, 0f, 2f, Color.argb(100, 0, 0, 0))
         })
-        // Draw rotation icon (simple curved arrow)
-        val iconPaint = Paint().apply { 
+        val rotIconPaint = Paint().apply { 
             color = Color.parseColor("#7C4DFF")
             style = Paint.Style.STROKE
-            strokeWidth = 3f / scaleFactor
+            strokeWidth = 3f
             isAntiAlias = true
             strokeCap = Paint.Cap.ROUND
         }
-        val arrowSize = 8f / scaleFactor
-        canvas.drawArc(rotX - arrowSize, rotY - arrowSize, rotX + arrowSize, rotY + arrowSize, 45f, 270f, false, iconPaint)
-        
-        // --- Corner Buttons ---
-        // Draw delete button at top-right corner
-        val deleteX = localBounds.right
-        val deleteY = localBounds.top
-        canvas.drawCircle(deleteX, deleteY, radius, deleteBgPaint)
+        val rotIconSize = 8f
+        canvas.drawArc(rotPos.x - rotIconSize, rotPos.y - rotIconSize, rotPos.x + rotIconSize, rotPos.y + rotIconSize, 45f, 270f, false, rotIconPaint)
 
-        val crossSize = 10f / scaleFactor
-        val crossPaint = Paint(deleteIconPaint).apply { strokeWidth = 3f / scaleFactor }
-        canvas.drawLine(deleteX - crossSize, deleteY - crossSize, deleteX + crossSize, deleteY + crossSize, crossPaint)
-        canvas.drawLine(deleteX + crossSize, deleteY - crossSize, deleteX - crossSize, deleteY + crossSize, crossPaint)
-        
-        // Draw color button (foreground/tint) at bottom-right corner
-        val colorX = localBounds.right
-        val colorY = localBounds.bottom
-        canvas.drawCircle(colorX, colorY, radius, Paint().apply { color = Color.WHITE; style = Paint.Style.FILL; setShadowLayer(4f, 0f, 2f, Color.BLACK) })
-        canvas.drawCircle(colorX, colorY, radius * 0.7f, Paint().apply { 
+        // Delete Button
+        canvas.drawCircle(delPos.x, delPos.y, buttonRadius, deleteBgPaint)
+        val crossSize = 10f
+        val crossPaint = Paint(deleteIconPaint).apply { strokeWidth = 3f }
+        canvas.drawLine(delPos.x - crossSize, delPos.y - crossSize, delPos.x + crossSize, delPos.y + crossSize, crossPaint)
+        canvas.drawLine(delPos.x + crossSize, delPos.y - crossSize, delPos.x - crossSize, delPos.y + crossSize, crossPaint)
+
+        // Color Button
+        canvas.drawCircle(colPos.x, colPos.y, buttonRadius, Paint().apply { color = Color.WHITE; style = Paint.Style.FILL; setShadowLayer(4f, 0f, 2f, Color.BLACK) })
+        canvas.drawCircle(colPos.x, colPos.y, buttonRadius * 0.7f, Paint().apply { 
             color = if (item is ImageItem) (item.tintColor ?: Color.BLACK) else if (item is WordItem) (item.tintColor ?: item.strokes.firstOrNull()?.paint?.color ?: Color.BLACK) else Color.BLACK
             style = Paint.Style.FILL 
         })
 
-        // Draw fill color button (background) at bottom-left corner
-        val fillX = localBounds.left
-        val fillY = localBounds.bottom
-        canvas.drawCircle(fillX, fillY, radius, Paint().apply { color = Color.WHITE; style = Paint.Style.FILL; setShadowLayer(4f, 0f, 2f, Color.BLACK) })
+        // Fill Button
+        canvas.drawCircle(filPos.x, filPos.y, buttonRadius, Paint().apply { color = Color.WHITE; style = Paint.Style.FILL; setShadowLayer(4f, 0f, 2f, Color.BLACK) })
         val bgColor = if (item is ImageItem) item.backgroundColor else if (item is WordItem) item.backgroundColor else null
-        canvas.drawCircle(fillX, fillY, radius * 0.7f, Paint().apply { 
+        canvas.drawCircle(filPos.x, filPos.y, buttonRadius * 0.7f, Paint().apply { 
             color = bgColor ?: Color.TRANSPARENT
             style = Paint.Style.FILL 
         })
         if (bgColor == null) {
-            val slashPaint = Paint().apply { color = Color.RED; strokeWidth = 3f / scaleFactor; style = Paint.Style.STROKE }
-            canvas.drawLine(fillX - radius * 0.5f, fillY + radius * 0.5f, fillX + radius * 0.5f, fillY - radius * 0.5f, slashPaint)
+            val slashPaint = Paint().apply { color = Color.RED; strokeWidth = 3f; style = Paint.Style.STROKE }
+            canvas.drawLine(filPos.x - buttonRadius * 0.5f, filPos.y + buttonRadius * 0.5f, filPos.x + buttonRadius * 0.5f, filPos.y - buttonRadius * 0.5f, slashPaint)
         }
 
-        // Draw toggle button at top-left corner
-        val toggleX = localBounds.left
-        val toggleY = localBounds.top
-        canvas.drawCircle(toggleX, toggleY, radius, Paint().apply { color = Color.WHITE; style = Paint.Style.FILL; setShadowLayer(4f, 0f, 2f, Color.BLACK) })
-        val toggleIconPaint = Paint().apply { color = Color.BLACK; textSize = 16f / scaleFactor; textAlign = Paint.Align.CENTER; typeface = Typeface.DEFAULT_BOLD }
+        // Toggle Button
+        canvas.drawCircle(togPos.x, togPos.y, buttonRadius, Paint().apply { color = Color.WHITE; style = Paint.Style.FILL; setShadowLayer(4f, 0f, 2f, Color.BLACK) })
+        val toggleIconPaint = Paint().apply { color = Color.BLACK; textSize = 16f; textAlign = Paint.Align.CENTER; typeface = Typeface.DEFAULT_BOLD }
         val tMetrics = toggleIconPaint.fontMetrics
-        val tBaseline = toggleY - (tMetrics.ascent + tMetrics.descent) / 2
-        
-        if (item is WordItem) {
-            canvas.drawText("T", toggleX, tBaseline, toggleIconPaint)
-        } else if (item is ImageItem) {
-            canvas.drawText("T", toggleX, tBaseline, toggleIconPaint)
-            
-            // Background removal toggle for images
-            val bgTogX = localBounds.centerX()
-            val bgTogY = localBounds.top
-            canvas.drawCircle(bgTogX, bgTogY, radius, Paint().apply { color = Color.WHITE; style = Paint.Style.FILL; setShadowLayer(4f, 0f, 2f, Color.BLACK) })
-            canvas.drawText(if (item.removeBackground) "B" else "W", bgTogX, bgTogY - (tMetrics.ascent + tMetrics.descent) / 2, toggleIconPaint)
+        val tBaseline = togPos.y - (tMetrics.ascent + tMetrics.descent) / 2
+        canvas.drawText("T", togPos.x, tBaseline, toggleIconPaint)
+
+        // Image-specific: Background removal
+        if (item is ImageItem) {
+            val bgTogPos = getButtonScreenPos(localBounds.centerX(), localBounds.top)
+            canvas.drawCircle(bgTogPos.x, bgTogPos.y, buttonRadius, Paint().apply { color = Color.WHITE; style = Paint.Style.FILL; setShadowLayer(4f, 0f, 2f, Color.BLACK) })
+            canvas.drawText(if (item.removeBackground) "B" else "W", bgTogPos.x, bgTogPos.y - (tMetrics.ascent + tMetrics.descent) / 2, toggleIconPaint)
         }
-        
+
         canvas.restore()
     }
 
@@ -790,17 +807,8 @@ class DrawingView @JvmOverloads constructor(
                         is WordItem -> selectedItem.matrix
                         else -> Matrix()
                     }
-                    itemMatrix.invert(localInverse)
-                    localInverse.mapPoints(localCoords)
                     
-                    if (selectedItem is WordItem) {
-                        val textInverse = Matrix()
-                        selectedItem.textMatrix.invert(textInverse)
-                        textInverse.mapPoints(localCoords)
-                    }
-                    
-                    val lx = localCoords[0]
-                    val ly = localCoords[1]
+                    val touchRadiusSq = 48f * 48f // 48dp target in screen space
                     
                     val localBounds = when(selectedItem) {
                         is ImageItem -> RectF(0f, 0f, selectedItem.bitmap.width.toFloat(), selectedItem.bitmap.height.toFloat())
@@ -808,24 +816,27 @@ class DrawingView @JvmOverloads constructor(
                         else -> selectedItem.bounds
                     }
 
-                    val touchRadius = 60f / scaleFactor // generous touch target
-                    
+                    fun isScreenButtonHit(lx: Float, ly: Float): Boolean {
+                        val pts = floatArrayOf(lx, ly)
+                        val itemTransform = Matrix(itemMatrix)
+                        if (selectedItem is WordItem) itemTransform.preConcat(selectedItem.textMatrix)
+                        itemTransform.mapPoints(pts)
+                        val screenPts = floatArrayOf(pts[0], pts[1])
+                        viewMatrix.mapPoints(screenPts)
+                        
+                        val dx = event.x - screenPts[0]
+                        val dy = event.y - screenPts[1]
+                        return dx * dx + dy * dy <= touchRadiusSq
+                    }
+
                     // Check delete button (top-right)
-                    val delCx = localBounds.right
-                    val delCy = localBounds.top
-                    val dDelX = lx - delCx
-                    val dDelY = ly - delCy
-                    if (dDelX * dDelX + dDelY * dDelY <= touchRadius * touchRadius) {
+                    if (isScreenButtonHit(localBounds.right, localBounds.top)) {
                         deleteSelectedItem()
                         return true
                     }
                     
                     // Check toggle button (top-left)
-                    val togCx = localBounds.left
-                    val togCy = localBounds.top
-                    val dTogX = lx - togCx
-                    val dTogY = ly - togCy
-                    if (dTogX * dTogX + dTogY * dTogY <= touchRadius * touchRadius) {
+                    if (isScreenButtonHit(localBounds.left, localBounds.top)) {
                         if (selectedItem is WordItem) {
                             selectedItem.isShowingText = !selectedItem.isShowingText
                         } else if (selectedItem is ImageItem) {
@@ -838,11 +849,7 @@ class DrawingView @JvmOverloads constructor(
 
                     // Check background toggle for ImageItem (top-center)
                     if (selectedItem is ImageItem) {
-                        val bgTogCx = localBounds.centerX()
-                        val bgTogCy = localBounds.top
-                        val dBgTogX = lx - bgTogCx
-                        val dBgTogY = ly - bgTogCy
-                        if (dBgTogX * dBgTogX + dBgTogY * dBgTogY <= touchRadius * touchRadius) {
+                        if (isScreenButtonHit(localBounds.centerX(), localBounds.top)) {
                             selectedItem.removeBackground = !selectedItem.removeBackground
                             selectedItem.invalidateCache()
                             invalidate()
@@ -852,32 +859,38 @@ class DrawingView @JvmOverloads constructor(
                     }
 
                     // Check color button (bottom-right)
-                    val colorCx = localBounds.right
-                    val colorCy = localBounds.bottom
-                    val dColX = lx - colorCx
-                    val dColY = ly - colorCy
-                    if (dColX * dColX + dColY * dColY <= touchRadius * touchRadius) {
+                    if (isScreenButtonHit(localBounds.right, localBounds.bottom)) {
                         onShowItemColorPicker?.invoke(selectedItem)
                         return true
                     }
 
                     // Check fill color button (bottom-left)
-                    val fillCx = localBounds.left
-                    val fillCy = localBounds.bottom
-                    val dFillX = lx - fillCx
-                    val dFillY = ly - fillCy
-                    if (dFillX * dFillX + dFillY * dFillY <= touchRadius * touchRadius) {
+                    if (isScreenButtonHit(localBounds.left, localBounds.bottom)) {
                         showItemColorPicker(selectedItem, isBackground = true)
                         return true
                     }
 
                     // Check rotation handle (lollipop)
-                    val handleDist = 60f / scaleFactor
-                    val rotCx = localBounds.centerX()
-                    val rotCy = localBounds.top - handleDist
-                    val dRotX = lx - rotCx
-                    val dRotY = ly - rotCy
-                    if (dRotX * dRotX + dRotY * dRotY <= touchRadius * touchRadius) {
+                    // We need to calculate the screen position of the handle
+                    val rotBasePts = floatArrayOf(localBounds.centerX(), localBounds.top)
+                    val itemTransform = Matrix(itemMatrix)
+                    if (selectedItem is WordItem) itemTransform.preConcat(selectedItem.textMatrix)
+                    itemTransform.mapPoints(rotBasePts)
+                    val rotBaseScreen = floatArrayOf(rotBasePts[0], rotBasePts[1])
+                    viewMatrix.mapPoints(rotBaseScreen)
+                    
+                    val upVec = floatArrayOf(0f, -1f)
+                    itemTransform.mapVectors(upVec)
+                    viewMatrix.mapVectors(upVec)
+                    val upLen = Math.sqrt((upVec[0] * upVec[0] + upVec[1] * upVec[1]).toDouble()).toFloat()
+                    val ux = upVec[0] / upLen
+                    val uy = upVec[1] / upLen
+                    val rotScreenX = rotBaseScreen[0] + ux * 60f
+                    val rotScreenY = rotBaseScreen[1] + uy * 60f
+                    
+                    val dRotX = event.x - rotScreenX
+                    val dRotY = event.y - rotScreenY
+                    if (dRotX * dRotX + dRotY * dRotY <= touchRadiusSq) {
                         isRotating = true
                         isImageManipulating = false
                         isWordManipulating = false
