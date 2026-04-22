@@ -64,7 +64,11 @@ class DrawingView @JvmOverloads constructor(
         var matrix: Matrix,
         var tintColor: Int? = null,
         var removeBackground: Boolean = true,
-        var backgroundColor: Int? = null
+        var backgroundColor: Int? = null,
+        var text: String = "",
+        var isShowingText: Boolean = false,
+        var textMatrix: Matrix = Matrix(),
+        var textBounds: RectF = RectF()
     ) : CanvasItem() {
         private var _processedBitmap: Bitmap? = null
         val displayBitmap: Bitmap
@@ -414,15 +418,21 @@ class DrawingView @JvmOverloads constructor(
             when (item) {
                 is StrokeItem -> canvas.drawPath(item.path, item.paint)
                 is ImageItem -> {
-                    if (item.backgroundColor != null) {
-                        val bgPaint = Paint().apply { color = item.backgroundColor!!; style = Paint.Style.FILL }
-                        val localRect = RectF(0f, 0f, item.bitmap.width.toFloat(), item.bitmap.height.toFloat())
-                        canvas.save()
-                        canvas.concat(item.matrix)
-                        canvas.drawRect(localRect, bgPaint)
-                        canvas.restore()
+                    canvas.save()
+                    canvas.concat(item.matrix)
+
+                    if (item.isShowingText && item.text.isNotEmpty()) {
+                        drawImageText(canvas, item)
+                    } else {
+                        if (item.backgroundColor != null) {
+                            val bgPaint = Paint().apply { color = item.backgroundColor!!; style = Paint.Style.FILL }
+                            val localRect = RectF(0f, 0f, item.bitmap.width.toFloat(), item.bitmap.height.toFloat())
+                            canvas.drawRect(localRect, bgPaint)
+                        }
+                        canvas.drawBitmap(item.displayBitmap, 0f, 0f, null)
                     }
-                    canvas.drawBitmap(item.displayBitmap, item.matrix, null)
+                    canvas.restore()
+
                     if (item == selectedImage) {
                         drawSelectionBox(canvas, item.bounds)
                     }
@@ -546,7 +556,13 @@ class DrawingView @JvmOverloads constructor(
         if (selectedWord != null) {
             canvas.drawText("T", toggleX, tBaseline, toggleIconPaint)
         } else if (selectedImage != null) {
-            canvas.drawText(if (selectedImage!!.removeBackground) "B" else "W", toggleX, tBaseline, toggleIconPaint)
+            canvas.drawText("T", toggleX, tBaseline, toggleIconPaint)
+            
+            // Add another button for background removal for images at bottom-center or top-center
+            val bgTogX = bounds.centerX()
+            val bgTogY = bounds.top
+            canvas.drawCircle(bgTogX, bgTogY, radius, Paint().apply { color = Color.WHITE; style = Paint.Style.FILL; setShadowLayer(4f, 0f, 2f, Color.BLACK) })
+            canvas.drawText(if (selectedImage!!.removeBackground) "B" else "W", bgTogX, bgTogY - (tMetrics.ascent + tMetrics.descent) / 2, toggleIconPaint)
         }
     }
 
@@ -591,6 +607,39 @@ class DrawingView @JvmOverloads constructor(
         val centerY = localBounds.centerY()
         
         // Center text vertically
+        val finalMetrics = textPaint.fontMetrics
+        val baseline = centerY - (finalMetrics.ascent + finalMetrics.descent) / 2
+        
+        canvas.drawText(text, centerX, baseline, textPaint)
+        canvas.restore()
+    }
+
+    private fun drawImageText(canvas: Canvas, item: ImageItem) {
+        canvas.save()
+        canvas.concat(item.textMatrix)
+
+        val localBounds = if (!item.textBounds.isEmpty) {
+            item.textBounds
+        } else {
+            RectF(0f, 0f, item.bitmap.width.toFloat(), item.bitmap.height.toFloat())
+        }
+        
+        textPaint.color = item.tintColor ?: Color.BLACK
+        
+        val text = item.text
+        textPaint.textSize = 100f
+        val textWidth = textPaint.measureText(text)
+        val fontMetrics = textPaint.fontMetrics
+        val textHeight = fontMetrics.descent - fontMetrics.ascent
+        
+        val scaleX = if (textWidth > 0) localBounds.width() / textWidth else 1f
+        val scaleY = if (textHeight > 0) localBounds.height() / textHeight else 1f
+        val scale = min(scaleX, scaleY) * 0.9f
+        
+        textPaint.textSize = 100f * scale
+        
+        val centerX = localBounds.centerX()
+        val centerY = localBounds.centerY()
         val finalMetrics = textPaint.fontMetrics
         val baseline = centerY - (finalMetrics.ascent + finalMetrics.descent) / 2
         
@@ -692,12 +741,26 @@ class DrawingView @JvmOverloads constructor(
                         if (selectedItem is WordItem) {
                             selectedItem.isShowingText = !selectedItem.isShowingText
                         } else if (selectedItem is ImageItem) {
-                            selectedItem.removeBackground = !selectedItem.removeBackground
-                            selectedItem.invalidateCache()
+                            selectedItem.isShowingText = !selectedItem.isShowingText
                         }
                         invalidate()
                         onStateChanged?.invoke()
                         return true
+                    }
+
+                    // Check background toggle for ImageItem (top-center)
+                    if (selectedItem is ImageItem) {
+                        val bgTogCx = selectedItem.bounds.centerX()
+                        val bgTogCy = selectedItem.bounds.top
+                        val dBgTogX = canvasCoords[0] - bgTogCx
+                        val dBgTogY = canvasCoords[1] - bgTogCy
+                        if (dBgTogX * dBgTogX + dBgTogY * dBgTogY <= touchRadius * touchRadius) {
+                            selectedItem.removeBackground = !selectedItem.removeBackground
+                            selectedItem.invalidateCache()
+                            invalidate()
+                            onStateChanged?.invoke()
+                            return true
+                        }
                     }
 
                     // Check color button (bottom-right)
@@ -942,7 +1005,7 @@ class DrawingView @JvmOverloads constructor(
     }
 
     // --- Images ---
-    fun addImage(bitmap: Bitmap) {
+    fun addImage(bitmap: Bitmap): ImageItem {
         // Downscale image if too large to prevent huge SVG files and memory issues
         val MAX_DIM = 1024
         val maxLen = max(bitmap.width, bitmap.height)
@@ -967,6 +1030,7 @@ class DrawingView @JvmOverloads constructor(
         redoStack.clear()
         invalidate()
         onStrokeCompleted?.invoke()
+        return imageItem
     }
 
     fun deleteSelectedItem(): Boolean {
@@ -1359,7 +1423,12 @@ class DrawingView @JvmOverloads constructor(
                     val base64 = Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
                     val m = FloatArray(9)
                     item.matrix.getValues(m)
-                    ImageData(base64, m, item.tintColor, item.removeBackground, item.backgroundColor)
+                    
+                    val tm = FloatArray(9)
+                    item.textMatrix.getValues(tm)
+                    val tb = FloatRect(item.textBounds.left, item.textBounds.top, item.textBounds.right, item.textBounds.bottom)
+                    
+                    ImageData(base64, m, item.tintColor, item.removeBackground, item.backgroundColor, item.text, item.isShowingText, tm, tb)
                 }
                 is WordItem -> {
                     val strokeDataList = item.strokes.map {
@@ -1402,7 +1471,18 @@ class DrawingView @JvmOverloads constructor(
                         if (bitmap != null) {
                             val matrix = Matrix()
                             matrix.setValues(data.matrix)
-                            drawItems.add(ImageItem(bitmap, matrix, data.tintColor, data.removeBackground, data.backgroundColor))
+                            
+                            val textMatrix = Matrix()
+                            if (data.textMatrix != null) {
+                                textMatrix.setValues(data.textMatrix)
+                            }
+                            
+                            val textBounds = RectF()
+                            data.textBounds?.let {
+                                textBounds.set(it.left, it.top, it.right, it.bottom)
+                            }
+                            
+                            drawItems.add(ImageItem(bitmap, matrix, data.tintColor, data.removeBackground, data.backgroundColor, data.text, data.isShowingText, textMatrix, textBounds))
                         }
                     } catch (e: Exception) {
                         e.printStackTrace()

@@ -89,7 +89,8 @@ class MainActivity : AppCompatActivity() {
                 val inputStream = contentResolver.openInputStream(uri)
                 val bitmap = android.graphics.BitmapFactory.decodeStream(inputStream)
                 if (bitmap != null) {
-                    drawingView.addImage(bitmap)
+                    val imageItem = drawingView.addImage(bitmap)
+                    triggerImageSummaryRecognition(imageItem, bitmap)
                     updateButtonStates()
                     scheduleAutosave()
                 }
@@ -115,7 +116,8 @@ class MainActivity : AppCompatActivity() {
                 try {
                     val bitmap = android.graphics.BitmapFactory.decodeFile(snippetPath)
                     if (bitmap != null) {
-                        drawingView.addImage(bitmap)
+                        val imageItem = drawingView.addImage(bitmap)
+                        triggerImageSummaryRecognition(imageItem, bitmap)
                         updateButtonStates()
                         scheduleAutosave()
                         // Clean up temp file
@@ -1291,5 +1293,23 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    private fun triggerImageSummaryRecognition(imageItem: DrawingView.ImageItem, bitmap: Bitmap) {
+        if (!recognizer.isReady) return
+        
+        recognizer.recognize(
+            bitmap = bitmap,
+            prompt = "Provide a very short, one-line summary of what is in this image. No more than 10 words.",
+            onPartialResult = { partial ->
+                imageItem.text = (imageItem.text + partial).trim()
+                drawingView.invalidate()
+            },
+            onDone = {
+                scheduleAutosave()
+                drawingView.invalidate()
+            },
+            onError = { _ -> }
+        )
     }
 }

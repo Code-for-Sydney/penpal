@@ -30,7 +30,11 @@ data class ImageData(
     val matrix: FloatArray,
     val tintColor: Int? = null,
     val removeBackground: Boolean = true,
-    val backgroundColor: Int? = null
+    val backgroundColor: Int? = null,
+    val text: String = "",
+    val isShowingText: Boolean = false,
+    val textMatrix: FloatArray? = null,
+    val textBounds: FloatRect? = null
 ) : SvgData()
 
 data class WordData(
@@ -104,6 +108,14 @@ object SvgSerializer {
                     item.tintColor?.let { sb.append(""" data-tint="${colorToHex(it)}"""") }
                     item.backgroundColor?.let { sb.append(""" data-bg-fill="${colorToHex(it)}"""") }
                     sb.append(""" data-remove-bg="${item.removeBackground}"""")
+                    sb.append(""" data-text="${item.text}" data-showing-text="${item.isShowingText}"""")
+                    item.textMatrix?.let { tm ->
+                        val tmStr = "matrix(${tm[0]},${tm[3]},${tm[1]},${tm[4]},${tm[2]},${tm[5]})"
+                        sb.append(""" data-text-transform="$tmStr"""")
+                    }
+                    item.textBounds?.let { tb ->
+                        sb.append(""" data-text-bounds="${tb.left},${tb.top},${tb.right},${tb.bottom}"""")
+                    }
                     sb.appendLine("/>")
                 }
                 is WordData -> {
@@ -178,7 +190,19 @@ object SvgSerializer {
                     val tintColor = parser.getAttributeValue(null, "data-tint")?.let { parseHexColor(it) }
                     val backgroundColor = parser.getAttributeValue(null, "data-bg-fill")?.let { parseHexColor(it) }
                     val removeBg = parser.getAttributeValue(null, "data-remove-bg") != "false"
-                    items.add(ImageData(base64Data, m, tintColor, removeBg, backgroundColor))
+                    val text = parser.getAttributeValue(null, "data-text") ?: ""
+                    val isShowingText = parser.getAttributeValue(null, "data-showing-text") == "true"
+                    val textMatrixStr = parser.getAttributeValue(null, "data-text-transform")
+                    val textMatrix = if (textMatrixStr != null) parseMatrix(textMatrixStr) else null
+                    val textBoundsStr = parser.getAttributeValue(null, "data-text-bounds")
+                    val textBounds = if (textBoundsStr != null) {
+                        val parts = textBoundsStr.split(",")
+                        if (parts.size == 4) {
+                            FloatRect(parts[0].toFloat(), parts[1].toFloat(), parts[2].toFloat(), parts[3].toFloat())
+                        } else null
+                    } else null
+                    
+                    items.add(ImageData(base64Data, m, tintColor, removeBg, backgroundColor, text, isShowingText, textMatrix, textBounds))
                 } else if (parser.name == "g") {
                     val text = parser.getAttributeValue(null, "data-text") ?: ""
                     val transform = parser.getAttributeValue(null, "transform") ?: ""
