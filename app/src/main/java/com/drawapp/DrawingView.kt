@@ -299,7 +299,40 @@ class DrawingView @JvmOverloads constructor(
 
                 // Canvas panning/zooming
                 val oldScale = scaleFactor
-                scaleFactor *= detector.scaleFactor
+                var detectorScale = detector.scaleFactor
+
+                // --- Auto-Fit Selection Logic ---
+                val currentSelectedItem = selectedImage ?: selectedWord
+                if (currentSelectedItem != null && detectorScale > 1.0f) {
+                    val screenBounds = RectF()
+                    val localBounds = when (currentSelectedItem) {
+                        is ImageItem -> RectF(0f, 0f, currentSelectedItem.bitmap.width.toFloat(), currentSelectedItem.bitmap.height.toFloat())
+                        is WordItem -> currentSelectedItem.textBounds
+                        else -> RectF()
+                    }
+                    
+                    val combinedMatrix = Matrix(viewMatrix)
+                    when (currentSelectedItem) {
+                        is ImageItem -> combinedMatrix.preConcat(currentSelectedItem.matrix)
+                        is WordItem -> {
+                            combinedMatrix.preConcat(currentSelectedItem.matrix)
+                            combinedMatrix.preConcat(currentSelectedItem.textMatrix)
+                        }
+                        else -> {}
+                    }
+                    
+                    combinedMatrix.mapRect(screenBounds, localBounds)
+                    
+                    val margin = 50f
+                    if (screenBounds.left < margin || screenBounds.right > width - margin || 
+                        screenBounds.top < margin || screenBounds.bottom > height - margin) {
+                        // Item is hitting screen edges and user is zooming in.
+                        // Invert the detector scale to zoom the canvas OUT instead.
+                        detectorScale = 1.0f / (detectorScale * 1.02f) 
+                    }
+                }
+
+                scaleFactor *= detectorScale
                 scaleFactor = scaleFactor.coerceIn(MIN_ZOOM, MAX_ZOOM)
 
                 // Scale around the focal point (pinch center)
