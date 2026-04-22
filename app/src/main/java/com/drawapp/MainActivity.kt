@@ -232,10 +232,19 @@ class MainActivity : AppCompatActivity() {
             currentStrokes = currentStrokes.filter { it !in busyStrokes }
             
             if (pendingClusterStrokes != null && currentStrokes.isNotEmpty()) {
+                val prevStrokes = pendingClusterStrokes!!
                 // If the new stroke is not part of the current pending cluster, flush recognition for the previous one
-                if (currentStrokes.none { it in pendingClusterStrokes!! }) {
+                if (currentStrokes.none { it in prevStrokes }) {
                     if (pendingClusterBitmap != null) {
-                        triggerRecognitionForBitmap(pendingClusterBitmap!!, pendingClusterStrokes!!, pendingClusterMergedWords ?: emptyList())
+                        val prevBitmap = pendingClusterBitmap!!
+                        val prevMerged = pendingClusterMergedWords ?: emptyList()
+                        
+                        // Clear pending state BEFORE triggering to prevent recursion or accidental re-flushing
+                        pendingClusterStrokes = null
+                        pendingClusterBitmap = null
+                        pendingClusterMergedWords = null
+                        
+                        triggerRecognitionForBitmap(prevBitmap, prevStrokes, prevMerged)
                     }
                 }
             }

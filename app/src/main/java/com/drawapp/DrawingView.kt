@@ -1115,7 +1115,7 @@ class DrawingView @JvmOverloads constructor(
         currentPoints.add(PointF(lastX, lastY))
 
         // --- Smoothing ---
-        val smoothedCommands = if (currentPoints.size > 2) {
+        val smoothedCommands = if (currentPoints.size >= 2) {
             smoothPoints(currentPoints)
         } else {
             currentCommands.toList()
@@ -1149,8 +1149,17 @@ class DrawingView @JvmOverloads constructor(
     }
 
     private fun smoothPoints(points: List<PointF>): List<PathCommand> {
-        if (points.size < 3) return listOf(PathCommand.MoveTo(points[0].x, points[0].y)) + 
-                points.drop(1).map { PathCommand.LineTo(it.x, it.y) }
+        if (points.size < 3) {
+            val p0 = points[0]
+            val p1 = if (points.size > 1) points[1] else p0
+            
+            // If the points are identical (a tap), add a tiny offset to ensure visibility
+            val finalP1 = if (p0.x == p1.x && p0.y == p1.y) {
+                PointF(p1.x + 0.1f, p1.y)
+            } else p1
+            
+            return listOf(PathCommand.MoveTo(p0.x, p0.y), PathCommand.LineTo(finalP1.x, finalP1.y))
+        }
 
         // 1. Simplify points (remove points that are too close to each other)
         val simplified = mutableListOf<PointF>()
@@ -1277,7 +1286,6 @@ class DrawingView @JvmOverloads constructor(
         // Clear redo stack as we modified the item structure
         redoStack.clear()
         invalidate()
-        onStrokeCompleted?.invoke()
         return wordItem
     }
 
