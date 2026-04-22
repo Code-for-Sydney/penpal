@@ -268,6 +268,13 @@ class DrawingView @JvmOverloads constructor(
     private var lastPanX = 0f
     private var lastPanY = 0f
 
+    // Rotation state
+    private var isRotating = false
+    private var rotationInitialAngle = 0f
+    private var rotationCenter = PointF()
+    
+    private var lastMotionEvent: MotionEvent? = null
+
     /** Currently focused word for search results */
     var searchHighlightedWord: WordItem? = null
         set(value) { field = value; invalidate() }
@@ -281,10 +288,8 @@ class DrawingView @JvmOverloads constructor(
                     initialMatrix.set(currentMatrix)
                     startSpan = max(1f, detector.currentSpan)
                     
-                    // Angle between two fingers
-                    val dx = detector.currentSpanX
-                    val dy = detector.currentSpanY
-                    startAngle = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())).toFloat()
+                    // Angle between two fingers (360-degree aware)
+                    startAngle = getPointersAngle(lastMotionEvent)
                     
                     val pt = screenToCanvas(detector.focusX, detector.focusY)
                     startFocalX = pt[0]
@@ -299,10 +304,12 @@ class DrawingView @JvmOverloads constructor(
                     val targetMatrix = selectedImage?.matrix ?: selectedWord!!.matrix
                     val scale = detector.currentSpan / startSpan
                     
-                    val dx = detector.currentSpanX
-                    val dy = detector.currentSpanY
-                    val currentAngle = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())).toFloat()
-                    val rotation = currentAngle - startAngle
+                    val currentAngle = getPointersAngle(lastMotionEvent)
+                    var rotation = currentAngle - startAngle
+                    
+                    // Normalize rotation to avoid jumps at 180/-180
+                    while (rotation > 180) rotation -= 360
+                    while (rotation < -180) rotation += 360
                     
                     val pt = screenToCanvas(detector.focusX, detector.focusY)
                     val transX = pt[0] - startFocalX
@@ -434,7 +441,7 @@ class DrawingView @JvmOverloads constructor(
                     canvas.restore()
 
                     if (item == selectedImage) {
-                        drawSelectionBox(canvas, item.bounds)
+                        drawSelectionBox(canvas, item)
                     }
                 }
                 is WordItem -> {
@@ -489,7 +496,7 @@ class DrawingView @JvmOverloads constructor(
                     }
                     canvas.restore()
                     if (item == selectedWord) {
-                        drawSelectionBox(canvas, item.bounds)
+                        drawSelectionBox(canvas, item)
                     }
                 }
             }
@@ -504,66 +511,114 @@ class DrawingView @JvmOverloads constructor(
         canvas.restore()
     }
 
-    private fun drawSelectionBox(canvas: Canvas, bounds: RectF) {
+    private fun drawSelectionBox(canvas: Canvas, item: CanvasItem) {
+        val matrix = when (item) {
+            is ImageItem -> item.matrix
+            is WordItem -> item.matrix
+            else -> Matrix()
+        }
+
+        val localBounds = when (item) {
+            is ImageItem -> RectF(0f, 0f, item.bitmap.width.toFloat(), item.bitmap.height.toFloat())
+            is WordItem -> {
+                val r = RectF()
+                if (item.strokes.isNotEmpty()) {
+                    r.set(item.textBounds)
+                }
+                r
+            }
+            else -> item.bounds
+        }
+
+        canvas.save()
+        canvas.concat(matrix)
+        
+        // For WordItem, we also need to account for textMatrix which holds the orientation
+        if (item is WordItem) {
+            canvas.concat(item.textMatrix)
+        }
+
         // Draw dashed bounding box
-        canvas.drawRect(bounds, selectionPaint)
+        canvas.drawRect(localBounds, selectionPaint)
 
         val radius = 24f / scaleFactor
         
+        // --- Rotation Handle (Lollipop) ---
+        val handleDist = 60f / scaleFactor
+        val rotX = localBounds.centerX()
+        val rotY = localBounds.top - handleDist
+        canvas.drawLine(rotX, localBounds.top, rotX, rotY, selectionPaint)
+        canvas.drawCircle(rotX, rotY, radius, Paint().apply { 
+            color = Color.WHITE
+            style = Paint.Style.FILL
+            setShadowLayer(4f, 0f, 2f, Color.argb(100, 0, 0, 0))
+        })
+        // Draw rotation icon (simple curved arrow)
+        val iconPaint = Paint().apply { 
+            color = Color.parseColor("#7C4DFF")
+            style = Paint.Style.STROKE
+            strokeWidth = 3f / scaleFactor
+            isAntiAlias = true
+            strokeCap = Paint.Cap.ROUND
+        }
+        val arrowSize = 8f / scaleFactor
+        canvas.drawArc(rotX - arrowSize, rotY - arrowSize, rotX + arrowSize, rotY + arrowSize, 45f, 270f, false, iconPaint)
+        
+        // --- Corner Buttons ---
         // Draw delete button at top-right corner
-        val deleteX = bounds.right
-        val deleteY = bounds.top
+        val deleteX = localBounds.right
+        val deleteY = localBounds.top
         canvas.drawCircle(deleteX, deleteY, radius, deleteBgPaint)
 
         val crossSize = 10f / scaleFactor
-        val iconPaint = Paint(deleteIconPaint).apply { strokeWidth = 3f / scaleFactor }
-        canvas.drawLine(deleteX - crossSize, deleteY - crossSize, deleteX + crossSize, deleteY + crossSize, iconPaint)
-        canvas.drawLine(deleteX + crossSize, deleteY - crossSize, deleteX - crossSize, deleteY + crossSize, iconPaint)
+        val crossPaint = Paint(deleteIconPaint).apply { strokeWidth = 3f / scaleFactor }
+        canvas.drawLine(deleteX - crossSize, deleteY - crossSize, deleteX + crossSize, deleteY + crossSize, crossPaint)
+        canvas.drawLine(deleteX + crossSize, deleteY - crossSize, deleteX - crossSize, deleteY + crossSize, crossPaint)
         
         // Draw color button (foreground/tint) at bottom-right corner
-        val colorX = bounds.right
-        val colorY = bounds.bottom
+        val colorX = localBounds.right
+        val colorY = localBounds.bottom
         canvas.drawCircle(colorX, colorY, radius, Paint().apply { color = Color.WHITE; style = Paint.Style.FILL; setShadowLayer(4f, 0f, 2f, Color.BLACK) })
         canvas.drawCircle(colorX, colorY, radius * 0.7f, Paint().apply { 
-            color = if (selectedImage != null) (selectedImage!!.tintColor ?: Color.BLACK) else (selectedWord!!.tintColor ?: selectedWord!!.strokes.firstOrNull()?.paint?.color ?: Color.BLACK)
+            color = if (item is ImageItem) (item.tintColor ?: Color.BLACK) else if (item is WordItem) (item.tintColor ?: item.strokes.firstOrNull()?.paint?.color ?: Color.BLACK) else Color.BLACK
             style = Paint.Style.FILL 
         })
 
         // Draw fill color button (background) at bottom-left corner
-        val fillX = bounds.left
-        val fillY = bounds.bottom
+        val fillX = localBounds.left
+        val fillY = localBounds.bottom
         canvas.drawCircle(fillX, fillY, radius, Paint().apply { color = Color.WHITE; style = Paint.Style.FILL; setShadowLayer(4f, 0f, 2f, Color.BLACK) })
+        val bgColor = if (item is ImageItem) item.backgroundColor else if (item is WordItem) item.backgroundColor else null
         canvas.drawCircle(fillX, fillY, radius * 0.7f, Paint().apply { 
-            color = (selectedImage?.backgroundColor ?: selectedWord?.backgroundColor ?: Color.TRANSPARENT)
+            color = bgColor ?: Color.TRANSPARENT
             style = Paint.Style.FILL 
         })
-        if ((selectedImage?.backgroundColor ?: selectedWord?.backgroundColor) == null) {
-            // Draw a red slash for "transparent"
+        if (bgColor == null) {
             val slashPaint = Paint().apply { color = Color.RED; strokeWidth = 3f / scaleFactor; style = Paint.Style.STROKE }
             canvas.drawLine(fillX - radius * 0.5f, fillY + radius * 0.5f, fillX + radius * 0.5f, fillY - radius * 0.5f, slashPaint)
         }
 
         // Draw toggle button at top-left corner
-        // For Word: Toggle Text
-        // For Image: Toggle Background Removal
-        val toggleX = bounds.left
-        val toggleY = bounds.top
+        val toggleX = localBounds.left
+        val toggleY = localBounds.top
         canvas.drawCircle(toggleX, toggleY, radius, Paint().apply { color = Color.WHITE; style = Paint.Style.FILL; setShadowLayer(4f, 0f, 2f, Color.BLACK) })
         val toggleIconPaint = Paint().apply { color = Color.BLACK; textSize = 16f / scaleFactor; textAlign = Paint.Align.CENTER; typeface = Typeface.DEFAULT_BOLD }
         val tMetrics = toggleIconPaint.fontMetrics
         val tBaseline = toggleY - (tMetrics.ascent + tMetrics.descent) / 2
         
-        if (selectedWord != null) {
+        if (item is WordItem) {
             canvas.drawText("T", toggleX, tBaseline, toggleIconPaint)
-        } else if (selectedImage != null) {
+        } else if (item is ImageItem) {
             canvas.drawText("T", toggleX, tBaseline, toggleIconPaint)
             
-            // Add another button for background removal for images at bottom-center or top-center
-            val bgTogX = bounds.centerX()
-            val bgTogY = bounds.top
+            // Background removal toggle for images
+            val bgTogX = localBounds.centerX()
+            val bgTogY = localBounds.top
             canvas.drawCircle(bgTogX, bgTogY, radius, Paint().apply { color = Color.WHITE; style = Paint.Style.FILL; setShadowLayer(4f, 0f, 2f, Color.BLACK) })
-            canvas.drawText(if (selectedImage!!.removeBackground) "B" else "W", bgTogX, bgTogY - (tMetrics.ascent + tMetrics.descent) / 2, toggleIconPaint)
+            canvas.drawText(if (item.removeBackground) "B" else "W", bgTogX, bgTogY - (tMetrics.ascent + tMetrics.descent) / 2, toggleIconPaint)
         }
+        
+        canvas.restore()
     }
 
     private fun drawWordText(canvas: Canvas, item: WordItem) {
@@ -709,6 +764,7 @@ class DrawingView @JvmOverloads constructor(
     // ══════════════════════════════════════════════════════════════════════
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        lastMotionEvent = event
         scaleDetector.onTouchEvent(event)
 
         val pointerCount = event.pointerCount
@@ -720,23 +776,50 @@ class DrawingView @JvmOverloads constructor(
                 // Check if user tapped the delete cross of the selected image/word
                 val selectedItem = selectedImage ?: selectedWord
                 if (selectedItem != null) {
+                    // TRANSFORM canvasCoords to LOCAL SPACE of the item
+                    val localCoords = floatArrayOf(canvasCoords[0], canvasCoords[1])
+                    val localInverse = Matrix()
+                    
+                    val itemMatrix = when(selectedItem) {
+                        is ImageItem -> selectedItem.matrix
+                        is WordItem -> selectedItem.matrix
+                        else -> Matrix()
+                    }
+                    itemMatrix.invert(localInverse)
+                    localInverse.mapPoints(localCoords)
+                    
+                    if (selectedItem is WordItem) {
+                        val textInverse = Matrix()
+                        selectedItem.textMatrix.invert(textInverse)
+                        textInverse.mapPoints(localCoords)
+                    }
+                    
+                    val lx = localCoords[0]
+                    val ly = localCoords[1]
+                    
+                    val localBounds = when(selectedItem) {
+                        is ImageItem -> RectF(0f, 0f, selectedItem.bitmap.width.toFloat(), selectedItem.bitmap.height.toFloat())
+                        is WordItem -> selectedItem.textBounds
+                        else -> selectedItem.bounds
+                    }
+
                     val touchRadius = 60f / scaleFactor // generous touch target
                     
                     // Check delete button (top-right)
-                    val delCx = selectedItem.bounds.right
-                    val delCy = selectedItem.bounds.top
-                    val dDelX = canvasCoords[0] - delCx
-                    val dDelY = canvasCoords[1] - delCy
+                    val delCx = localBounds.right
+                    val delCy = localBounds.top
+                    val dDelX = lx - delCx
+                    val dDelY = ly - delCy
                     if (dDelX * dDelX + dDelY * dDelY <= touchRadius * touchRadius) {
                         deleteSelectedItem()
                         return true
                     }
                     
                     // Check toggle button (top-left)
-                    val togCx = selectedItem.bounds.left
-                    val togCy = selectedItem.bounds.top
-                    val dTogX = canvasCoords[0] - togCx
-                    val dTogY = canvasCoords[1] - togCy
+                    val togCx = localBounds.left
+                    val togCy = localBounds.top
+                    val dTogX = lx - togCx
+                    val dTogY = ly - togCy
                     if (dTogX * dTogX + dTogY * dTogY <= touchRadius * touchRadius) {
                         if (selectedItem is WordItem) {
                             selectedItem.isShowingText = !selectedItem.isShowingText
@@ -750,10 +833,10 @@ class DrawingView @JvmOverloads constructor(
 
                     // Check background toggle for ImageItem (top-center)
                     if (selectedItem is ImageItem) {
-                        val bgTogCx = selectedItem.bounds.centerX()
-                        val bgTogCy = selectedItem.bounds.top
-                        val dBgTogX = canvasCoords[0] - bgTogCx
-                        val dBgTogY = canvasCoords[1] - bgTogCy
+                        val bgTogCx = localBounds.centerX()
+                        val bgTogCy = localBounds.top
+                        val dBgTogX = lx - bgTogCx
+                        val dBgTogY = ly - bgTogCy
                         if (dBgTogX * dBgTogX + dBgTogY * dBgTogY <= touchRadius * touchRadius) {
                             selectedItem.removeBackground = !selectedItem.removeBackground
                             selectedItem.invalidateCache()
@@ -764,30 +847,50 @@ class DrawingView @JvmOverloads constructor(
                     }
 
                     // Check color button (bottom-right)
-                    val colorCx = selectedItem.bounds.right
-                    val colorCy = selectedItem.bounds.bottom
-                    val dColX = canvasCoords[0] - colorCx
-                    val dColY = canvasCoords[1] - colorCy
+                    val colorCx = localBounds.right
+                    val colorCy = localBounds.bottom
+                    val dColX = lx - colorCx
+                    val dColY = ly - colorCy
                     if (dColX * dColX + dColY * dColY <= touchRadius * touchRadius) {
                         onShowItemColorPicker?.invoke(selectedItem)
                         return true
                     }
 
                     // Check fill color button (bottom-left)
-                    val fillCx = selectedItem.bounds.left
-                    val fillCy = selectedItem.bounds.bottom
-                    val dFillX = canvasCoords[0] - fillCx
-                    val dFillY = canvasCoords[1] - fillCy
+                    val fillCx = localBounds.left
+                    val fillCy = localBounds.bottom
+                    val dFillX = lx - fillCx
+                    val dFillY = ly - fillCy
                     if (dFillX * dFillX + dFillY * dFillY <= touchRadius * touchRadius) {
                         showItemColorPicker(selectedItem, isBackground = true)
+                        return true
+                    }
+
+                    // Check rotation handle (lollipop)
+                    val handleDist = 60f / scaleFactor
+                    val rotCx = localBounds.centerX()
+                    val rotCy = localBounds.top - handleDist
+                    val dRotX = lx - rotCx
+                    val dRotY = ly - rotCy
+                    if (dRotX * dRotX + dRotY * dRotY <= touchRadius * touchRadius) {
+                        isRotating = true
+                        isImageManipulating = false
+                        isWordManipulating = false
+                        isDrawing = false
+                        isPanning = false
+                        
+                        // Calculate center in canvas space and cache it
+                        val center = getItemCanvasCenter(selectedItem)
+                        rotationCenter.set(center.x, center.y)
+                        rotationInitialAngle = Math.toDegrees(atan2((canvasCoords[1] - center.y).toDouble(), (canvasCoords[0] - center.x).toDouble())).toFloat()
+                        
+                        initialMatrix.set(itemMatrix)
                         return true
                     }
                 }
                 
                 // Hit testing for images and words
-                val hitItem = drawItems.reversed().find { 
-                    it.bounds.contains(canvasCoords[0], canvasCoords[1])
-                }
+                val hitItem = drawItems.reversed().find { isItemHit(it, canvasCoords[0], canvasCoords[1]) }
 
                 when (hitItem) {
                     is ImageItem -> {
@@ -837,7 +940,24 @@ class DrawingView @JvmOverloads constructor(
             }
 
             MotionEvent.ACTION_MOVE -> {
-                if ((isImageManipulating && selectedImage != null || isWordManipulating && selectedWord != null) && pointerCount == 1) {
+                val currentSelectedItem = selectedImage ?: selectedWord
+                if (isRotating && currentSelectedItem != null) {
+                    val targetItem = currentSelectedItem
+                    val canvasCoords = screenToCanvas(event.x, event.y)
+                    val currentAngle = Math.toDegrees(atan2((canvasCoords[1] - rotationCenter.y).toDouble(), (canvasCoords[0] - rotationCenter.x).toDouble())).toFloat()
+                    val rotationDelta = currentAngle - rotationInitialAngle
+                    
+                    val targetMatrix = when(targetItem) {
+                        is ImageItem -> targetItem.matrix
+                        is WordItem -> targetItem.matrix
+                        else -> Matrix()
+                    }
+                    
+                    // Rotate around center relative to initial state
+                    targetMatrix.set(initialMatrix)
+                    targetMatrix.postRotate(rotationDelta, rotationCenter.x, rotationCenter.y)
+                    invalidate()
+                } else if ((isImageManipulating && selectedImage != null || isWordManipulating && selectedWord != null) && pointerCount == 1) {
                     // Single finger translate
                     val targetMatrix = selectedImage?.matrix ?: selectedWord!!.matrix
                     val canvasCoords = screenToCanvas(event.x, event.y)
@@ -878,9 +998,14 @@ class DrawingView @JvmOverloads constructor(
                     freezeWordTransform(selectedWord!!)
                     onStrokeCompleted?.invoke()
                 }
+                if (isRotating && selectedWord != null) {
+                    freezeWordTransform(selectedWord!!)
+                    onStrokeCompleted?.invoke()
+                }
                 isPanning = false
                 isImageManipulating = false
                 isWordManipulating = false
+                isRotating = false
             }
 
             MotionEvent.ACTION_POINTER_UP -> {
@@ -1632,5 +1757,75 @@ class DrawingView @JvmOverloads constructor(
         bounds.inset(-halfWidth, -halfWidth)
 
         return StrokeItem(path, paint, bounds, data.commands)
+    }
+    private fun getPointersAngle(event: MotionEvent?): Float {
+        if (event == null || event.pointerCount < 2) return 0f
+        val dx = event.getX(1) - event.getX(0)
+        val dy = event.getY(1) - event.getY(0)
+        return Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())).toFloat()
+    }
+
+    private fun getItemCanvasCenter(item: CanvasItem): PointF {
+        val localBounds = when (item) {
+            is ImageItem -> RectF(0f, 0f, item.bitmap.width.toFloat(), item.bitmap.height.toFloat())
+            is WordItem -> item.textBounds
+            else -> item.bounds
+        }
+        val center = floatArrayOf(localBounds.centerX(), localBounds.centerY())
+        val matrix = when (item) {
+            is ImageItem -> item.matrix
+            is WordItem -> {
+                val m = Matrix(item.matrix)
+                m.preConcat(item.textMatrix)
+                m
+            }
+            else -> Matrix()
+        }
+        matrix.mapPoints(center)
+        return PointF(center[0], center[1])
+    }
+
+    private fun getItemRotation(item: CanvasItem): Float {
+        val matrix = when (item) {
+            is ImageItem -> item.matrix
+            is WordItem -> {
+                val m = Matrix(item.matrix)
+                m.preConcat(item.textMatrix)
+                m
+            }
+            else -> Matrix()
+        }
+        val v = FloatArray(9)
+        matrix.getValues(v)
+        val r = Math.toDegrees(atan2(v[Matrix.MSKEW_X].toDouble(), v[Matrix.MSCALE_X].toDouble())).toFloat()
+        return -r
+    }
+
+    private fun isItemHit(item: CanvasItem, canvasX: Float, canvasY: Float): Boolean {
+        val localCoords = floatArrayOf(canvasX, canvasY)
+        val inv = Matrix()
+        val matrix = when(item) {
+            is ImageItem -> item.matrix
+            is WordItem -> {
+                val m = Matrix(item.matrix)
+                m.preConcat(item.textMatrix)
+                m
+            }
+            else -> Matrix()
+        }
+        matrix.invert(inv)
+        inv.mapPoints(localCoords)
+        
+        val localBounds = when(item) {
+            is ImageItem -> RectF(0f, 0f, item.bitmap.width.toFloat(), item.bitmap.height.toFloat())
+            is WordItem -> item.textBounds
+            else -> item.bounds
+        }
+        
+        // Slightly expand hit area for thin strokes
+        val hitBounds = RectF(localBounds)
+        if (item is WordItem) hitBounds.inset(-20f, -20f)
+        
+        return hitBounds.contains(localCoords[0], localCoords[1])
     }
 }
