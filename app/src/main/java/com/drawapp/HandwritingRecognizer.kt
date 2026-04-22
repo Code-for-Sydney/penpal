@@ -176,7 +176,7 @@ class HandwritingRecognizer private constructor(private val context: Context) {
             if (scaledBitmap != request.bitmap) scaledBitmap.recycle()
 
             // Construct multimodal message
-            val prompt = request.prompt ?: "Analyze the handwriting in this image. What word, letter, number, or text is drawn? Reply with ONLY the recognized text."
+            val prompt = request.prompt ?: "Analyze the handwriting in this image. What word, letter, number, or text is drawn? Detect symbols like stars (*) or asterisks as well. Reply with ONLY the recognized text."
             val content = Contents.of(
                 Content.ImageBytes(imageBytes),
                 Content.Text(prompt)

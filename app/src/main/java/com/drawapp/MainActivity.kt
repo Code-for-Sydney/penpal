@@ -27,6 +27,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnColorPicker: View
     private lateinit var btnBack: ImageButton
     private lateinit var btnSearch: ImageButton
+    private lateinit var btnJumpMarkers: ImageButton
     private lateinit var btnBackground: ImageButton
     private lateinit var colorSwatch: View
 
@@ -165,6 +166,7 @@ class MainActivity : AppCompatActivity() {
         btnPageDown         = findViewById(R.id.btnPageDown)
         btnOverview         = findViewById(R.id.btnOverview)
         btnSearch           = findViewById(R.id.btnSearch)
+        btnJumpMarkers      = findViewById(R.id.btnJumpMarkers)
         btnBackground       = findViewById(R.id.btnBackground)
         tvPageIndicator     = findViewById(R.id.tvPageIndicator)
 
@@ -475,6 +477,7 @@ class MainActivity : AppCompatActivity() {
         }
         btnOverview.setOnClickListener { showOverviewDialog() }
         btnSearch.setOnClickListener { showSearchMode(true) }
+        btnJumpMarkers.setOnClickListener { jumpToNextMarker() }
 
         btnCloseSearch.setOnClickListener { showSearchMode(false) }
         btnNextMatch.setOnClickListener {
@@ -1217,5 +1220,76 @@ class MainActivity : AppCompatActivity() {
         
         gridView.adapter = adapter
         dialog.show()
+    }
+
+    // ── Marker Navigation ─────────────────────────────────────────────────
+
+    private var allMarkers = mutableListOf<SearchMatch>()
+    private var currentMarkerIndex = -1
+
+    private fun jumpToNextMarker() {
+        activityScope.launch(Dispatchers.IO) {
+            val markers = mutableListOf<SearchMatch>()
+            
+            val dir = File(filesDir, "notebooks")
+            val files = dir.listFiles { _, name -> 
+                name.startsWith("${notebookName}_page_") && name.endsWith(".svg") 
+            } ?: emptyArray()
+            
+            val pageIndices = files.mapNotNull { 
+                it.name.removePrefix("${notebookName}_page_").removeSuffix(".svg").toIntOrNull() 
+            }.sorted()
+
+            val markerSymbols = listOf("*", "★", "star", "asterisk")
+
+            for (pageIdx in pageIndices) {
+                val file = getNotebookSvgFile(pageIdx)
+                if (file.exists()) {
+                    val content = file.readText()
+                    // Broad check for markers
+                    var hasMarker = false
+                    for (sym in markerSymbols) {
+                        if (content.contains(sym, ignoreCase = true)) {
+                            hasMarker = true
+                            break
+                        }
+                    }
+
+                    if (hasMarker) {
+                        val result = SvgSerializer.deserialize(content)
+                        result.items.forEachIndexed { index, item ->
+                            if (item is WordData) {
+                                val text = item.text.lowercase()
+                                if (markerSymbols.any { text.contains(it) }) {
+                                    markers.add(SearchMatch(pageIdx, item.text, index))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            withContext(Dispatchers.Main) {
+                allMarkers = markers
+                if (allMarkers.isNotEmpty()) {
+                    // If we haven't started or markers changed, find the best "next" marker
+                    if (currentMarkerIndex == -1 || currentMarkerIndex >= allMarkers.size) {
+                        // Find first marker on or after current page
+                        val idx = allMarkers.indexOfFirst { it.pageIndex >= currentPageIndex }
+                        currentMarkerIndex = if (idx != -1) idx else 0
+                    } else {
+                        // Advance to next
+                        currentMarkerIndex = (currentMarkerIndex + 1) % allMarkers.size
+                    }
+                    
+                    val match = allMarkers[currentMarkerIndex]
+                    navigateToMatch(match)
+                    
+                    Toast.makeText(this@MainActivity, "Jumped to marker ${currentMarkerIndex + 1}/${allMarkers.size}", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(this@MainActivity, "No markers found. Draw a '*' or 'star'!", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
     }
 }

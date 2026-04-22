@@ -47,6 +47,19 @@
         app:layout_constraintTop_toTopOf="parent" />
 
     <ImageButton
+        android:id="@+id/btnJumpMarkers"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:layout_marginEnd="8dp"
+        android:layout_marginTop="8dp"
+        android:src="@drawable/ic_star"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:contentDescription="Jump to markers"
+        android:tint="#CCCCCC"
+        app:layout_constraintEnd_toStartOf="@id/btnSearch"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <ImageButton
         android:id="@+id/btnSearch"
         android:layout_width="48dp"
         android:layout_height="48dp"
