@@ -605,8 +605,7 @@ class MainActivity : AppCompatActivity() {
                 item.tintColor = color
             }
             is DrawingView.ImageItem -> {
-                item.tintColor = color
-                item.invalidateCache()
+                // tintColor removed for ImageItem
             }
             is DrawingView.StrokeItem -> {
                 item.paint.color = color

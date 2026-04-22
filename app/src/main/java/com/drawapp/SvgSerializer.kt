@@ -28,9 +28,7 @@ data class StrokeData(
 data class ImageData(
     val base64: String,
     val matrix: FloatArray,
-    val tintColor: Int? = null,
     val removeBackground: Boolean = true,
-    val backgroundColor: Int? = null,
     val text: String = "",
     val isShowingText: Boolean = false,
     val textMatrix: FloatArray? = null,
@@ -105,8 +103,6 @@ object SvgSerializer {
                     val m = item.matrix
                     val transform = "matrix(${m[0]},${m[3]},${m[1]},${m[4]},${m[2]},${m[5]})"
                     sb.append("""  <image id="image-$index" transform="$transform" href="data:image/png;base64,${item.base64}"""")
-                    item.tintColor?.let { sb.append(""" data-tint="${colorToHex(it)}"""") }
-                    item.backgroundColor?.let { sb.append(""" data-bg-fill="${colorToHex(it)}"""") }
                     sb.append(""" data-remove-bg="${item.removeBackground}"""")
                     sb.append(""" data-text="${item.text}" data-showing-text="${item.isShowingText}"""")
                     item.textMatrix?.let { tm ->
@@ -187,8 +183,6 @@ object SvgSerializer {
                     val base64Data = if (href.startsWith("data:image/png;base64,")) {
                         href.substring("data:image/png;base64,".length)
                     } else href
-                    val tintColor = parser.getAttributeValue(null, "data-tint")?.let { parseHexColor(it) }
-                    val backgroundColor = parser.getAttributeValue(null, "data-bg-fill")?.let { parseHexColor(it) }
                     val removeBg = parser.getAttributeValue(null, "data-remove-bg") != "false"
                     val text = parser.getAttributeValue(null, "data-text") ?: ""
                     val isShowingText = parser.getAttributeValue(null, "data-showing-text") == "true"
@@ -202,7 +196,7 @@ object SvgSerializer {
                         } else null
                     } else null
                     
-                    items.add(ImageData(base64Data, m, tintColor, removeBg, backgroundColor, text, isShowingText, textMatrix, textBounds))
+                    items.add(ImageData(base64Data, m, removeBg, text, isShowingText, textMatrix, textBounds))
                 } else if (parser.name == "g") {
                     val text = parser.getAttributeValue(null, "data-text") ?: ""
                     val transform = parser.getAttributeValue(null, "transform") ?: ""

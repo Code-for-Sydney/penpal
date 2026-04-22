@@ -62,9 +62,7 @@ class DrawingView @JvmOverloads constructor(
     data class ImageItem(
         val bitmap: Bitmap,
         var matrix: Matrix,
-        var tintColor: Int? = null,
         var removeBackground: Boolean = true,
-        var backgroundColor: Int? = null,
         var text: String = "",
         var isShowingText: Boolean = false,
         var textMatrix: Matrix = Matrix(),
@@ -73,7 +71,7 @@ class DrawingView @JvmOverloads constructor(
         private var _processedBitmap: Bitmap? = null
         val displayBitmap: Bitmap
             get() {
-                if (!removeBackground && tintColor == null) return bitmap
+                if (!removeBackground) return bitmap
                 return _processedBitmap ?: processBitmap().also { _processedBitmap = it }
             }
 
@@ -97,13 +95,6 @@ class DrawingView @JvmOverloads constructor(
                         }
                     }
                 }
-            }
-            if (tintColor != null) {
-                // Apply tint to non-transparent pixels
-                val canvas = Canvas(result)
-                val paint = Paint()
-                paint.colorFilter = PorterDuffColorFilter(tintColor!!, PorterDuff.Mode.SRC_IN)
-                canvas.drawBitmap(result, 0f, 0f, paint)
             }
             return result
         }
@@ -436,11 +427,6 @@ class DrawingView @JvmOverloads constructor(
                     if (item.isShowingText && item.text.isNotEmpty()) {
                         drawImageText(canvas, item)
                     } else {
-                        if (item.backgroundColor != null) {
-                            val bgPaint = Paint().apply { color = item.backgroundColor!!; style = Paint.Style.FILL }
-                            val localRect = RectF(0f, 0f, item.bitmap.width.toFloat(), item.bitmap.height.toFloat())
-                            canvas.drawRect(localRect, bgPaint)
-                        }
                         canvas.drawBitmap(item.displayBitmap, 0f, 0f, null)
                     }
                     canvas.restore()
@@ -607,23 +593,27 @@ class DrawingView @JvmOverloads constructor(
         canvas.drawLine(delPos.x - crossSize, delPos.y - crossSize, delPos.x + crossSize, delPos.y + crossSize, crossPaint)
         canvas.drawLine(delPos.x + crossSize, delPos.y - crossSize, delPos.x - crossSize, delPos.y + crossSize, crossPaint)
 
-        // Color Button
-        canvas.drawCircle(colPos.x, colPos.y, buttonRadius, Paint().apply { color = Color.WHITE; style = Paint.Style.FILL; setShadowLayer(4f, 0f, 2f, Color.BLACK) })
-        canvas.drawCircle(colPos.x, colPos.y, buttonRadius * 0.7f, Paint().apply { 
-            color = if (item is ImageItem) (item.tintColor ?: Color.BLACK) else if (item is WordItem) (item.tintColor ?: item.strokes.firstOrNull()?.paint?.color ?: Color.BLACK) else Color.BLACK
-            style = Paint.Style.FILL 
-        })
+        // Color Button (Not for ImageItem anymore, only for WordItem)
+        if (item is WordItem) {
+            canvas.drawCircle(colPos.x, colPos.y, buttonRadius, Paint().apply { color = Color.WHITE; style = Paint.Style.FILL; setShadowLayer(4f, 0f, 2f, Color.BLACK) })
+            canvas.drawCircle(colPos.x, colPos.y, buttonRadius * 0.7f, Paint().apply { 
+                color = item.tintColor ?: item.strokes.firstOrNull()?.paint?.color ?: Color.BLACK
+                style = Paint.Style.FILL 
+            })
+        }
 
-        // Fill Button
-        canvas.drawCircle(filPos.x, filPos.y, buttonRadius, Paint().apply { color = Color.WHITE; style = Paint.Style.FILL; setShadowLayer(4f, 0f, 2f, Color.BLACK) })
-        val bgColor = if (item is ImageItem) item.backgroundColor else if (item is WordItem) item.backgroundColor else null
-        canvas.drawCircle(filPos.x, filPos.y, buttonRadius * 0.7f, Paint().apply { 
-            color = bgColor ?: Color.TRANSPARENT
-            style = Paint.Style.FILL 
-        })
-        if (bgColor == null) {
-            val slashPaint = Paint().apply { color = Color.RED; strokeWidth = 3f; style = Paint.Style.STROKE }
-            canvas.drawLine(filPos.x - buttonRadius * 0.5f, filPos.y + buttonRadius * 0.5f, filPos.x + buttonRadius * 0.5f, filPos.y - buttonRadius * 0.5f, slashPaint)
+        // Fill Button (Not for ImageItem anymore, only for WordItem)
+        if (item is WordItem) {
+            canvas.drawCircle(filPos.x, filPos.y, buttonRadius, Paint().apply { color = Color.WHITE; style = Paint.Style.FILL; setShadowLayer(4f, 0f, 2f, Color.BLACK) })
+            val bgColor = item.backgroundColor
+            canvas.drawCircle(filPos.x, filPos.y, buttonRadius * 0.7f, Paint().apply { 
+                color = bgColor ?: Color.TRANSPARENT
+                style = Paint.Style.FILL 
+            })
+            if (bgColor == null) {
+                val slashPaint = Paint().apply { color = Color.RED; strokeWidth = 3f; style = Paint.Style.STROKE }
+                canvas.drawLine(filPos.x - buttonRadius * 0.5f, filPos.y + buttonRadius * 0.5f, filPos.x + buttonRadius * 0.5f, filPos.y - buttonRadius * 0.5f, slashPaint)
+            }
         }
 
         // Toggle Button
@@ -701,7 +691,7 @@ class DrawingView @JvmOverloads constructor(
             RectF(0f, 0f, item.bitmap.width.toFloat(), item.bitmap.height.toFloat())
         }
         
-        textPaint.color = item.tintColor ?: Color.BLACK
+        textPaint.color = Color.BLACK
         
         val text = item.text
         textPaint.textSize = 100f
@@ -859,13 +849,13 @@ class DrawingView @JvmOverloads constructor(
                     }
 
                     // Check color button (bottom-right)
-                    if (isScreenButtonHit(localBounds.right, localBounds.bottom)) {
+                    if (selectedItem is WordItem && isScreenButtonHit(localBounds.right, localBounds.bottom)) {
                         onShowItemColorPicker?.invoke(selectedItem)
                         return true
                     }
 
                     // Check fill color button (bottom-left)
-                    if (isScreenButtonHit(localBounds.left, localBounds.bottom)) {
+                    if (selectedItem is WordItem && isScreenButtonHit(localBounds.left, localBounds.bottom)) {
                         showItemColorPicker(selectedItem, isBackground = true)
                         return true
                     }
@@ -1629,7 +1619,7 @@ class DrawingView @JvmOverloads constructor(
                     item.textMatrix.getValues(tm)
                     val tb = FloatRect(item.textBounds.left, item.textBounds.top, item.textBounds.right, item.textBounds.bottom)
                     
-                    ImageData(base64, m, item.tintColor, item.removeBackground, item.backgroundColor, item.text, item.isShowingText, tm, tb)
+                    ImageData(base64, m, item.removeBackground, item.text, item.isShowingText, tm, tb)
                 }
                 is WordItem -> {
                     val strokeDataList = item.strokes.map {
@@ -1683,7 +1673,7 @@ class DrawingView @JvmOverloads constructor(
                                 textBounds.set(it.left, it.top, it.right, it.bottom)
                             }
                             
-                            drawItems.add(ImageItem(bitmap, matrix, data.tintColor, data.removeBackground, data.backgroundColor, data.text, data.isShowingText, textMatrix, textBounds))
+                            drawItems.add(ImageItem(bitmap, matrix, data.removeBackground, data.text, data.isShowingText, textMatrix, textBounds))
                         }
                     } catch (e: Exception) {
                         e.printStackTrace()
@@ -1763,13 +1753,9 @@ class DrawingView @JvmOverloads constructor(
                 
                 setOnClickListener {
                     if (isBackground) {
-                        if (item is ImageItem) item.backgroundColor = color
-                        else if (item is WordItem) item.backgroundColor = color
+                        if (item is WordItem) item.backgroundColor = color
                     } else {
-                        if (item is ImageItem) {
-                            item.tintColor = color
-                            item.invalidateCache()
-                        } else if (item is WordItem) {
+                        if (item is WordItem) {
                             item.tintColor = color
                         }
                     }
