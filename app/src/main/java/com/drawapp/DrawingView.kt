@@ -274,6 +274,13 @@ class DrawingView @JvmOverloads constructor(
     private var rotationCenter = PointF()
     
     private var lastMotionEvent: MotionEvent? = null
+    
+    // Two-finger manipulation state
+    private var isTwoFingerManipulating = false
+    private var twoFingerStartSpan = 1f
+    private var twoFingerStartAngle = 0f
+    private var twoFingerStartMatrix = Matrix()
+    private var twoFingerStartFocal = PointF()
 
     /** Currently focused word for search results */
     var searchHighlightedWord: WordItem? = null
@@ -283,47 +290,12 @@ class DrawingView @JvmOverloads constructor(
     private val scaleDetector = ScaleGestureDetector(context,
         object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
             override fun onScaleBegin(detector: ScaleGestureDetector): Boolean {
-                if ((isImageManipulating && selectedImage != null) || (isWordManipulating && selectedWord != null)) {
-                    val currentMatrix = selectedImage?.matrix ?: selectedWord!!.matrix
-                    initialMatrix.set(currentMatrix)
-                    startSpan = max(1f, detector.currentSpan)
-                    
-                    // Angle between two fingers (360-degree aware)
-                    startAngle = getPointersAngle(lastMotionEvent)
-                    
-                    val pt = screenToCanvas(detector.focusX, detector.focusY)
-                    startFocalX = pt[0]
-                    startFocalY = pt[1]
-                    return true
-                }
+                // Remove item manipulation from here, handled in onTouchEvent
                 return true
             }
 
             override fun onScale(detector: ScaleGestureDetector): Boolean {
-                if ((isImageManipulating && selectedImage != null) || (isWordManipulating && selectedWord != null)) {
-                    val targetMatrix = selectedImage?.matrix ?: selectedWord!!.matrix
-                    val scale = detector.currentSpan / startSpan
-                    
-                    val currentAngle = getPointersAngle(lastMotionEvent)
-                    var rotation = currentAngle - startAngle
-                    
-                    // Normalize rotation to avoid jumps at 180/-180
-                    while (rotation > 180) rotation -= 360
-                    while (rotation < -180) rotation += 360
-                    
-                    val pt = screenToCanvas(detector.focusX, detector.focusY)
-                    val transX = pt[0] - startFocalX
-                    val transY = pt[1] - startFocalY
-
-                    val tempMatrix = Matrix(initialMatrix)
-                    tempMatrix.postTranslate(transX, transY)
-                    tempMatrix.postScale(scale, scale, pt[0], pt[1])
-                    tempMatrix.postRotate(rotation, pt[0], pt[1])
-                    
-                    targetMatrix.set(tempMatrix)
-                    invalidate()
-                    return true
-                }
+                // Remove item manipulation from here, handled in onTouchEvent
 
                 // Canvas panning/zooming
                 val oldScale = scaleFactor
@@ -931,7 +903,24 @@ class DrawingView @JvmOverloads constructor(
                     cancelCurrentStroke()
                     isDrawing = false
                 }
-                if (!isImageManipulating && !isWordManipulating) {
+                
+                val currentSelectedItem = selectedImage ?: selectedWord
+                if (currentSelectedItem != null && pointerCount >= 2) {
+                    isTwoFingerManipulating = true
+                    val dx = event.getX(1) - event.getX(0)
+                    val dy = event.getY(1) - event.getY(0)
+                    twoFingerStartSpan = max(1f, Math.sqrt((dx * dx + dy * dy).toDouble()).toFloat())
+                    twoFingerStartAngle = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())).toFloat()
+                    twoFingerStartMatrix.set(when(currentSelectedItem) {
+                        is ImageItem -> currentSelectedItem.matrix
+                        is WordItem -> currentSelectedItem.matrix
+                        else -> Matrix()
+                    })
+                    val focal = screenToCanvas((event.getX(0) + event.getX(1)) / 2f, (event.getY(0) + event.getY(1)) / 2f)
+                    twoFingerStartFocal.set(focal[0], focal[1])
+                    
+                    isPanning = false
+                } else if (!isImageManipulating && !isWordManipulating) {
                     isPanning = true
                     lastPanX = event.x
                     lastPanY = event.y
@@ -956,6 +945,31 @@ class DrawingView @JvmOverloads constructor(
                     // Rotate around center relative to initial state
                     targetMatrix.set(initialMatrix)
                     targetMatrix.postRotate(rotationDelta, rotationCenter.x, rotationCenter.y)
+                    invalidate()
+                } else if (isTwoFingerManipulating && currentSelectedItem != null && pointerCount >= 2) {
+                    val dx = event.getX(1) - event.getX(0)
+                    val dy = event.getY(1) - event.getY(0)
+                    val currentSpan = max(1f, Math.sqrt((dx * dx + dy * dy).toDouble()).toFloat())
+                    val currentAngle = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())).toFloat()
+                    val focal = screenToCanvas((event.getX(0) + event.getX(1)) / 2f, (event.getY(0) + event.getY(1)) / 2f)
+                    
+                    val scale = currentSpan / twoFingerStartSpan
+                    val rotationDelta = currentAngle - twoFingerStartAngle
+                    val transX = focal[0] - twoFingerStartFocal.x
+                    val transY = focal[1] - twoFingerStartFocal.y
+                    
+                    val targetMatrix = when(currentSelectedItem) {
+                        is ImageItem -> currentSelectedItem.matrix
+                        is WordItem -> currentSelectedItem.matrix
+                        else -> Matrix()
+                    }
+                    
+                    val tempMatrix = Matrix(twoFingerStartMatrix)
+                    tempMatrix.postTranslate(transX, transY)
+                    tempMatrix.postScale(scale, scale, focal[0], focal[1])
+                    tempMatrix.postRotate(rotationDelta, focal[0], focal[1])
+                    
+                    targetMatrix.set(tempMatrix)
                     invalidate()
                 } else if ((isImageManipulating && selectedImage != null || isWordManipulating && selectedWord != null) && pointerCount == 1) {
                     // Single finger translate
@@ -998,7 +1012,7 @@ class DrawingView @JvmOverloads constructor(
                     freezeWordTransform(selectedWord!!)
                     onStrokeCompleted?.invoke()
                 }
-                if (isRotating && selectedWord != null) {
+                if ((isRotating || isTwoFingerManipulating) && selectedWord != null) {
                     freezeWordTransform(selectedWord!!)
                     onStrokeCompleted?.invoke()
                 }
@@ -1006,9 +1020,17 @@ class DrawingView @JvmOverloads constructor(
                 isImageManipulating = false
                 isWordManipulating = false
                 isRotating = false
+                isTwoFingerManipulating = false
             }
 
             MotionEvent.ACTION_POINTER_UP -> {
+                if (isTwoFingerManipulating) {
+                    if (selectedWord != null) {
+                        freezeWordTransform(selectedWord!!)
+                        onStrokeCompleted?.invoke()
+                    }
+                    isTwoFingerManipulating = false
+                }
                 if (pointerCount <= 2 && !isImageManipulating && !isWordManipulating) {
                     isPanning = true
                 }
