@@ -23,7 +23,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnUndo: ImageButton
     private lateinit var btnRedo: ImageButton
     private lateinit var btnClear: ImageButton
-    private lateinit var btnEraser: ImageButton
     private lateinit var btnBrushSize: ImageButton
     private lateinit var btnColorPicker: View
     private lateinit var btnBack: ImageButton
@@ -55,7 +54,6 @@ class MainActivity : AppCompatActivity() {
 
     // ── State ──────────────────────────────────────────────────────────────
     private var activeColor: Int = Color.BLACK
-    private var isEraserActive = false
 
     // ── Recognizer ─────────────────────────────────────────────────────────
     private lateinit var recognizer: HandwritingRecognizer
@@ -156,7 +154,6 @@ class MainActivity : AppCompatActivity() {
         btnUndo             = findViewById(R.id.btnUndo)
         btnRedo             = findViewById(R.id.btnRedo)
         btnClear            = findViewById(R.id.btnClear)
-        btnEraser           = findViewById(R.id.btnEraser)
         btnBrushSize        = findViewById(R.id.btnBrushSize)
         colorSwatch         = findViewById(R.id.colorSwatch)
         btnColorPicker      = colorSwatch
@@ -451,11 +448,6 @@ class MainActivity : AppCompatActivity() {
                 showClearConfirmDialog() 
             }
         }
-        btnEraser.setOnClickListener {
-            isEraserActive = !isEraserActive
-            drawingView.isEraser = isEraserActive
-            updateEraserButton()
-        }
         btnBrushSize.setOnClickListener   { showBrushSizeDialog() }
         btnColorPicker.setOnClickListener { showColorPickerDialog() }
         findViewById<ImageButton>(R.id.btnAddImage).setOnClickListener {
@@ -552,10 +544,6 @@ class MainActivity : AppCompatActivity() {
         btnRedo.alpha = if (drawingView.canRedo()) 1.0f else 0.4f
     }
 
-    private fun updateEraserButton() {
-        if (isEraserActive) btnEraser.setColorFilter(Color.parseColor("#FF4081"))
-        else btnEraser.clearColorFilter()
-    }
 
     private fun updateColorSwatch() {
         colorSwatch.setBackgroundColor(activeColor)
@@ -582,9 +570,7 @@ class MainActivity : AppCompatActivity() {
                     if (item == null) {
                         activeColor = color
                         drawingView.brushColor = activeColor
-                        isEraserActive = false
-                        drawingView.isEraser = false
-                        updateEraserButton(); updateColorSwatch()
+                        updateColorSwatch()
                     } else {
                         updateItemColor(item, color)
                     }
@@ -658,8 +644,8 @@ class MainActivity : AppCompatActivity() {
                     activeColor = color
                     drawingView.brushColor = activeColor
                     drawingView.brushOpacity = opa.progress
-                    isEraserActive = false; drawingView.isEraser = false
-                    updateEraserButton(); updateColorSwatch()
+                    drawingView.isEraser = false
+                    updateColorSwatch()
                 } else {
                     updateItemColor(item, color)
                 }

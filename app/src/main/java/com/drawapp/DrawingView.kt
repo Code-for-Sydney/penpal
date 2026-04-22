@@ -54,7 +54,7 @@ class DrawingView @JvmOverloads constructor(
         val paint: Paint,
         val boundsRect: RectF,
         val commands: List<PathCommand> = emptyList(),
-        val isEraserStroke: Boolean = false
+        val isEraser: Boolean = false
     ) : CanvasItem() {
         override val bounds: RectF get() = boundsRect
     }
@@ -160,10 +160,11 @@ class DrawingView @JvmOverloads constructor(
     var brushSize: Float = 12f
         set(value) { field = value; updateCurrentPaint() }
 
-    var isEraser: Boolean = false
-        set(value) { field = value; updateCurrentPaint() }
 
     var brushOpacity: Int = 255
+        set(value) { field = value; updateCurrentPaint() }
+
+    var isEraser: Boolean = false
         set(value) { field = value; updateCurrentPaint() }
 
     /** Called once each time the user lifts their finger after a stroke. */
@@ -1349,8 +1350,7 @@ class DrawingView @JvmOverloads constructor(
                         commands = item.commands,
                         color = item.paint.color,
                         strokeWidth = item.paint.strokeWidth,
-                        opacity = item.paint.alpha,
-                        isEraser = item.isEraserStroke
+                        opacity = item.paint.alpha
                     )
                 }
                 is ImageItem -> {
@@ -1367,8 +1367,7 @@ class DrawingView @JvmOverloads constructor(
                             commands = it.commands,
                             color = it.paint.color,
                             strokeWidth = it.paint.strokeWidth,
-                            opacity = it.paint.alpha,
-                            isEraser = it.isEraserStroke
+                            opacity = it.paint.alpha
                         )
                     }
                     val m = FloatArray(9)
@@ -1545,9 +1544,6 @@ class DrawingView @JvmOverloads constructor(
             strokeWidth = data.strokeWidth
             isAntiAlias = true
             alpha = data.opacity
-            if (data.isEraser) {
-                color = canvasBackgroundColor
-            }
         }
 
         val bounds = RectF()
@@ -1555,6 +1551,6 @@ class DrawingView @JvmOverloads constructor(
         val halfWidth = paint.strokeWidth / 2f
         bounds.inset(-halfWidth, -halfWidth)
 
-        return StrokeItem(path, paint, bounds, data.commands, data.isEraser)
+        return StrokeItem(path, paint, bounds, data.commands)
     }
 }

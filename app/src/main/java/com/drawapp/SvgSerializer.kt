@@ -22,7 +22,7 @@ data class StrokeData(
     val color: Int,
     val strokeWidth: Float,
     val opacity: Int,
-    val isEraser: Boolean
+    val isEraser: Boolean = false
 ) : SvgData()
 
 data class ImageData(
@@ -95,9 +95,6 @@ object SvgSerializer {
                     sb.append(""" stroke="$hex" stroke-width="${item.strokeWidth}"""")
                     sb.append(""" stroke-opacity="$opacity"""")
                     sb.append(""" stroke-linecap="round" stroke-linejoin="round" fill="none"""")
-                    if (item.isEraser) {
-                        sb.append(""" data-eraser="true"""")
-                    }
                     sb.appendLine("""/>""")
                 }
                 is ImageData -> {
@@ -131,7 +128,6 @@ object SvgSerializer {
                         val hex = colorToHex(stroke.color)
                         val opacity = stroke.opacity / 255f
                         sb.append("""    <path d="$d" stroke="$hex" stroke-width="${stroke.strokeWidth}" stroke-opacity="$opacity" stroke-linecap="round" stroke-linejoin="round" fill="none"""")
-                        if (stroke.isEraser) sb.append(""" data-eraser="true"""")
                         sb.appendLine("""/>""")
                     }
                     sb.appendLine("  </g>")
@@ -162,7 +158,6 @@ object SvgSerializer {
                     val strokeColor = parser.getAttributeValue(null, "stroke") ?: "#000000"
                     val strokeWidth = parser.getAttributeValue(null, "stroke-width")?.toFloatOrNull() ?: 12f
                     val strokeOpacity = parser.getAttributeValue(null, "stroke-opacity")?.toFloatOrNull() ?: 1f
-                    val isEraser = parser.getAttributeValue(null, "data-eraser") == "true"
 
                     val commands = svgPathToCommands(pathData)
                     if (commands.isNotEmpty()) {
@@ -170,8 +165,7 @@ object SvgSerializer {
                             commands = commands,
                             color = parseHexColor(strokeColor),
                             strokeWidth = strokeWidth,
-                            opacity = (strokeOpacity * 255).toInt().coerceIn(0, 255),
-                            isEraser = isEraser
+                            opacity = (strokeOpacity * 255).toInt().coerceIn(0, 255)
                         ))
                     }
                 } else if (parser.name == "image") {
@@ -249,7 +243,6 @@ object SvgSerializer {
         val strokeColor = parser.getAttributeValue(null, "stroke") ?: "#000000"
         val strokeWidth = parser.getAttributeValue(null, "stroke-width")?.toFloatOrNull() ?: 12f
         val strokeOpacity = parser.getAttributeValue(null, "stroke-opacity")?.toFloatOrNull() ?: 1f
-        val isEraser = parser.getAttributeValue(null, "data-eraser") == "true"
 
         val commands = svgPathToCommands(pathData)
         return if (commands.isNotEmpty()) {
@@ -257,8 +250,7 @@ object SvgSerializer {
                 commands = commands,
                 color = parseHexColor(strokeColor),
                 strokeWidth = strokeWidth,
-                opacity = (strokeOpacity * 255).toInt().coerceIn(0, 255),
-                isEraser = isEraser
+                opacity = (strokeOpacity * 255).toInt().coerceIn(0, 255)
             )
         } else null
     }
