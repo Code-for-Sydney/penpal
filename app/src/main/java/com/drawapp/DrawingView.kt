@@ -138,9 +138,135 @@ class DrawingView @JvmOverloads constructor(
         val cropRect: RectF
     )
 
+    // --- Undo / Redo Actions ---
+    interface UndoAction {
+        fun undo()
+        fun redo()
+    }
+
+    inner class AddItemAction(val item: CanvasItem) : UndoAction {
+        override fun undo() { drawItems.remove(item); invalidate() }
+        override fun redo() { drawItems.add(item); invalidate() }
+    }
+
+    inner class RemoveItemAction(val item: CanvasItem, val index: Int) : UndoAction {
+        override fun undo() { drawItems.add(index, item); invalidate() }
+        override fun redo() { drawItems.remove(item); invalidate() }
+    }
+
+    inner class TransformAction(
+        val item: CanvasItem,
+        val oldState: ItemState,
+        val newState: ItemState
+    ) : UndoAction {
+        override fun undo() { applyState(item, oldState); invalidate() }
+        override fun redo() { applyState(item, newState); invalidate() }
+    }
+
+    inner class StyleAction(
+        val item: CanvasItem,
+        val property: String,
+        val oldValue: Any?,
+        val newValue: Any?
+    ) : UndoAction {
+        override fun undo() { applyStyle(item, property, oldValue); invalidate() }
+        override fun redo() { applyStyle(item, property, newValue); invalidate() }
+    }
+
+    inner class GroupAction(
+        val strokesToRemove: List<StrokeItem>,
+        val wordsToRemove: List<WordItem>,
+        val wordToAdd: WordItem
+    ) : UndoAction {
+        override fun undo() {
+            drawItems.remove(wordToAdd)
+            drawItems.addAll(strokesToRemove)
+            drawItems.addAll(wordsToRemove)
+            invalidate()
+        }
+        override fun redo() {
+            drawItems.removeAll(strokesToRemove)
+            drawItems.removeAll(wordsToRemove)
+            drawItems.add(wordToAdd)
+            invalidate()
+        }
+    }
+
+    data class ItemState(
+        val matrix: Matrix,
+        val textMatrix: Matrix,
+        val textBounds: RectF,
+        val strokes: List<StrokeItem>? = null
+    )
+
+    private fun captureState(item: CanvasItem): ItemState {
+        return when (item) {
+            is ImageItem -> ItemState(Matrix(item.matrix), Matrix(item.textMatrix), RectF(item.textBounds))
+            is WordItem -> ItemState(Matrix(item.matrix), Matrix(item.textMatrix), RectF(item.textBounds), item.strokes.map { it.copy() })
+            else -> ItemState(Matrix(), Matrix(), RectF())
+        }
+    }
+
+    private fun applyState(item: CanvasItem, state: ItemState) {
+        when (item) {
+            is ImageItem -> {
+                item.matrix.set(state.matrix)
+                item.textMatrix.set(state.textMatrix)
+                item.textBounds.set(state.textBounds)
+            }
+            is WordItem -> {
+                item.matrix.set(state.matrix)
+                item.textMatrix.set(state.textMatrix)
+                item.textBounds.set(state.textBounds)
+                state.strokes?.let { item.strokes = it }
+            }
+            is StrokeItem -> {}
+        }
+    }
+
+    private fun applyStyle(item: CanvasItem, property: String, value: Any?) {
+        when (property) {
+            "tintColor" -> if (item is WordItem) item.tintColor = value as Int?
+            "backgroundColor" -> if (item is WordItem) item.backgroundColor = value as Int?
+            "isShowingText" -> {
+                if (item is WordItem) item.isShowingText = value as Boolean
+                if (item is ImageItem) item.isShowingText = value as Boolean
+            }
+            "removeBackground" -> if (item is ImageItem) {
+                item.removeBackground = value as Boolean
+                item.invalidateCache()
+            }
+            "paintColor" -> if (item is StrokeItem) item.paint.color = value as Int
+        }
+    }
+
     // --- State ---
     private val drawItems = mutableListOf<CanvasItem>()
-    private val redoStack = mutableListOf<CanvasItem>()
+    private val undoStack = mutableListOf<UndoAction>()
+    private val redoStack = mutableListOf<UndoAction>()
+
+    fun setItemStyle(item: CanvasItem, property: String, newValue: Any?) {
+        val oldValue = when (property) {
+            "tintColor" -> if (item is WordItem) item.tintColor else null
+            "backgroundColor" -> if (item is WordItem) item.backgroundColor else null
+            "isShowingText" -> {
+                if (item is WordItem) item.isShowingText
+                else if (item is ImageItem) item.isShowingText
+                else false
+            }
+            "removeBackground" -> if (item is ImageItem) item.removeBackground else false
+            "paintColor" -> if (item is StrokeItem) item.paint.color else Color.BLACK
+            else -> null
+        }
+        pushAction(StyleAction(item, property, oldValue, newValue))
+    }
+
+    fun pushAction(action: UndoAction, executeNow: Boolean = true) {
+        if (executeNow) action.redo()
+        undoStack.add(action)
+        redoStack.clear()
+        onStateChanged?.invoke()
+    }
 
     private var currentPath = Path()
     private var currentCommands = mutableListOf<PathCommand>()
@@ -272,6 +398,8 @@ class DrawingView @JvmOverloads constructor(
     private var twoFingerStartAngle = 0f
     private var twoFingerStartMatrix = Matrix()
     private var twoFingerStartFocal = PointF()
+
+    private var beforeTransformState: ItemState? = null
 
     /** Currently focused word for search results */
     var searchHighlightedWord: WordItem? = null
@@ -827,23 +955,20 @@ class DrawingView @JvmOverloads constructor(
                     
                     // Check toggle button (top-left)
                     if (isScreenButtonHit(localBounds.left, localBounds.top)) {
-                        if (selectedItem is WordItem) {
-                            selectedItem.isShowingText = !selectedItem.isShowingText
-                        } else if (selectedItem is ImageItem) {
-                            selectedItem.isShowingText = !selectedItem.isShowingText
-                        }
+                        val oldValue = if (selectedItem is WordItem) selectedItem.isShowingText else if (selectedItem is ImageItem) selectedItem.isShowingText else false
+                        val newValue = !oldValue
+                        pushAction(StyleAction(selectedItem, "isShowingText", oldValue, newValue))
                         invalidate()
-                        onStateChanged?.invoke()
                         return true
                     }
 
                     // Check background toggle for ImageItem (top-center)
                     if (selectedItem is ImageItem) {
                         if (isScreenButtonHit(localBounds.centerX(), localBounds.top)) {
-                            selectedItem.removeBackground = !selectedItem.removeBackground
-                            selectedItem.invalidateCache()
+                            val oldValue = selectedItem.removeBackground
+                            val newValue = !oldValue
+                            pushAction(StyleAction(selectedItem, "removeBackground", oldValue, newValue))
                             invalidate()
-                            onStateChanged?.invoke()
                             return true
                         }
                     }
@@ -893,6 +1018,7 @@ class DrawingView @JvmOverloads constructor(
                         rotationInitialAngle = Math.toDegrees(atan2((canvasCoords[1] - center.y).toDouble(), (canvasCoords[0] - center.x).toDouble())).toFloat()
                         
                         initialMatrix.set(itemMatrix)
+                        beforeTransformState = captureState(selectedItem)
                         return true
                     }
                 }
@@ -910,6 +1036,7 @@ class DrawingView @JvmOverloads constructor(
                         isPanning = false
                         lastPanX = event.x
                         lastPanY = event.y
+                        beforeTransformState = captureState(hitItem)
                     }
                     is WordItem -> {
                         selectedWord = hitItem
@@ -920,6 +1047,7 @@ class DrawingView @JvmOverloads constructor(
                         isPanning = false
                         lastPanX = event.x
                         lastPanY = event.y
+                        beforeTransformState = captureState(hitItem)
                     }
                     else -> {
                         selectedImage = null
@@ -955,6 +1083,7 @@ class DrawingView @JvmOverloads constructor(
                     val focal = screenToCanvas((event.getX(0) + event.getX(1)) / 2f, (event.getY(0) + event.getY(1)) / 2f)
                     twoFingerStartFocal.set(focal[0], focal[1])
                     
+                    beforeTransformState = captureState(currentSelectedItem)
                     isPanning = false
                 } else if (!isImageManipulating && !isWordManipulating) {
                     isPanning = true
@@ -1046,26 +1175,46 @@ class DrawingView @JvmOverloads constructor(
                 }
                 if (isWordManipulating && selectedWord != null) {
                     freezeWordTransform(selectedWord!!)
-                    onStrokeCompleted?.invoke()
                 }
                 if ((isRotating || isTwoFingerManipulating) && selectedWord != null) {
                     freezeWordTransform(selectedWord!!)
-                    onStrokeCompleted?.invoke()
                 }
+
+                // Push transform action if anything was manipulated
+                if (isImageManipulating || isWordManipulating || isRotating || isTwoFingerManipulating) {
+                    val currentSelectedItem = selectedImage ?: selectedWord
+                    if (currentSelectedItem != null && beforeTransformState != null) {
+                        val afterState = captureState(currentSelectedItem)
+                        if (afterState != beforeTransformState) {
+                            pushAction(TransformAction(currentSelectedItem, beforeTransformState!!, afterState), executeNow = false)
+                            onStrokeCompleted?.invoke()
+                        }
+                    }
+                }
+
                 isPanning = false
                 isImageManipulating = false
                 isWordManipulating = false
                 isRotating = false
                 isTwoFingerManipulating = false
+                beforeTransformState = null
             }
 
             MotionEvent.ACTION_POINTER_UP -> {
                 if (isTwoFingerManipulating) {
                     if (selectedWord != null) {
                         freezeWordTransform(selectedWord!!)
-                        onStrokeCompleted?.invoke()
+                    }
+                    val currentSelectedItem = selectedImage ?: selectedWord
+                    if (currentSelectedItem != null && beforeTransformState != null) {
+                        val afterState = captureState(currentSelectedItem)
+                        if (afterState != beforeTransformState) {
+                            pushAction(TransformAction(currentSelectedItem, beforeTransformState!!, afterState), executeNow = false)
+                            onStrokeCompleted?.invoke()
+                        }
                     }
                     isTwoFingerManipulating = false
+                    beforeTransformState = null
                 }
                 if (pointerCount <= 2 && !isImageManipulating && !isWordManipulating) {
                     isPanning = true
@@ -1128,14 +1277,13 @@ class DrawingView @JvmOverloads constructor(
         val halfWidth = strokePaint.strokeWidth / 2f
         bounds.inset(-halfWidth, -halfWidth)
 
-        drawItems.add(StrokeItem(smoothedPath, strokePaint, bounds, smoothedCommands, isEraser))
-        redoStack.clear()
+        val strokeItem = StrokeItem(smoothedPath, strokePaint, bounds, smoothedCommands, isEraser)
+        pushAction(AddItemAction(strokeItem))
+        onStrokeCompleted?.invoke()
 
         currentPath = Path()
         currentCommands = mutableListOf()
         currentPoints.clear()
-
-        onStrokeCompleted?.invoke()
     }
 
     private fun smoothPoints(points: List<PointF>): List<PathCommand> {
@@ -1217,9 +1365,8 @@ class DrawingView @JvmOverloads constructor(
         matrix.postTranslate(viewCenter[0] - scaledBitmap.width / 2f, viewCenter[1] - scaledBitmap.height / 2f)
         
         val imageItem = ImageItem(scaledBitmap, matrix)
-        drawItems.add(imageItem)
+        pushAction(AddItemAction(imageItem))
         selectedImage = imageItem
-        redoStack.clear()
         invalidate()
         onStrokeCompleted?.invoke()
         return imageItem
@@ -1228,23 +1375,27 @@ class DrawingView @JvmOverloads constructor(
     fun deleteSelectedItem(): Boolean {
         val image = selectedImage
         if (image != null) {
-            drawItems.remove(image)
-            selectedImage = null
-            isImageManipulating = false
-            redoStack.clear()
-            invalidate()
-            onStrokeCompleted?.invoke()
-            return true
+            val index = drawItems.indexOf(image)
+            if (index != -1) {
+                pushAction(RemoveItemAction(image, index))
+                selectedImage = null
+                isImageManipulating = false
+                invalidate()
+                onStrokeCompleted?.invoke()
+                return true
+            }
         }
         val word = selectedWord
         if (word != null) {
-            drawItems.remove(word)
-            selectedWord = null
-            isWordManipulating = false
-            redoStack.clear()
-            invalidate()
-            onStrokeCompleted?.invoke()
-            return true
+            val index = drawItems.indexOf(word)
+            if (index != -1) {
+                pushAction(RemoveItemAction(word, index))
+                selectedWord = null
+                isWordManipulating = false
+                invalidate()
+                onStrokeCompleted?.invoke()
+                return true
+            }
         }
         return false
     }
@@ -1254,27 +1405,18 @@ class DrawingView @JvmOverloads constructor(
 
     fun groupStrokesIntoWord(strokesToGroup: List<StrokeItem>, text: String, wordsToMerge: List<WordItem> = emptyList()): WordItem? {
         val stillInCanvas = strokesToGroup.filter { it in drawItems }
-        
-        // Remove individual strokes from drawItems
-        drawItems.removeAll { it in stillInCanvas }
-        
-        // Remove words being merged
-        drawItems.removeAll { it in wordsToMerge }
-        
-        if (strokesToGroup.isEmpty()) return null
+        if (stillInCanvas.isEmpty() && wordsToMerge.isEmpty()) return null
         
         // Calculate initial text orientation and bounds
-        val (writingAngle, center) = calculateWritingAngle(strokesToGroup)
-        val textBounds = calculateRotatedBounds(strokesToGroup, writingAngle, center)
+        val (writingAngle, center) = calculateWritingAngle(stillInCanvas)
+        val textBounds = calculateRotatedBounds(stillInCanvas, writingAngle, center)
         val textMatrix = Matrix()
         textMatrix.postRotate(writingAngle, center.x, center.y)
 
         // Create WordItem with identity matrix (strokes are already in canvas space)
-        val wordItem = WordItem(strokesToGroup, Matrix(), text, false, textMatrix, textBounds)
-        drawItems.add(wordItem)
+        val wordItem = WordItem(stillInCanvas, Matrix(), text, false, textMatrix, textBounds)
         
-        // Clear redo stack as we modified the item structure
-        redoStack.clear()
+        pushAction(GroupAction(stillInCanvas, wordsToMerge, wordItem))
         invalidate()
         return wordItem
     }
@@ -1352,28 +1494,32 @@ class DrawingView @JvmOverloads constructor(
 
     // --- Undo / Redo ---
     fun undo() {
-        if (drawItems.isNotEmpty()) {
-            val item = drawItems.removeLast()
-            if (item == selectedImage) selectedImage = null
-            if (item == selectedWord) selectedWord = null
-            redoStack.add(item)
+        if (undoStack.isNotEmpty()) {
+            val action = undoStack.removeLast()
+            action.undo()
+            redoStack.add(action)
+            onStateChanged?.invoke()
             invalidate()
         }
     }
 
     fun redo() {
         if (redoStack.isNotEmpty()) {
-            drawItems.add(redoStack.removeLast())
+            val action = redoStack.removeLast()
+            action.redo()
+            undoStack.add(action)
+            onStateChanged?.invoke()
             invalidate()
         }
     }
 
-    fun canUndo() = drawItems.isNotEmpty()
+    fun canUndo() = undoStack.isNotEmpty()
     fun canRedo() = redoStack.isNotEmpty()
 
     // --- Clear ---
     fun clear() {
         drawItems.clear()
+        undoStack.clear()
         redoStack.clear()
         currentPath = Path()
         initialBitmap = null
@@ -1753,14 +1899,17 @@ class DrawingView @JvmOverloads constructor(
                 
                 setOnClickListener {
                     if (isBackground) {
-                        if (item is WordItem) item.backgroundColor = color
+                        if (item is WordItem) {
+                            val oldValue = item.backgroundColor
+                            pushAction(StyleAction(item, "backgroundColor", oldValue, color))
+                        }
                     } else {
                         if (item is WordItem) {
-                            item.tintColor = color
+                            val oldValue = item.tintColor
+                            pushAction(StyleAction(item, "tintColor", oldValue, color))
                         }
                     }
                     this@DrawingView.postInvalidate()
-                    onStateChanged?.invoke()
                     dialog.dismiss()
                 }
             }

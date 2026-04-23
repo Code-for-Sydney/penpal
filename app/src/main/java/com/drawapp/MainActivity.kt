@@ -195,7 +195,10 @@ class MainActivity : AppCompatActivity() {
         setupListeners()
         drawingView.brushColor = activeColor
         drawingView.onShowItemColorPicker = { item -> showColorPickerDialog(item) }
-        drawingView.onStateChanged = { scheduleAutosave() }
+        drawingView.onStateChanged = { 
+            updateButtonStates()
+            scheduleAutosave() 
+        }
         updateColorSwatch()
         setupRecognizer()
         loadNotebookDrawing(currentPageIndex)
@@ -602,13 +605,13 @@ class MainActivity : AppCompatActivity() {
     private fun updateItemColor(item: DrawingView.CanvasItem, color: Int) {
         when (item) {
             is DrawingView.WordItem -> {
-                item.tintColor = color
+                drawingView.setItemStyle(item, "tintColor", color)
             }
             is DrawingView.ImageItem -> {
                 // tintColor removed for ImageItem
             }
             is DrawingView.StrokeItem -> {
-                item.paint.color = color
+                drawingView.setItemStyle(item, "paintColor", color)
             }
         }
         drawingView.invalidate()
