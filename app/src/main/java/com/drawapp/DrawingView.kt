@@ -419,6 +419,9 @@ class DrawingView @JvmOverloads constructor(
                 // Canvas panning/zooming
                 val oldScale = scaleFactor
                 var detectorScale = detector.scaleFactor
+                
+                // Boost sensitivity for faster zooming
+                detectorScale = 1.0f + (detectorScale - 1.0f) * 3.0f
 
                 // --- Auto-Fit Selection Logic ---
                 val currentSelectedItem = selectedImage ?: selectedWord
@@ -1151,8 +1154,9 @@ class DrawingView @JvmOverloads constructor(
                     invalidate()
                 } else if (isPanning && pointerCount >= 2 && !isImageManipulating && !isWordManipulating) {
                     if (!scaleDetector.isInProgress) {
-                        val dx = event.x - lastPanX
-                        val dy = event.y - lastPanY
+                        // Boost panning speed for more responsive feel
+                        val dx = (event.x - lastPanX) * 1.8f
+                        val dy = (event.y - lastPanY) * 1.8f
                         translateX += dx
                         translateY += dy
                         updateMatrix()
