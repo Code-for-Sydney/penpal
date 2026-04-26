@@ -73,4 +73,15 @@ object NotebookManager {
             e.printStackTrace()
         }
     }
+
+    fun generateDefaultName(context: Context): String {
+        val notebooks = getNotebooks(context)
+        var count = 1
+        var name = "Untitled Notebook $count"
+        while (notebooks.any { it.name.equals(name, ignoreCase = true) }) {
+            count++
+            name = "Untitled Notebook $count"
+        }
+        return name
+    }
 }

@@ -153,7 +153,11 @@ class NotebookSelectionActivity : AppCompatActivity() {
 
 
         var selectedColor = notebook?.color ?: Color.parseColor(colors[0])
-        etName.setText(notebook?.name ?: "")
+        val initialName = notebook?.name ?: NotebookManager.generateDefaultName(this)
+        etName.setText(initialName)
+        if (notebook == null) {
+            etName.selectAll()
+        }
         
         if (notebook?.type == NotebookType.WHITEBOARD) {
             rgType.check(R.id.rbWhiteboard)
