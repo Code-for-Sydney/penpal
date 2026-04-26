@@ -21,8 +21,8 @@ object NotebookManager {
         } else {
             // Default notebooks if none exist
             mutableListOf(
-                Notebook(name = "My Sketches", color = Color.parseColor("#FF4081")),
-                Notebook(name = "Ideas", color = Color.parseColor("#2196F3"))
+                Notebook(name = "My Sketches", color = Color.parseColor("#FF4081"), type = NotebookType.NOTEBOOK),
+                Notebook(name = "Whiteboard", color = Color.parseColor("#2196F3"), type = NotebookType.WHITEBOARD)
             )
         }
     }

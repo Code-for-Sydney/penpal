@@ -22,6 +22,7 @@ class NotebookAdapter(
         val imagePreview: ImageView = view.findViewById(R.id.notebookImagePreview)
         val editBtn: ImageButton = view.findViewById(R.id.btnEditNotebook)
         val card: com.google.android.material.card.MaterialCardView = view.findViewById(R.id.cardNotebook)
+        val typeIcon: ImageView = view.findViewById(R.id.notebookTypeIcon)
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): NotebookViewHolder {
@@ -42,6 +43,11 @@ class NotebookAdapter(
         } else {
             holder.imagePreview.setImageDrawable(null)
         }
+        
+        holder.typeIcon.setImageResource(
+            if (notebook.type == NotebookType.WHITEBOARD) R.drawable.ic_type_whiteboard 
+            else R.drawable.ic_type_notebook
+        )
 
         holder.card.setOnClickListener { onNotebookClick(notebook) }
         holder.editBtn.setOnClickListener { onEditClick(notebook) }

@@ -37,6 +37,40 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_marginTop="24dp"
+        android:text="Notebook Type"
+        android:textColor="#88FFFFFF"
+        android:textSize="14sp" />
+
+    <RadioGroup
+        android:id="@+id/rgNotebookType"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:orientation="horizontal">
+
+        <RadioButton
+            android:id="@+id/rbNotebook"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Notebook"
+            android:textColor="#FFFFFF"
+            android:buttonTint="#FF4081" />
+
+        <RadioButton
+            android:id="@+id/rbWhiteboard"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Whiteboard"
+            android:textColor="#FFFFFF"
+            android:buttonTint="#FF4081" />
+    </RadioGroup>
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="24dp"
         android:text="Default Page Background"
         android:textColor="#88FFFFFF"
         android:textSize="14sp" />

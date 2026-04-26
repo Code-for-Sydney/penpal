@@ -25,6 +25,19 @@ class DrawingView @JvmOverloads constructor(
     // Background color
     var canvasBackgroundColor: Int = Color.parseColor("#FDFCF5")
     var backgroundType: BackgroundType = BackgroundType.RULED
+    var notebookType: NotebookType = NotebookType.NOTEBOOK
+    var numPages: Int = 1
+
+    // --- Page Constants (for Notebook mode) ---
+    val PAGE_WIDTH = 4000f
+    val PAGE_HEIGHT = 5656f
+    val PAGE_MARGIN = 240f
+
+    private val pageBgPaint = Paint().apply {
+        color = Color.WHITE
+        style = Paint.Style.FILL
+        // Shadow removed as it's expensive and can cause crashes on zoom
+    }
 
 
     // --- Lined Paper Paints ---
@@ -47,6 +60,7 @@ class DrawingView @JvmOverloads constructor(
     // --- Data classes ---
     sealed class CanvasItem {
         abstract val bounds: RectF
+        open fun invalidateCache() {}
     }
 
     data class StrokeItem(
@@ -75,7 +89,7 @@ class DrawingView @JvmOverloads constructor(
                 return _processedBitmap ?: processBitmap().also { _processedBitmap = it }
             }
 
-        fun invalidateCache() {
+        override fun invalidateCache() {
             _processedBitmap = null
         }
 
@@ -117,8 +131,10 @@ class DrawingView @JvmOverloads constructor(
         var tintColor: Int? = null,
         var backgroundColor: Int? = null
     ) : CanvasItem() {
+        private var cachedBounds: RectF? = null
         override val bounds: RectF
             get() {
+                cachedBounds?.let { return it }
                 val r = RectF()
                 if (strokes.isNotEmpty()) {
                     r.set(strokes[0].bounds)
@@ -127,8 +143,13 @@ class DrawingView @JvmOverloads constructor(
                     }
                 }
                 matrix.mapRect(r)
+                cachedBounds = r
                 return r
             }
+        
+        override fun invalidateCache() {
+            cachedBounds = null
+        }
     }
 
     data class ClusterResult(
@@ -222,6 +243,7 @@ class DrawingView @JvmOverloads constructor(
             }
             is StrokeItem -> {}
         }
+        item.invalidateCache()
     }
 
     private fun applyStyle(item: CanvasItem, property: String, value: Any?) {
@@ -290,8 +312,10 @@ class DrawingView @JvmOverloads constructor(
 
     /** Called once each time the user lifts their finger after a stroke. */
     var onStrokeCompleted: (() -> Unit)? = null
+    var onWordModified: ((WordItem) -> Unit)? = null
     var onStateChanged: (() -> Unit)? = null
     var onShowItemColorPicker: ((CanvasItem) -> Unit)? = null
+    var onPageAdded: (() -> Unit)? = null
 
     
     private val selectionPaint = Paint().apply {
@@ -341,6 +365,8 @@ class DrawingView @JvmOverloads constructor(
         isAntiAlias = true
     }
 
+    private val tempWordBgPaint = Paint()
+
     private var currentPaint = buildPaint()
 
     // Original background image if loaded from file
@@ -358,13 +384,14 @@ class DrawingView @JvmOverloads constructor(
     /** Maps screen-space → canvas-space (inverse of viewMatrix) */
     private val inverseMatrix = Matrix()
 
-    private var scaleFactor = 1.0f
-    private var translateX = 0f
-    private var translateY = 0f
+    var scaleFactor = 1.0f
+    var translateX = -120f
+    var translateY = 0f
 
     // Zoom limits
     private val MIN_ZOOM = 0.25f
-    private val MAX_ZOOM = 4.0f
+    private val MAX_ZOOM: Float
+        get() = if (notebookType == NotebookType.WHITEBOARD) 100.0f else 5.0f
 
     // Multi-touch state
     private var isDrawing = false
@@ -474,6 +501,43 @@ class DrawingView @JvmOverloads constructor(
     )
 
     private fun updateMatrix() {
+        if (notebookType == NotebookType.NOTEBOOK && width > 0 && height > 0) {
+            val totalHeight = numPages * PAGE_HEIGHT + (numPages - 1) * PAGE_MARGIN
+            val screenW = width.toFloat()
+            val screenH = height.toFloat()
+            val margin = 300f * scaleFactor
+            
+            // X clamping
+            val contentW = PAGE_WIDTH * scaleFactor
+            if (contentW < screenW) {
+                translateX = (screenW - contentW) / 2f
+            } else {
+                translateX = translateX.coerceIn(screenW - contentW - margin, margin)
+            }
+            
+            // Y clamping
+            val contentH = totalHeight * scaleFactor
+            if (contentH < screenH) {
+                // If content is smaller than screen, we can still pan a bit or center it.
+                // Let's center it if it's much smaller, otherwise allow some panning.
+                if (contentH < screenH * 0.8f) {
+                    translateY = (screenH - contentH) / 2f
+                } else {
+                    translateY = translateY.coerceIn(screenH - contentH - margin, margin)
+                }
+            } else {
+                val minTranslateY = screenH - contentH - margin
+                
+                // Auto-create page if we reach the bottom
+                if (translateY <= minTranslateY + 500f) {
+                    numPages++
+                    onPageAdded?.invoke()
+                }
+                
+                translateY = translateY.coerceIn(minTranslateY, margin)
+            }
+        }
+
         viewMatrix.reset()
         viewMatrix.postScale(scaleFactor, scaleFactor)
         viewMatrix.postTranslate(translateX, translateY)
@@ -532,10 +596,25 @@ class DrawingView @JvmOverloads constructor(
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
 
-        // 1. Fill background
-        canvas.drawColor(canvasBackgroundColor)
+        // 1. Fill background (dark for notebook, canvas color for whiteboard)
+        if (notebookType == NotebookType.NOTEBOOK) {
+            canvas.drawColor(Color.parseColor("#1A1A2E")) // Dark desk color
+        } else {
+            canvas.drawColor(canvasBackgroundColor)
+        }
 
-        // 2. Draw paper lines relative to viewport (infinite appearance)
+        // 2. Draw paper relative to viewport
+        if (notebookType == NotebookType.NOTEBOOK) {
+            canvas.save()
+            canvas.concat(viewMatrix)
+            for (i in 0 until numPages) {
+                val top = i * (PAGE_HEIGHT + PAGE_MARGIN)
+                val rect = RectF(0f, top, PAGE_WIDTH, top + PAGE_HEIGHT)
+                canvas.drawRect(rect, pageBgPaint)
+            }
+            canvas.restore()
+        }
+        
         drawPaperLines(canvas)
 
         // 3. Apply view transform for all canvas-space content
@@ -547,78 +626,83 @@ class DrawingView @JvmOverloads constructor(
             canvas.drawBitmap(it, 0f, 0f, null)
         }
 
-        // 5. Draw all committed items
+        val viewport = getViewportCanvasRect()
+
+        // 5. Draw all committed items (with culling)
         for (item in drawItems) {
-            when (item) {
-                is StrokeItem -> canvas.drawPath(item.path, item.paint)
-                is ImageItem -> {
-                    canvas.save()
-                    canvas.concat(item.matrix)
+            if (RectF.intersects(item.bounds, viewport)) {
+                when (item) {
+                    is StrokeItem -> canvas.drawPath(item.path, item.paint)
+                    is ImageItem -> {
+                        canvas.save()
+                        canvas.concat(item.matrix)
 
-                    if (item.isShowingText && item.text.isNotEmpty()) {
-                        drawImageText(canvas, item)
-                    } else {
-                        canvas.drawBitmap(item.displayBitmap, 0f, 0f, null)
-                    }
-                    canvas.restore()
-
-                    if (item == selectedImage) {
-                        drawSelectionBox(canvas, item)
-                    }
-                }
-                is WordItem -> {
-                    canvas.save()
-                    canvas.concat(item.matrix)
-
-                    if (item.backgroundColor != null) {
-                        val bgPaint = Paint().apply { color = item.backgroundColor!!; style = Paint.Style.FILL }
-                        val localRect = RectF()
-                        if (item.strokes.isNotEmpty()) {
-                            localRect.set(item.strokes[0].bounds)
-                            for (i in 1 until item.strokes.size) {
-                                localRect.union(item.strokes[i].bounds)
-                            }
+                        if (item.isShowingText && item.text.isNotEmpty()) {
+                            drawImageText(canvas, item)
+                        } else {
+                            canvas.drawBitmap(item.displayBitmap, 0f, 0f, null)
                         }
-                        canvas.drawRect(localRect, bgPaint)
-                    }
-                    
-                    // Draw search highlight if this is the focused word
-                    if (item == searchHighlightedWord) {
-                        val localBounds = item.bounds // This uses the full matrix calculation
-                        // But for highlight we want to draw in the word's space
-                        // Actually WordItem.bounds is already in world space if we don't concat.
-                        // Since we ALREADY concatted item.matrix, we should draw in local space.
-                        val localBoundsRect = RectF()
-                        if (item.strokes.isNotEmpty()) {
-                            localBoundsRect.set(item.strokes[0].bounds)
-                            for (i in 1 until item.strokes.size) {
-                                localBoundsRect.union(item.strokes[i].bounds)
-                            }
-                        }
-                        canvas.drawRect(localBoundsRect, searchHighlightPaint)
-                    }
+                        canvas.restore()
 
-                    if (item.isShowingText && item.text.isNotEmpty()) {
-                        drawWordText(canvas, item)
-                    } else {
-                        val wordPaint = if (item.tintColor != null) {
-                            Paint().apply { 
-                                color = item.tintColor!!
-                                style = Paint.Style.STROKE
-                                strokeWidth = item.strokes.firstOrNull()?.paint?.strokeWidth ?: 5f
-                                isAntiAlias = true
-                                strokeCap = Paint.Cap.ROUND
-                                strokeJoin = Paint.Join.ROUND
-                            }
-                        } else null
-
-                        for (stroke in item.strokes) {
-                            canvas.drawPath(stroke.path, wordPaint ?: stroke.paint)
+                        if (item == selectedImage) {
+                            drawSelectionBox(canvas, item)
                         }
                     }
-                    canvas.restore()
-                    if (item == selectedWord) {
-                        drawSelectionBox(canvas, item)
+                    is WordItem -> {
+                        canvas.save()
+                        canvas.concat(item.matrix)
+
+                        if (item.backgroundColor != null) {
+                            tempWordBgPaint.color = item.backgroundColor!!
+                            tempWordBgPaint.style = Paint.Style.FILL
+                            val localRect = RectF()
+                            if (item.strokes.isNotEmpty()) {
+                                localRect.set(item.strokes[0].bounds)
+                                for (i in 1 until item.strokes.size) {
+                                    localRect.union(item.strokes[i].bounds)
+                                }
+                            }
+                            canvas.drawRect(localRect, tempWordBgPaint)
+                        }
+                        
+                        // Draw search highlight if this is the focused word
+                        if (item == searchHighlightedWord) {
+                            val localBounds = item.bounds // This uses the full matrix calculation
+                            // But for highlight we want to draw in the word's space
+                            // Actually WordItem.bounds is already in world space if we don't concat.
+                            // Since we ALREADY concatted item.matrix, we should draw in local space.
+                            val localBoundsRect = RectF()
+                            if (item.strokes.isNotEmpty()) {
+                                localBoundsRect.set(item.strokes[0].bounds)
+                                for (i in 1 until item.strokes.size) {
+                                    localBoundsRect.union(item.strokes[i].bounds)
+                                }
+                            }
+                            canvas.drawRect(localBoundsRect, searchHighlightPaint)
+                        }
+
+                        if (item.isShowingText && item.text.isNotEmpty()) {
+                            drawWordText(canvas, item)
+                        } else {
+                            val wordPaint = if (item.tintColor != null) {
+                                Paint().apply { 
+                                    color = item.tintColor!!
+                                    style = Paint.Style.STROKE
+                                    strokeWidth = item.strokes.firstOrNull()?.paint?.strokeWidth ?: 5f
+                                    isAntiAlias = true
+                                    strokeCap = Paint.Cap.ROUND
+                                    strokeJoin = Paint.Join.ROUND
+                                }
+                            } else null
+
+                            for (stroke in item.strokes) {
+                                canvas.drawPath(stroke.path, wordPaint ?: stroke.paint)
+                            }
+                        }
+                        canvas.restore()
+                        if (item == selectedWord) {
+                            drawSelectionBox(canvas, item)
+                        }
                     }
                 }
             }
@@ -628,7 +712,6 @@ class DrawingView @JvmOverloads constructor(
         if (isDrawing) {
             canvas.drawPath(currentPath, currentPaint)
         }
-
 
         canvas.restore()
     }
@@ -852,53 +935,95 @@ class DrawingView @JvmOverloads constructor(
         val h = height.toFloat()
         if (w <= 0 || h <= 0) return
 
-        val lineSpacing = 100f
-        val gridSpacing = 80f
-
-        val topLeft = screenToCanvas(0f, 0f)
-        val bottomRight = screenToCanvas(w, h)
-
-        val canvasLeft = topLeft[0]
-        val canvasTop = topLeft[1]
-        val canvasRight = bottomRight[0]
-        val canvasBottom = bottomRight[1]
-
-        val adjustedLinePaint = Paint(linePaint).apply { strokeWidth = 2f / scaleFactor }
-        val adjustedMarginPaint = Paint(marginPaint).apply { strokeWidth = 3f / scaleFactor }
+        val viewport = getViewportCanvasRect()
 
         canvas.save()
         canvas.concat(viewMatrix)
 
-        if (backgroundType == BackgroundType.RULED) {
-            val firstLineY = (Math.ceil((canvasTop / lineSpacing).toDouble()) * lineSpacing).toFloat()
-            var y = firstLineY
-            while (y < canvasBottom) {
-                canvas.drawLine(canvasLeft, y, canvasRight, y, adjustedLinePaint)
-                y += lineSpacing
+        if (notebookType == NotebookType.NOTEBOOK) {
+            for (i in 0 until numPages) {
+                val top = i * (PAGE_HEIGHT + PAGE_MARGIN)
+                val rect = RectF(0f, top, PAGE_WIDTH, top + PAGE_HEIGHT)
+                if (RectF.intersects(rect, viewport)) {
+                    drawLinesOnRect(canvas, rect)
+                }
             }
-
-            val marginX = 120f
-            if (marginX in canvasLeft..canvasRight) {
-                canvas.drawLine(marginX, canvasTop, marginX, canvasBottom, adjustedMarginPaint)
-            }
-        } else if (backgroundType == BackgroundType.GRAPH) {
-            // Horizontal lines
-            val firstLineY = (Math.ceil((canvasTop / gridSpacing).toDouble()) * gridSpacing).toFloat()
-            var y = firstLineY
-            while (y < canvasBottom) {
-                canvas.drawLine(canvasLeft, y, canvasRight, y, adjustedLinePaint)
-                y += gridSpacing
-            }
-            // Vertical lines
-            val firstLineX = (Math.ceil((canvasLeft / gridSpacing).toDouble()) * gridSpacing).toFloat()
-            var x = firstLineX
-            while (x < canvasRight) {
-                canvas.drawLine(x, canvasTop, x, canvasBottom, adjustedLinePaint)
-                x += gridSpacing
-            }
+        } else {
+            // Infinite whiteboard lines
+            drawLinesOnRect(canvas, viewport, isInfinite = true)
         }
 
         canvas.restore()
+    }
+
+    private val tempLinePaint = Paint()
+    private val tempMarginPaint = Paint()
+
+    private fun drawLinesOnRect(canvas: Canvas, rect: RectF, isInfinite: Boolean = false) {
+        val lineSpacing = if (notebookType == NotebookType.NOTEBOOK) 50f else 25f
+        val gridSpacing = if (notebookType == NotebookType.NOTEBOOK) 40f else 20f
+        
+        tempLinePaint.set(linePaint)
+        tempLinePaint.strokeWidth = 2f / scaleFactor
+        
+        tempMarginPaint.set(marginPaint)
+        tempMarginPaint.strokeWidth = 3f / scaleFactor
+
+        if (backgroundType == BackgroundType.RULED) {
+            val firstLineY = (Math.ceil((rect.top / lineSpacing).toDouble()) * lineSpacing).toFloat()
+            if (firstLineY.isNaN()) return
+            var y = if (isInfinite) firstLineY else max(firstLineY, rect.top + lineSpacing)
+            var count = 0
+            while (y < rect.bottom && count < 2000) {
+                canvas.drawLine(rect.left, y, rect.right, y, tempLinePaint)
+                y += lineSpacing
+                count++
+            }
+
+            val marginX = if (isInfinite) 120f else rect.left + 320f
+            if (marginX in rect.left..rect.right) {
+                canvas.drawLine(marginX, rect.top, marginX, rect.bottom, tempMarginPaint)
+            }
+        } else if (backgroundType == BackgroundType.GRAPH) {
+            // Horizontal lines
+            val firstLineY = (Math.ceil((rect.top / gridSpacing).toDouble()) * gridSpacing).toFloat()
+            if (firstLineY.isNaN()) return
+            var y = firstLineY
+            var countH = 0
+            while (y < rect.bottom && countH < 2000) {
+                canvas.drawLine(rect.left, y, rect.right, y, tempLinePaint)
+                y += gridSpacing
+                countH++
+            }
+            // Vertical lines
+            val firstLineX = (Math.ceil((rect.left / gridSpacing).toDouble()) * gridSpacing).toFloat()
+            if (firstLineX.isNaN()) return
+            var x = firstLineX
+            var countV = 0
+            while (x < rect.right && countV < 2000) {
+                canvas.drawLine(x, rect.top, x, rect.bottom, tempLinePaint)
+                x += gridSpacing
+                countV++
+            }
+        }
+    }
+
+    private fun getViewportCanvasRect(): RectF {
+        if (width <= 0 || height <= 0) return RectF()
+        val pts = floatArrayOf(
+            0f, 0f, 
+            width.toFloat(), 0f, 
+            0f, height.toFloat(), 
+            width.toFloat(), height.toFloat()
+        )
+        inverseMatrix.mapPoints(pts)
+        var l = pts[0]; var r = pts[0]; var t = pts[1]; var b = pts[1]
+        for (i in 2 until pts.size step 2) {
+            if (pts[i].isNaN() || pts[i].isInfinite()) continue
+            l = min(l, pts[i]); r = max(r, pts[i])
+            t = min(t, pts[i+1]); b = max(b, pts[i+1])
+        }
+        return RectF(l, t, r, b)
     }
 
 
@@ -1148,6 +1273,7 @@ class DrawingView @JvmOverloads constructor(
                     val dy = canvasCoords[1] - lastCanvasCoords[1]
                     
                     targetMatrix.postTranslate(dx, dy)
+                    (selectedImage ?: selectedWord)?.invalidateCache()
                     
                     lastPanX = event.x
                     lastPanY = event.y
@@ -1228,7 +1354,18 @@ class DrawingView @JvmOverloads constructor(
         return true
     }
 
+    private var hasErasedLooseStrokes = false
+    private val erasedWordsDuringStroke = mutableSetOf<WordItem>()
+
     private fun touchStart(x: Float, y: Float) {
+        if (isEraser) {
+            erasedWordsDuringStroke.clear()
+            hasErasedLooseStrokes = false
+            eraseIntersectingItems(x, y)
+            lastX = x
+            lastY = y
+            return
+        }
         currentPath = Path()
         currentCommands = mutableListOf()
         currentPoints.clear()
@@ -1240,6 +1377,17 @@ class DrawingView @JvmOverloads constructor(
     }
 
     private fun touchMove(x: Float, y: Float) {
+        if (isEraser) {
+            val dx = x - lastX
+            val dy = y - lastY
+            // Only erase if we moved a bit, to avoid too many checks, though every move is fine.
+            if (abs(dx) >= TOUCH_TOLERANCE / scaleFactor || abs(dy) >= TOUCH_TOLERANCE / scaleFactor) {
+                eraseIntersectingItems(x, y)
+                lastX = x
+                lastY = y
+            }
+            return
+        }
         val dx = abs(x - lastX)
         val dy = abs(y - lastY)
         if (dx >= TOUCH_TOLERANCE / scaleFactor || dy >= TOUCH_TOLERANCE / scaleFactor) {
@@ -1254,6 +1402,17 @@ class DrawingView @JvmOverloads constructor(
     }
 
     private fun touchUp() {
+        if (isEraser) {
+            if (hasErasedLooseStrokes) {
+                onStrokeCompleted?.invoke()
+            }
+            for (word in erasedWordsDuringStroke) {
+                onWordModified?.invoke(word)
+            }
+            erasedWordsDuringStroke.clear()
+            hasErasedLooseStrokes = false
+            return
+        }
         currentPath.lineTo(lastX, lastY)
         currentPoints.add(PointF(lastX, lastY))
 
@@ -1408,19 +1567,33 @@ class DrawingView @JvmOverloads constructor(
     fun deleteSelectedImage() = deleteSelectedItem()
 
     fun groupStrokesIntoWord(strokesToGroup: List<StrokeItem>, text: String, wordsToMerge: List<WordItem> = emptyList()): WordItem? {
-        val stillInCanvas = strokesToGroup.filter { it in drawItems }
-        if (stillInCanvas.isEmpty() && wordsToMerge.isEmpty()) return null
+        val stillInCanvasLoose = strokesToGroup.filter { it in drawItems }
+        val stillInCanvasWords = wordsToMerge.filter { it in drawItems }
         
+        if (stillInCanvasLoose.isEmpty() && stillInCanvasWords.isEmpty()) return null
+        
+        val finalStrokes = mutableListOf<StrokeItem>()
+        finalStrokes.addAll(stillInCanvasLoose)
+        for (word in stillInCanvasWords) {
+            finalStrokes.addAll(dissolveWordToStrokes(word))
+        }
+
         // Calculate initial text orientation and bounds
-        val (writingAngle, center) = calculateWritingAngle(stillInCanvas)
-        val textBounds = calculateRotatedBounds(stillInCanvas, writingAngle, center)
+        val (writingAngle, center) = calculateWritingAngle(finalStrokes)
+        val textBounds = calculateRotatedBounds(finalStrokes, writingAngle, center)
         val textMatrix = Matrix()
         textMatrix.postRotate(writingAngle, center.x, center.y)
 
         // Create WordItem with identity matrix (strokes are already in canvas space)
-        val wordItem = WordItem(stillInCanvas, Matrix(), text, false, textMatrix, textBounds)
+        val wordItem = WordItem(finalStrokes, Matrix(), text, false, textMatrix, textBounds)
         
-        pushAction(GroupAction(stillInCanvas, wordsToMerge, wordItem))
+        // Preserve tint/background color from the first merged word
+        stillInCanvasWords.firstOrNull()?.let { firstWord ->
+            wordItem.tintColor = firstWord.tintColor
+            wordItem.backgroundColor = firstWord.backgroundColor
+        }
+
+        pushAction(GroupAction(stillInCanvasLoose, stillInCanvasWords, wordItem))
         invalidate()
         return wordItem
     }
@@ -1531,7 +1704,7 @@ class DrawingView @JvmOverloads constructor(
         selectedWord = null
         searchHighlightedWord = null
         scaleFactor = 1.0f
-        translateX = 0f
+        translateX = -120f
         translateY = 0f
         updateMatrix()
         invalidate()
@@ -1550,32 +1723,152 @@ class DrawingView @JvmOverloads constructor(
         invalidate()
     }
 
-    fun getWordItems(): List<WordItem> {
-        return drawItems.filterIsInstance<WordItem>()
-    }
-
-    fun getItemAtIndex(index: Int): CanvasItem? {
-        if (index >= 0 && index < drawItems.size) {
-            return drawItems[index]
+    fun loadFromSvgDataWithOffset(items: List<SvgData>, dy: Float) {
+        val loadedItems = mutableListOf<CanvasItem>()
+        for (data in items) {
+            val item = when (data) {
+                is StrokeData -> {
+                    val path = Path()
+                    for (cmd in data.commands) {
+                        when (cmd) {
+                            is PathCommand.MoveTo -> path.moveTo(cmd.x, cmd.y)
+                            is PathCommand.QuadTo -> path.quadTo(cmd.x1, cmd.y1, cmd.x2, cmd.y2)
+                            is PathCommand.CubicTo -> path.cubicTo(cmd.x1, cmd.y1, cmd.x2, cmd.y2, cmd.x3, cmd.y3)
+                            is PathCommand.LineTo -> path.lineTo(cmd.x, cmd.y)
+                        }
+                    }
+                    path.offset(0f, dy)
+                    val paint = Paint().apply {
+                        color = data.color
+                        strokeWidth = data.strokeWidth
+                        alpha = data.opacity
+                        style = Paint.Style.STROKE
+                        strokeJoin = Paint.Join.ROUND
+                        strokeCap = Paint.Cap.ROUND
+                        isAntiAlias = true
+                    }
+                    val bounds = RectF()
+                    path.computeBounds(bounds, true)
+                    val halfWidth = paint.strokeWidth / 2f
+                    bounds.inset(-halfWidth, -halfWidth)
+                    
+                    // Also shift the commands for saving back later
+                    val shiftedCommands = data.commands.map { cmd ->
+                        when (cmd) {
+                            is PathCommand.MoveTo -> PathCommand.MoveTo(cmd.x, cmd.y + dy)
+                            is PathCommand.QuadTo -> PathCommand.QuadTo(cmd.x1, cmd.y1 + dy, cmd.x2, cmd.y2 + dy)
+                            is PathCommand.CubicTo -> PathCommand.CubicTo(cmd.x1, cmd.y1 + dy, cmd.x2, cmd.y2 + dy, cmd.x3, cmd.y3 + dy)
+                            is PathCommand.LineTo -> PathCommand.LineTo(cmd.x, cmd.y + dy)
+                        }
+                    }
+                    
+                    StrokeItem(path, paint, bounds, shiftedCommands, data.isEraser)
+                }
+                is ImageData -> {
+                    val decodedString = android.util.Base64.decode(data.base64, android.util.Base64.DEFAULT)
+                    val bmp = android.graphics.BitmapFactory.decodeByteArray(decodedString, 0, decodedString.size)
+                    if (bmp != null) {
+                        val matrix = Matrix()
+                        matrix.setValues(data.matrix)
+                        matrix.postTranslate(0f, dy)
+                        
+                        val textMatrix = Matrix()
+                        textMatrix.setValues(data.textMatrix)
+                        // Note: textMatrix is usually local to the image, but if it has translation it might need shifting?
+                        // Actually, textMatrix in ImageItem is usually local.
+                        
+                        ImageItem(bmp, matrix, data.removeBackground, data.text, data.isShowingText, textMatrix, data.textBounds?.let { RectF(it.left, it.top, it.right, it.bottom) } ?: RectF())
+                    } else null
+                }
+                is WordData -> {
+                    val strokes = mutableListOf<StrokeItem>()
+                    for (sData in data.strokes) {
+                        val path = Path()
+                        for (cmd in sData.commands) {
+                            when (cmd) {
+                                is PathCommand.MoveTo -> path.moveTo(cmd.x, cmd.y)
+                                is PathCommand.QuadTo -> path.quadTo(cmd.x1, cmd.y1, cmd.x2, cmd.y2)
+                                is PathCommand.CubicTo -> path.cubicTo(cmd.x1, cmd.y1, cmd.x2, cmd.y2, cmd.x3, cmd.y3)
+                                is PathCommand.LineTo -> path.lineTo(cmd.x, cmd.y)
+                            }
+                        }
+                        // Word strokes are in local space? No, usually canvas space.
+                        // Wait, WordItem.matrix handles the transform.
+                        // Let's assume strokes are local to the word if matrix is used.
+                        // Actually, looking at groupStrokesIntoWord, strokes are already in canvas space and matrix is identity.
+                        
+                        val paint = Paint().apply {
+                            color = sData.color; strokeWidth = sData.strokeWidth; alpha = sData.opacity
+                            style = Paint.Style.STROKE; strokeJoin = Paint.Join.ROUND; strokeCap = Paint.Cap.ROUND; isAntiAlias = true
+                        }
+                        val bounds = RectF()
+                        path.computeBounds(bounds, true)
+                        strokes.add(StrokeItem(path, paint, bounds, sData.commands, sData.isEraser))
+                    }
+                    val matrix = Matrix()
+                    matrix.setValues(data.matrix)
+                    matrix.postTranslate(0f, dy)
+                    
+                    val textMatrix = Matrix()
+                    textMatrix.setValues(data.textMatrix)
+                    
+                    WordItem(strokes, matrix, data.text, data.isShowingText, textMatrix, data.textBounds?.let { RectF(it.left, it.top, it.right, it.bottom) } ?: RectF(), data.tintColor, data.backgroundColor)
+                }
+                else -> null
+            }
+            item?.let { loadedItems.add(it) }
         }
-        return null
+        drawItems.addAll(loadedItems)
+        invalidate()
     }
 
-    fun getBitmap(): Bitmap? {
-        if (width <= 0 || height <= 0) return null
-        val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        val c = Canvas(bmp)
-        draw(c)
-        return bmp
+    fun hasItemsOnPage(pageIndex: Int): Boolean {
+        val top = pageIndex * (PAGE_HEIGHT + PAGE_MARGIN)
+        val bottom = top + PAGE_HEIGHT
+        val pageRect = RectF(0f, top, PAGE_WIDTH, bottom)
+        return drawItems.any { RectF.intersects(it.bounds, pageRect) }
     }
 
-    fun getContentBounds(): RectF? {
-        if (drawItems.isEmpty()) return null
-        val result = RectF(drawItems[0].bounds)
-        for (i in 1 until drawItems.size) {
-            result.union(drawItems[i].bounds)
+    fun getItemsOnPage(pageIndex: Int): List<CanvasItem> {
+        val top = pageIndex * (PAGE_HEIGHT + PAGE_MARGIN)
+        val bottom = top + PAGE_HEIGHT
+        return drawItems.filter { item ->
+            val b = item.bounds
+            b.centerY() in top..bottom
         }
-        return result
+    }
+
+    fun getShiftedItemsOnPage(pageIndex: Int): List<CanvasItem> {
+        val dy = -(pageIndex * (PAGE_HEIGHT + PAGE_MARGIN))
+        return getItemsOnPage(pageIndex).map { item ->
+            when (item) {
+                is StrokeItem -> {
+                    val newPath = Path(item.path)
+                    newPath.offset(0f, dy)
+                    val newBounds = RectF(item.boundsRect)
+                    newBounds.offset(0f, dy)
+                    val newCommands = item.commands.map { cmd ->
+                        when (cmd) {
+                            is PathCommand.MoveTo -> PathCommand.MoveTo(cmd.x, cmd.y + dy)
+                            is PathCommand.LineTo -> PathCommand.LineTo(cmd.x, cmd.y + dy)
+                            is PathCommand.QuadTo -> PathCommand.QuadTo(cmd.x1, cmd.y1 + dy, cmd.x2, cmd.y2 + dy)
+                            is PathCommand.CubicTo -> PathCommand.CubicTo(cmd.x1, cmd.y1 + dy, cmd.x2, cmd.y2 + dy, cmd.x3, cmd.y3 + dy)
+                        }
+                    }
+                    item.copy(path = newPath, boundsRect = newBounds, commands = newCommands)
+                }
+                is ImageItem -> {
+                    val newMatrix = Matrix(item.matrix)
+                    newMatrix.postTranslate(0f, dy)
+                    item.copy(matrix = newMatrix)
+                }
+                is WordItem -> {
+                    val newMatrix = Matrix(item.matrix)
+                    newMatrix.postTranslate(0f, dy)
+                    item.copy(matrix = newMatrix)
+                }
+            }
+        }
     }
 
     // --- Cropped Bitmap for Recognition ---
@@ -1592,25 +1885,52 @@ class DrawingView @JvmOverloads constructor(
         val bottom = bounds.bottom + margin
         
         val cropRect = RectF(left, top, right, bottom)
+        
+        val bmp = createBitmapForStrokes(strokes) ?: return null
+        
+        return ClusterResult(bmp, strokes, mergedWords, cropRect)
+    }
+
+    fun createBitmapForStrokes(strokes: List<StrokeItem>): Bitmap? {
+        val bounds = getRecentClusterBounds(strokes)
+        
+        val margin = 40f
+        val left = bounds.left - margin
+        val top = bounds.top - margin
+        val right = bounds.right + margin
+        val bottom = bounds.bottom + margin
+        
+        val cropRect = RectF(left, top, right, bottom)
         val cropWidth = cropRect.width().toInt()
         val cropHeight = cropRect.height().toInt()
         if (cropWidth < 10 || cropHeight < 10) return null
 
+        val maxDim = 1024
+        var finalWidth = cropWidth
+        var finalHeight = cropHeight
+        var scale = 1f
+        if (finalWidth > maxDim || finalHeight > maxDim) {
+            scale = maxDim.toFloat() / Math.max(finalWidth, finalHeight)
+            finalWidth = (finalWidth * scale).toInt()
+            finalHeight = (finalHeight * scale).toInt()
+        }
 
-        val bmp = Bitmap.createBitmap(cropWidth, cropHeight, Bitmap.Config.ARGB_8888)
+        if (finalWidth < 1 || finalHeight < 1) return null
+        val bmp = Bitmap.createBitmap(finalWidth, finalHeight, Bitmap.Config.ARGB_8888)
         val c = Canvas(bmp)
         c.drawColor(canvasBackgroundColor)
         
+        c.scale(scale, scale)
         c.translate(-left, -top)
         
-        // Draw the strokes in the cluster.
-        // These strokes are already in canvas space.
         for (stroke in strokes) {
             c.drawPath(stroke.path, stroke.paint)
         }
         
-        return ClusterResult(bmp, strokes, mergedWords, cropRect)
+        return bmp
     }
+    // Removed create bitmap logic since it's now in createBitmapForStrokes
+
 
     @Deprecated("Use getRecentClusterWithStrokes instead")
     fun getRecentClusterBitmap(): Bitmap? = getRecentClusterWithStrokes()?.bitmap
@@ -1664,7 +1984,7 @@ class DrawingView @JvmOverloads constructor(
         return RectF.intersects(near, b2)
     }
 
-    private fun dissolveWordToStrokes(word: WordItem): List<StrokeItem> {
+    fun dissolveWordToStrokes(word: WordItem): List<StrokeItem> {
         return word.strokes.map { stroke ->
             val newPath = Path(stroke.path)
             newPath.transform(word.matrix)
@@ -1926,6 +2246,47 @@ class DrawingView @JvmOverloads constructor(
         dialog.show()
     }
 
+    fun getItemAtIndex(index: Int): CanvasItem? = drawItems.getOrNull(index)
+
+    fun getContentBounds(): RectF? {
+        if (drawItems.isEmpty()) return null
+        val result = RectF()
+        var first = true
+        for (item in drawItems) {
+            val b = item.bounds
+            if (b.isEmpty) continue
+            if (first) {
+                result.set(b)
+                first = false
+            } else {
+                result.union(b)
+            }
+        }
+        return if (first) null else result
+    }
+
+    fun CanvasItem.toSvgData(): SvgData? {
+        return when (this) {
+            is StrokeItem -> StrokeData(commands, paint.color, paint.strokeWidth, paint.alpha, isEraser)
+            is ImageItem -> {
+                val stream = ByteArrayOutputStream()
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
+                val base64 = Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
+                val m = FloatArray(9); matrix.getValues(m)
+                val tm = FloatArray(9); textMatrix.getValues(tm)
+                val tb = FloatRect(textBounds.left, textBounds.top, textBounds.right, textBounds.bottom)
+                ImageData(base64, m, removeBackground, text, isShowingText, tm, tb)
+            }
+            is WordItem -> {
+                val sData = strokes.map { StrokeData(it.commands, it.paint.color, it.paint.strokeWidth, it.paint.alpha, it.isEraser) }
+                val m = FloatArray(9); matrix.getValues(m)
+                val tm = FloatArray(9); textMatrix.getValues(tm)
+                val tb = FloatRect(textBounds.left, textBounds.top, textBounds.right, textBounds.bottom)
+                WordData(sData, m, text, isShowingText, tm, tb, tintColor, backgroundColor)
+            }
+        }
+    }
+
     fun centerOnContent() {
         val bounds = getContentBounds() ?: return
         val viewW = width.toFloat()
@@ -2042,5 +2403,115 @@ class DrawingView @JvmOverloads constructor(
         if (item is WordItem) hitBounds.inset(-20f, -20f)
         
         return hitBounds.contains(localCoords[0], localCoords[1])
+    }
+
+    inner class ModifyWordStrokesAction(
+        val word: WordItem,
+        val oldStrokes: List<StrokeItem>,
+        val newStrokes: List<StrokeItem>
+    ) : UndoAction {
+        override fun undo() { word.strokes = oldStrokes; word.invalidateCache(); invalidate() }
+        override fun redo() { word.strokes = newStrokes; word.invalidateCache(); invalidate() }
+    }
+
+    private fun eraseIntersectingItems(canvasX: Float, canvasY: Float) {
+        val eraserRadius = brushSize * 1.5f
+        val itemsToRemove = mutableListOf<CanvasItem>()
+        val wordsToModify = mutableListOf<Pair<WordItem, StrokeItem>>()
+        
+        for (item in drawItems.reversed()) {
+            if (item is StrokeItem) {
+                if (isStrokeHit(item, canvasX, canvasY, eraserRadius)) {
+                    itemsToRemove.add(item)
+                }
+            } else if (item is WordItem) {
+                val strokeInv = Matrix()
+                item.matrix.invert(strokeInv)
+                val strokeLocal = floatArrayOf(canvasX, canvasY)
+                strokeInv.mapPoints(strokeLocal)
+                
+                var hitStroke: StrokeItem? = null
+                for (stroke in item.strokes) {
+                    if (isStrokeHit(stroke, strokeLocal[0], strokeLocal[1], eraserRadius)) {
+                        hitStroke = stroke
+                        break
+                    }
+                }
+                if (hitStroke != null) {
+                    wordsToModify.add(Pair(item, hitStroke))
+                }
+            } else if (item is ImageItem) {
+                if (isItemHit(item, canvasX, canvasY)) {
+                    itemsToRemove.add(item)
+                }
+            }
+        }
+        
+        var changed = false
+        if (itemsToRemove.isNotEmpty()) {
+            for (item in itemsToRemove) {
+                val index = drawItems.indexOf(item)
+                if (index != -1) {
+                    pushAction(RemoveItemAction(item, index), executeNow = true)
+                    changed = true
+                    if (item is StrokeItem) hasErasedLooseStrokes = true
+                }
+            }
+        }
+
+        if (wordsToModify.isNotEmpty()) {
+            for ((word, hitStroke) in wordsToModify) {
+                val newStrokes = word.strokes.filter { it != hitStroke }
+                if (newStrokes.isEmpty()) {
+                    val index = drawItems.indexOf(word)
+                    if (index != -1) {
+                        pushAction(RemoveItemAction(word, index), executeNow = true)
+                        erasedWordsDuringStroke.remove(word)
+                        changed = true
+                    }
+                } else {
+                    pushAction(ModifyWordStrokesAction(word, word.strokes, newStrokes), executeNow = true)
+                    word.strokes = newStrokes
+                    word.invalidateCache()
+                    erasedWordsDuringStroke.add(word)
+                    changed = true
+                }
+            }
+        }
+        
+        if (changed) {
+            invalidate()
+        }
+    }
+
+    private fun isStrokeHit(item: StrokeItem, x: Float, y: Float, radius: Float): Boolean {
+        if (!RectF.intersects(item.bounds, RectF(x - radius, y - radius, x + radius, y + radius))) return false
+        
+        var lastPt: PointF? = null
+        for (cmd in item.commands) {
+            val pt = when (cmd) {
+                is PathCommand.MoveTo -> PointF(cmd.x, cmd.y)
+                is PathCommand.LineTo -> PointF(cmd.x, cmd.y)
+                is PathCommand.QuadTo -> PointF(cmd.x2, cmd.y2)
+                is PathCommand.CubicTo -> PointF(cmd.x3, cmd.y3)
+            }
+            if (lastPt != null) {
+                if (distToSegment(x, y, lastPt.x, lastPt.y, pt.x, pt.y) <= radius) return true
+            } else {
+                if (Math.hypot((x - pt.x).toDouble(), (y - pt.y).toDouble()) <= radius) return true
+            }
+            lastPt = pt
+        }
+        return false
+    }
+
+    private fun distToSegment(px: Float, py: Float, x1: Float, y1: Float, x2: Float, y2: Float): Float {
+        val l2 = (x1 - x2) * (x1 - x2) + (y1 - y2) * (y1 - y2)
+        if (l2 == 0f) return Math.hypot((px - x1).toDouble(), (py - y1).toDouble()).toFloat()
+        var t = ((px - x1) * (x2 - x1) + (py - y1) * (y2 - y1)) / l2
+        t = Math.max(0f, Math.min(1f, t))
+        val projX = x1 + t * (x2 - x1)
+        val projY = y1 + t * (y2 - y1)
+        return Math.hypot((px - projX).toDouble(), (py - projY).toDouble()).toFloat()
     }
 }

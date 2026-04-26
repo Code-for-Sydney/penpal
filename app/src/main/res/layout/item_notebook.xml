@@ -26,6 +26,17 @@
             android:scaleType="centerCrop"
             android:background="@android:color/white" />
 
+        <ImageView
+            android:id="@+id/notebookTypeIcon"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:layout_gravity="top|end"
+            android:layout_margin="12dp"
+            android:padding="6dp"
+            android:background="@drawable/bg_circle_dark"
+            app:tint="#FFFFFF"
+            android:elevation="4dp" />
+
         <!-- Bottom bar for title and edit button -->
         <LinearLayout
             android:layout_width="match_parent"

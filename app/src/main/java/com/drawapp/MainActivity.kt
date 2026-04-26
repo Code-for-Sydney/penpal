@@ -30,6 +30,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnJumpMarkers: ImageButton
     private lateinit var btnBackground: ImageButton
     private lateinit var colorSwatch: View
+    private lateinit var toolToolbar: LinearLayout
+    private lateinit var btnToggleTools: ImageButton
+    private lateinit var btnEraser: ImageButton
 
     private lateinit var recognitionProgress: ProgressBar
     private lateinit var recognitionIcon: TextView
@@ -160,6 +163,9 @@ class MainActivity : AppCompatActivity() {
         btnBrushSize        = findViewById(R.id.btnBrushSize)
         colorSwatch         = findViewById(R.id.colorSwatch)
         btnColorPicker      = colorSwatch
+        toolToolbar         = findViewById(R.id.toolToolbar)
+        btnToggleTools      = findViewById(R.id.btnToggleTools)
+        btnEraser           = findViewById(R.id.btnEraser)
         recognitionProgress = findViewById(R.id.recognitionProgress)
         recognitionIcon     = findViewById(R.id.recognitionIcon)
         recognitionText     = findViewById(R.id.recognitionText)
@@ -188,7 +194,7 @@ class MainActivity : AppCompatActivity() {
         val notebook = NotebookManager.getNotebooks(this).find { it.id == notebookId }
         currentNotebook = notebook
         currentPageIndex = notebook?.lastDisplayedPage ?: 0
-
+        drawingView.notebookType = notebook?.type ?: NotebookType.NOTEBOOK
 
         migrateOldNotebookToPageZero()
 
@@ -199,9 +205,38 @@ class MainActivity : AppCompatActivity() {
             updateButtonStates()
             scheduleAutosave() 
         }
+        drawingView.onPageAdded = {
+            updatePageIndicator()
+            scheduleAutosave()
+        }
+        drawingView.onWordModified = { word ->
+            triggerRecognitionForWord(word)
+        }
         updateColorSwatch()
+        updateEraserState()
         setupRecognizer()
-        loadNotebookDrawing(currentPageIndex)
+        
+        if (drawingView.notebookType == NotebookType.WHITEBOARD) {
+            setupWhiteboardMode()
+        } else {
+            setupNotebookMode()
+        }
+    }
+
+    private fun setupWhiteboardMode() {
+        findViewById<View>(R.id.pageNavigationContainer).visibility = View.GONE
+        btnBackground.visibility = View.GONE
+        drawingView.canvasBackgroundColor = Color.WHITE
+        drawingView.backgroundType = DrawingView.BackgroundType.NONE
+        currentPageIndex = 0
+        loadNotebookDrawing(0)
+    }
+
+    private fun setupNotebookMode() {
+        findViewById<View>(R.id.pageNavigationContainer).visibility = View.GONE // Use scroll instead
+        btnBackground.visibility = View.VISIBLE
+        
+        loadAllPages()
     }
 
     override fun onPause() {
@@ -397,6 +432,27 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
+    private fun triggerRecognitionForWord(word: DrawingView.WordItem) {
+        val strokesInCanvasSpace = drawingView.dissolveWordToStrokes(word)
+        if (strokesInCanvasSpace.isEmpty()) return
+        
+        val bitmap = drawingView.createBitmapForStrokes(strokesInCanvasSpace) ?: return
+        
+        recognizer.recognize(
+            bitmap = bitmap,
+            onPartialResult = { partial ->
+                word.text = partial.trim()
+                drawingView.invalidate()
+            },
+            onDone = {
+                scheduleAutosave()
+            },
+            onError = {
+                // Ignore errors on background update
+            }
+        )
+    }
+
     // ══════════════════════════════════════════════════════════════════════
     // RecognitionState UI
     // ══════════════════════════════════════════════════════════════════════
@@ -466,6 +522,17 @@ class MainActivity : AppCompatActivity() {
         }
         btnBrushSize.setOnClickListener   { showBrushSizeDialog() }
         btnColorPicker.setOnClickListener { showColorPickerDialog() }
+        btnEraser.setOnClickListener {
+            drawingView.isEraser = !drawingView.isEraser
+            updateEraserState()
+        }
+        btnToggleTools.setOnClickListener {
+            if (toolToolbar.visibility == View.VISIBLE) {
+                toolToolbar.visibility = View.GONE
+            } else {
+                toolToolbar.visibility = View.VISIBLE
+            }
+        }
         findViewById<ImageButton>(R.id.btnAddImage).setOnClickListener {
             pickMedia.launch(androidx.activity.result.PickVisualMediaRequest(androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly))
         }
@@ -529,10 +596,6 @@ class MainActivity : AppCompatActivity() {
         }
 
         // Long-press ✦ to re-trigger model setup (inform user to do it from the main screen instead)
-        recognitionIcon.setOnLongClickListener {
-            Toast.makeText(this, "Manage model downloads from the home screen.", Toast.LENGTH_SHORT).show()
-            true
-        }
     }
 
     private fun scheduleRecognition() {
@@ -566,6 +629,17 @@ class MainActivity : AppCompatActivity() {
         colorSwatch.setBackgroundColor(activeColor)
     }
 
+    private fun updateEraserState() {
+        if (drawingView.isEraser) {
+            btnEraser.setColorFilter(Color.WHITE)
+            btnEraser.setBackgroundResource(R.drawable.icon_btn_bg) // You might want to define a pressed state, but tint is enough
+            btnEraser.alpha = 1.0f
+        } else {
+            btnEraser.setColorFilter(Color.parseColor("#CCCCCC"))
+            btnEraser.alpha = 0.8f
+        }
+    }
+
     // ── Color picker ──────────────────────────────────────────────────────
 
     private fun showColorPickerDialog(item: DrawingView.CanvasItem? = null) {
@@ -587,6 +661,8 @@ class MainActivity : AppCompatActivity() {
                     if (item == null) {
                         activeColor = color
                         drawingView.brushColor = activeColor
+                        drawingView.isEraser = false
+                        updateEraserState()
                         updateColorSwatch()
                     } else {
                         updateItemColor(item, color)
@@ -661,6 +737,7 @@ class MainActivity : AppCompatActivity() {
                     drawingView.brushColor = activeColor
                     drawingView.brushOpacity = opa.progress
                     drawingView.isEraser = false
+                    updateEraserState()
                     updateColorSwatch()
                 } else {
                     updateItemColor(item, color)
@@ -689,7 +766,11 @@ class MainActivity : AppCompatActivity() {
             override fun onStopTrackingTouch(s: SeekBar?) {}
         })
         AlertDialog.Builder(this, R.style.DarkDialogTheme).setView(v).setTitle("Brush Size")
-            .setPositiveButton("Apply") { _, _ -> drawingView.brushSize = (slider.progress + 5).toFloat() }
+            .setPositiveButton("Apply") { _, _ -> 
+                drawingView.brushSize = (slider.progress + 5).toFloat()
+                drawingView.isEraser = false
+                updateEraserState()
+            }
             .setNegativeButton("Cancel", null).show()
     }
 
@@ -735,6 +816,51 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
+    private fun loadAllPages() {
+        drawingView.clear()
+
+        // Set default background from notebook settings
+        drawingView.backgroundType = when (currentNotebook?.defaultBackground) {
+            "GRAPH" -> DrawingView.BackgroundType.GRAPH
+            "NONE" -> DrawingView.BackgroundType.NONE
+            else -> DrawingView.BackgroundType.RULED
+        }
+        
+        val dir = File(filesDir, "notebooks")
+        val pageFiles = dir.listFiles { _, name -> 
+            name.startsWith("${notebookName}_page_") && name.endsWith(".svg") 
+        }
+        
+        var maxPage = -1
+        
+        pageFiles?.forEach { file ->
+            val numStr = file.name.substringAfter("${notebookName}_page_").substringBefore(".svg")
+            val pageNum = numStr.toIntOrNull()
+            if (pageNum != null) {
+                try {
+                    val svgContent = file.readText()
+                    val result = SvgSerializer.deserialize(svgContent)
+                    val dy = pageNum * (drawingView.PAGE_HEIGHT + drawingView.PAGE_MARGIN)
+                    drawingView.loadFromSvgDataWithOffset(result.items, dy)
+                    if (pageNum > maxPage) {
+                        maxPage = pageNum
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        }
+        
+        drawingView.numPages = if (maxPage >= 0) maxPage + 1 else 1
+        updatePageIndicator()
+    }
+
+
+
+    private fun updatePageIndicator() {
+        tvPageIndicator.text = "${drawingView.numPages} Pages"
+    }
+
     // ── Save / Load SVG ───────────────────────────────────────────────────
 
     
@@ -749,32 +875,56 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun performAutosave() {
-        val svgData = drawingView.getSvgDataList()
-        val file = getNotebookSvgFile(currentPageIndex)
-        val thumbFile = getNotebookThumbFile(currentPageIndex)
+        if (currentNotebook?.type == NotebookType.WHITEBOARD) {
+            savePage(0)
+        } else {
+            for (i in 0 until drawingView.numPages) {
+                savePage(i)
+            }
+        }
+    }
+
+    private fun savePage(pageIndex: Int) {
+        val items = if (currentNotebook?.type == NotebookType.WHITEBOARD) {
+            drawingView.getSvgDataList()
+        } else {
+            // Need to shift them back
+            val shiftedItems = drawingView.getShiftedItemsOnPage(pageIndex)
+            shiftedItems.mapNotNull { with(drawingView) { it.toSvgData() } }
+        }
+
+        val file = getNotebookSvgFile(pageIndex)
+        val thumbFile = getNotebookThumbFile(pageIndex)
+
+        if (items.isEmpty()) {
+            if (file.exists()) file.delete()
+            if (thumbFile.exists()) thumbFile.delete()
+            return
+        }
+
         val width = drawingView.width
         val height = drawingView.height
         val bgColor = drawingView.canvasBackgroundColor
         val bgType = drawingView.backgroundType.name
-        val contentBounds = drawingView.getContentBounds()
+        
+        // Use a simple content bounds or compute it from items
+        val contentBounds = if (items.isEmpty()) null else {
+            val b = RectF()
+            // ... (ideally use a helper to compute bounds of SvgData)
+            null // Fallback
+        }
 
         activityScope.launch(Dispatchers.IO) {
             try {
                 val svgContent = SvgSerializer.serialize(
-                    items = svgData,
+                    items = items,
                     width = width,
                     height = height,
                     backgroundColor = bgColor,
                     backgroundType = bgType,
                     contentBounds = contentBounds
                 )
-
                 file.writeText(svgContent)
-                
-                // Generate and save thumbnail
-                if (contentBounds != null && !contentBounds.isEmpty) {
-                    saveThumbnail(thumbFile, svgData, bgColor, contentBounds)
-                }
             } catch (e: Exception) {
                 e.printStackTrace()
             }

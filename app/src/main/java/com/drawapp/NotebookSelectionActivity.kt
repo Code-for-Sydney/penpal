@@ -147,12 +147,32 @@ class NotebookSelectionActivity : AppCompatActivity() {
         val dialogView = layoutInflater.inflate(R.layout.dialog_edit_notebook, null)
         val etName = dialogView.findViewById<EditText>(R.id.etNotebookName)
         val colorGrid = dialogView.findViewById<GridLayout>(R.id.colorGrid)
+        val rgType = dialogView.findViewById<android.widget.RadioGroup>(R.id.rgNotebookType)
         val rgBackground = dialogView.findViewById<android.widget.RadioGroup>(R.id.rgDefaultBackground)
         val btnDelete = dialogView.findViewById<Button>(R.id.btnDeleteNotebook)
 
 
         var selectedColor = notebook?.color ?: Color.parseColor(colors[0])
         etName.setText(notebook?.name ?: "")
+        
+        if (notebook?.type == NotebookType.WHITEBOARD) {
+            rgType.check(R.id.rbWhiteboard)
+            rgBackground.isEnabled = false
+            for (i in 0 until rgBackground.childCount) rgBackground.getChildAt(i).isEnabled = false
+        } else {
+            rgType.check(R.id.rbNotebook)
+            rgBackground.isEnabled = true
+            for (i in 0 until rgBackground.childCount) rgBackground.getChildAt(i).isEnabled = true
+        }
+
+        rgType.setOnCheckedChangeListener { _, checkedId ->
+            val isWhiteboard = checkedId == R.id.rbWhiteboard
+            rgBackground.isEnabled = !isWhiteboard
+            for (i in 0 until rgBackground.childCount) rgBackground.getChildAt(i).isEnabled = !isWhiteboard
+            if (isWhiteboard) {
+                rgBackground.check(R.id.rbNone)
+            }
+        }
         
         when (notebook?.defaultBackground) {
             "GRAPH" -> rgBackground.check(R.id.rbGraph)
@@ -203,18 +223,26 @@ class NotebookSelectionActivity : AppCompatActivity() {
                 return@setOnClickListener
             }
 
-            val background = when (rgBackground.checkedRadioButtonId) {
-                R.id.rbGraph -> "GRAPH"
-                R.id.rbNone -> "NONE"
-                else -> "RULED"
+            val type = when (rgType.checkedRadioButtonId) {
+                R.id.rbWhiteboard -> NotebookType.WHITEBOARD
+                else -> NotebookType.NOTEBOOK
+            }
+
+            val background = if (type == NotebookType.WHITEBOARD) "NONE" else {
+                when (rgBackground.checkedRadioButtonId) {
+                    R.id.rbGraph -> "GRAPH"
+                    R.id.rbNone -> "NONE"
+                    else -> "RULED"
+                }
             }
 
             if (notebook == null) {
-                NotebookManager.addNotebook(this, Notebook(name = name, color = selectedColor, defaultBackground = background))
+                NotebookManager.addNotebook(this, Notebook(name = name, color = selectedColor, defaultBackground = background, type = type))
             } else {
                 notebook.name = name
                 notebook.color = selectedColor
                 notebook.defaultBackground = background
+                notebook.type = type
                 NotebookManager.updateNotebook(this, notebook)
             }
 
