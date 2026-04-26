@@ -64,7 +64,7 @@ class MainActivity : AppCompatActivity() {
     // ── Recognizer ─────────────────────────────────────────────────────────
     private lateinit var recognizer: HandwritingRecognizer
     private val recognitionHandler = Handler(Looper.getMainLooper())
-    private val DEBOUNCE_MS = 1500L
+    private val DEBOUNCE_MS = 800L
     private var hasPendingRecognition = false
     private val recognitionRunnable = Runnable { 
         hasPendingRecognition = false

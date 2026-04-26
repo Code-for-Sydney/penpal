@@ -2351,7 +2351,7 @@ class DrawingView @JvmOverloads constructor(
         val cropHeight = cropRect.height().toInt()
         if (cropWidth < 10 || cropHeight < 10) return null
 
-        val maxDim = 1024
+        val maxDim = 448
         var finalWidth = cropWidth
         var finalHeight = cropHeight
         var scale = 1f

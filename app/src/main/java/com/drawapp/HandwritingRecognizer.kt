@@ -164,16 +164,10 @@ class HandwritingRecognizer private constructor(private val context: Context) {
             _isProcessing.value = true
             conversation = currentEngine.createConversation()
 
-            // Resize bitmap to a standard resolution (e.g., 448x448) for the multimodal model
-            val scaledBitmap = Bitmap.createScaledBitmap(request.bitmap, 448, 448, true)
-
-            // Convert Android Bitmap -> Encoded Bytes (JPEG) for LiteRT-LM
+            // Convert Android Bitmap → Encoded Bytes (JPEG) for LiteRT-LM
             val stream = ByteArrayOutputStream()
-            scaledBitmap.compress(Bitmap.CompressFormat.JPEG, 90, stream)
+            request.bitmap.compress(Bitmap.CompressFormat.JPEG, 70, stream)
             val imageBytes = stream.toByteArray()
-            
-            // Clean up scaled bitmap
-            if (scaledBitmap != request.bitmap) scaledBitmap.recycle()
 
             // Construct multimodal message
             val prompt = request.prompt ?: "Analyze the handwriting in this image. What word, letter, number, or text is drawn? Detect symbols like stars (*) or asterisks as well. Reply with ONLY the recognized text."
