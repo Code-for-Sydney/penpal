@@ -63,6 +63,17 @@
             android:src="@drawable/ic_eraser"
             android:background="@drawable/icon_btn_bg"
             android:contentDescription="Eraser"
+            android:tint="#CCCCCC"
+            android:layout_marginBottom="16dp" />
+
+        <!-- Lasso -->
+        <ImageButton
+            android:id="@+id/btnLasso"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:src="@drawable/ic_lasso"
+            android:background="@drawable/icon_btn_bg"
+            android:contentDescription="Lasso Selection"
             android:tint="#CCCCCC" />
 
     </LinearLayout>

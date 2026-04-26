@@ -34,6 +34,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var toolToolbar: LinearLayout
     private lateinit var btnToggleTools: ImageButton
     private lateinit var btnEraser: ImageButton
+    private lateinit var btnLasso: ImageButton
 
     private lateinit var recognitionProgress: ProgressBar
     private lateinit var recognitionIcon: TextView
@@ -169,6 +170,7 @@ class MainActivity : AppCompatActivity() {
         toolToolbar         = findViewById(R.id.toolToolbar)
         btnToggleTools      = findViewById(R.id.btnToggleTools)
         btnEraser           = findViewById(R.id.btnEraser)
+        btnLasso            = findViewById(R.id.btnLasso)
         recognitionProgress = findViewById(R.id.recognitionProgress)
         recognitionIcon     = findViewById(R.id.recognitionIcon)
         recognitionText     = findViewById(R.id.recognitionText)
@@ -216,7 +218,7 @@ class MainActivity : AppCompatActivity() {
             triggerRecognitionForWord(word)
         }
         updateColorSwatch()
-        updateEraserState()
+        updateToolState()
         setupRecognizer()
         
         if (drawingView.notebookType == NotebookType.WHITEBOARD) {
@@ -519,15 +521,27 @@ class MainActivity : AppCompatActivity() {
             scheduleAutosave()
         }
         btnClear.setOnClickListener { 
-            if (!drawingView.deleteSelectedImage()) {
+            if (!drawingView.deleteSelectedItem()) {
                 showClearConfirmDialog() 
             }
         }
         btnBrushSize.setOnClickListener   { showBrushSizeDialog() }
         btnColorPicker.setOnClickListener { showColorPickerDialog() }
         btnEraser.setOnClickListener {
-            drawingView.isEraser = !drawingView.isEraser
-            updateEraserState()
+            if (drawingView.activeTool == DrawingView.ActiveTool.ERASER) {
+                drawingView.activeTool = DrawingView.ActiveTool.BRUSH
+            } else {
+                drawingView.activeTool = DrawingView.ActiveTool.ERASER
+            }
+            updateToolState()
+        }
+        btnLasso.setOnClickListener {
+            if (drawingView.activeTool == DrawingView.ActiveTool.LASSO) {
+                drawingView.activeTool = DrawingView.ActiveTool.BRUSH
+            } else {
+                drawingView.activeTool = DrawingView.ActiveTool.LASSO
+            }
+            updateToolState()
         }
         btnToggleTools.setOnClickListener {
             if (toolToolbar.visibility == View.VISIBLE) {
@@ -632,14 +646,30 @@ class MainActivity : AppCompatActivity() {
         colorSwatch.setBackgroundColor(activeColor)
     }
 
-    private fun updateEraserState() {
-        if (drawingView.isEraser) {
+    private fun updateToolState() {
+        // Eraser highlight
+        if (drawingView.activeTool == DrawingView.ActiveTool.ERASER) {
             btnEraser.setColorFilter(Color.WHITE)
-            btnEraser.setBackgroundResource(R.drawable.icon_btn_bg) // You might want to define a pressed state, but tint is enough
             btnEraser.alpha = 1.0f
         } else {
             btnEraser.setColorFilter(Color.parseColor("#CCCCCC"))
             btnEraser.alpha = 0.8f
+        }
+
+        // Lasso highlight
+        if (drawingView.activeTool == DrawingView.ActiveTool.LASSO) {
+            btnLasso.setColorFilter(Color.WHITE)
+            btnLasso.alpha = 1.0f
+        } else {
+            btnLasso.setColorFilter(Color.parseColor("#CCCCCC"))
+            btnLasso.alpha = 0.8f
+        }
+        
+        // Update Toggle button icon based on current tool
+        when (drawingView.activeTool) {
+            DrawingView.ActiveTool.ERASER -> btnToggleTools.setImageResource(R.drawable.ic_eraser)
+            DrawingView.ActiveTool.LASSO -> btnToggleTools.setImageResource(R.drawable.ic_lasso)
+            else -> btnToggleTools.setImageResource(R.drawable.ic_brush)
         }
     }
 
@@ -665,7 +695,7 @@ class MainActivity : AppCompatActivity() {
                         activeColor = color
                         drawingView.brushColor = activeColor
                         drawingView.isEraser = false
-                        updateEraserState()
+                        updateToolState()
                         updateColorSwatch()
                     } else {
                         updateItemColor(item, color)
@@ -740,7 +770,7 @@ class MainActivity : AppCompatActivity() {
                     drawingView.brushColor = activeColor
                     drawingView.brushOpacity = opa.progress
                     drawingView.isEraser = false
-                    updateEraserState()
+                    updateToolState()
                     updateColorSwatch()
                 } else {
                     updateItemColor(item, color)
@@ -772,7 +802,7 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton("Apply") { _, _ -> 
                 drawingView.brushSize = (slider.progress + 5).toFloat()
                 drawingView.isEraser = false
-                updateEraserState()
+                updateToolState()
             }
             .setNegativeButton("Cancel", null).show()
     }

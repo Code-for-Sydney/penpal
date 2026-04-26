@@ -20,6 +20,18 @@ class DrawingView @JvmOverloads constructor(
 ) : View(context, attrs, defStyleAttr) {
     
     enum class BackgroundType { NONE, RULED, GRAPH }
+    enum class ActiveTool { BRUSH, ERASER, LASSO }
+
+    var activeTool: ActiveTool = ActiveTool.BRUSH
+        set(value) {
+            field = value
+            isEraser = (value == ActiveTool.ERASER)
+            if (value != ActiveTool.LASSO) {
+                clearLassoSelection()
+            }
+            updateCurrentPaint()
+            invalidate()
+        }
 
 
     // Background color
@@ -213,17 +225,39 @@ class DrawingView @JvmOverloads constructor(
         }
     }
 
+    inner class GroupTransformAction(
+        val items: List<CanvasItem>,
+        val oldStates: List<ItemState>,
+        val newStates: List<ItemState>
+    ) : UndoAction {
+        override fun undo() {
+            for (i in items.indices) {
+                applyState(items[i], oldStates[i])
+            }
+            invalidate()
+        }
+        override fun redo() {
+            for (i in items.indices) {
+                applyState(items[i], newStates[i])
+            }
+            invalidate()
+        }
+    }
+
     data class ItemState(
         val matrix: Matrix,
         val textMatrix: Matrix,
         val textBounds: RectF,
-        val strokes: List<StrokeItem>? = null
+        val strokes: List<StrokeItem>? = null,
+        val strokePath: Path? = null,
+        val strokeBounds: RectF? = null
     )
 
     private fun captureState(item: CanvasItem): ItemState {
         return when (item) {
             is ImageItem -> ItemState(Matrix(item.matrix), Matrix(item.textMatrix), RectF(item.textBounds))
             is WordItem -> ItemState(Matrix(item.matrix), Matrix(item.textMatrix), RectF(item.textBounds), item.strokes.map { it.copy() })
+            is StrokeItem -> ItemState(Matrix(), Matrix(), RectF(), null, Path(item.path), RectF(item.boundsRect))
             else -> ItemState(Matrix(), Matrix(), RectF())
         }
     }
@@ -241,7 +275,10 @@ class DrawingView @JvmOverloads constructor(
                 item.textBounds.set(state.textBounds)
                 state.strokes?.let { item.strokes = it }
             }
-            is StrokeItem -> {}
+            is StrokeItem -> {
+                state.strokePath?.let { item.path.set(it) }
+                state.strokeBounds?.let { item.boundsRect.set(it) }
+            }
         }
         item.invalidateCache()
     }
@@ -308,7 +345,45 @@ class DrawingView @JvmOverloads constructor(
         set(value) { field = value; updateCurrentPaint() }
 
     var isEraser: Boolean = false
-        set(value) { field = value; updateCurrentPaint() }
+        set(value) { 
+            field = value
+            if (value && activeTool != ActiveTool.ERASER) {
+                activeTool = ActiveTool.ERASER
+            } else if (!value && activeTool == ActiveTool.ERASER) {
+                activeTool = ActiveTool.BRUSH
+            }
+            updateCurrentPaint() 
+        }
+
+    // --- Lasso Selection ---
+    private var lassoPath: Path? = null
+    private val lassoPoints = mutableListOf<PointF>()
+    private val selectedItems = mutableListOf<CanvasItem>()
+    private var isLassoing = false
+    private var isDraggingSelectedItems = false
+    private var isRotatingGroup = false
+    private var groupRotationCenter = PointF()
+    private var groupInitialRotationAngle = 0f
+    private var initialGroupItemMatrices = mutableListOf<Matrix>()
+    private var beforeGroupTransformStates: List<ItemState>? = null
+    
+    private var isTwoFingerGroupManipulating = false
+    private var twoFingerGroupStartSpan = 1f
+    private var twoFingerGroupStartAngle = 0f
+    private var twoFingerGroupStartFocal = PointF()
+
+    fun clearLassoSelection() {
+        selectedItems.clear()
+        lassoPath = null
+        lassoPoints.clear()
+        isLassoing = false
+        isDraggingSelectedItems = false
+        isRotatingGroup = false
+        isTwoFingerGroupManipulating = false
+        beforeGroupTransformStates = null
+        initialGroupItemMatrices.clear()
+        invalidate()
+    }
 
     /** Called once each time the user lifts their finger after a stroke. */
     var onStrokeCompleted: (() -> Unit)? = null
@@ -323,6 +398,20 @@ class DrawingView @JvmOverloads constructor(
         style = Paint.Style.STROKE
         strokeWidth = 4f
         pathEffect = DashPathEffect(floatArrayOf(20f, 20f), 0f)
+    }
+
+    private val lassoPaint = Paint().apply {
+        color = Color.parseColor("#7C4DFF")
+        style = Paint.Style.STROKE
+        strokeWidth = 3f
+        pathEffect = DashPathEffect(floatArrayOf(10f, 10f), 0f)
+        isAntiAlias = true
+    }
+
+    private val lassoFillPaint = Paint().apply {
+        color = Color.argb(40, 124, 77, 255)
+        style = Paint.Style.FILL
+        isAntiAlias = true
     }
 
     private val deleteBgPaint = Paint().apply {
@@ -629,38 +718,38 @@ class DrawingView @JvmOverloads constructor(
         val viewport = getViewportCanvasRect()
 
         // 5. Draw all committed items (with culling)
+        val hasGroupSelection = selectedItems.size > 1
         for (item in drawItems) {
             if (RectF.intersects(item.bounds, viewport)) {
                 item.draw(canvas)
                 
-                // Draw selection/highlight on top
-                if (item is ImageItem && item == selectedImage) {
-                    drawSelectionBox(canvas, item)
-                }
-                if (item is WordItem) {
-                    if (item == searchHighlightedWord) {
-                        canvas.save()
-                        canvas.concat(item.matrix)
-                        val localBoundsRect = RectF()
-                        if (item.strokes.isNotEmpty()) {
-                            localBoundsRect.set(item.strokes[0].bounds)
-                            for (i in 1 until item.strokes.size) {
-                                localBoundsRect.union(item.strokes[i].bounds)
-                            }
-                        }
-                        canvas.drawRect(localBoundsRect, searchHighlightPaint)
-                        canvas.restore()
-                    }
-                    if (item == selectedWord) {
+                // Draw individual selection/highlight on top only if NOT in a multi-item group
+                if (!hasGroupSelection) {
+                    val isSelected = (item is ImageItem && item == selectedImage) || 
+                                    (item is WordItem && item == selectedWord) ||
+                                    (item in selectedItems)
+
+                    if (isSelected) {
                         drawSelectionBox(canvas, item)
                     }
                 }
             }
         }
 
+        // Draw combined bounding box for group
+        if (hasGroupSelection) {
+            drawGroupSelectionBox(canvas, selectedItems)
+        }
+
         // 6. Draw in-progress stroke live
         if (isDrawing) {
             canvas.drawPath(currentPath, currentPaint)
+        }
+
+        // 7. Draw lasso path
+        lassoPath?.let {
+            canvas.drawPath(it, lassoFillPaint)
+            canvas.drawPath(it, lassoPaint)
         }
 
         canvas.restore()
@@ -832,19 +921,68 @@ class DrawingView @JvmOverloads constructor(
 
         // Toggle Button
         canvas.drawCircle(togPos.x, togPos.y, buttonRadius, Paint().apply { color = Color.WHITE; style = Paint.Style.FILL; setShadowLayer(4f, 0f, 2f, Color.BLACK) })
-        val toggleIconPaint = Paint().apply { color = Color.BLACK; textSize = 16f; textAlign = Paint.Align.CENTER; typeface = Typeface.DEFAULT_BOLD }
-        val tMetrics = toggleIconPaint.fontMetrics
-        val tBaseline = togPos.y - (tMetrics.ascent + tMetrics.descent) / 2
-        canvas.drawText("T", togPos.x, tBaseline, toggleIconPaint)
+        val eyePaint = Paint().apply { color = Color.BLACK; style = Paint.Style.STROKE; strokeWidth = 3f; isAntiAlias = true }
+        canvas.drawCircle(togPos.x, togPos.y, buttonRadius * 0.4f, eyePaint)
+        canvas.drawCircle(togPos.x, togPos.y, buttonRadius * 0.1f, Paint().apply { color = Color.BLACK; style = Paint.Style.FILL })
 
         // Image-specific: Background removal
         if (item is ImageItem) {
             val bgTogPos = getButtonScreenPos(localBounds.centerX(), localBounds.top)
             canvas.drawCircle(bgTogPos.x, bgTogPos.y, buttonRadius, Paint().apply { color = Color.WHITE; style = Paint.Style.FILL; setShadowLayer(4f, 0f, 2f, Color.BLACK) })
-            canvas.drawText(if (item.removeBackground) "B" else "W", bgTogPos.x, bgTogPos.y - (tMetrics.ascent + tMetrics.descent) / 2, toggleIconPaint)
+            val toggleIconPaint = Paint().apply { color = Color.BLACK; textSize = 16f; textAlign = Paint.Align.CENTER; typeface = Typeface.DEFAULT_BOLD }
+            canvas.drawText(if (item.removeBackground) "B" else "W", bgTogPos.x, bgTogPos.y - (toggleIconPaint.fontMetrics.ascent + toggleIconPaint.fontMetrics.descent) / 2, toggleIconPaint)
         }
 
         canvas.restore()
+    }
+
+    private fun drawGroupSelectionBox(canvas: Canvas, items: List<CanvasItem>) {
+        if (items.isEmpty()) return
+        val groupBounds = getGroupBounds(items)
+        
+        // Rect is already in canvas space, and canvas has viewMatrix applied
+        canvas.drawRect(groupBounds, selectionPaint)
+
+        // Buttons
+        val buttonRadius = 24f
+        
+        fun getScreenPos(cx: Float, cy: Float): PointF {
+            val pts = floatArrayOf(cx, cy)
+            viewMatrix.mapPoints(pts)
+            return PointF(pts[0], pts[1])
+        }
+
+        val delPos = getScreenPos(groupBounds.right, groupBounds.top)
+        val rotBasePos = getScreenPos(groupBounds.centerX(), groupBounds.top)
+        val rotPos = PointF(rotBasePos.x, rotBasePos.y - 60f)
+
+        canvas.save()
+        canvas.setMatrix(Matrix()) // Switch to screen space for buttons
+
+        // Lollipop
+        canvas.drawLine(rotBasePos.x, rotBasePos.y, rotPos.x, rotPos.y, selectionPaint)
+        
+        // Rotation Button
+        canvas.drawCircle(rotPos.x, rotPos.y, buttonRadius, Paint().apply { color = Color.WHITE; style = Paint.Style.FILL; setShadowLayer(4f, 0f, 2f, Color.argb(100, 0, 0, 0)) })
+        canvas.drawArc(rotPos.x - 8f, rotPos.y - 8f, rotPos.x + 8f, rotPos.y + 8f, 45f, 270f, false, Paint().apply { color = Color.parseColor("#7C4DFF"); style = Paint.Style.STROKE; strokeWidth = 3f; isAntiAlias = true })
+
+        // Delete Button
+        canvas.drawCircle(delPos.x, delPos.y, buttonRadius, deleteBgPaint)
+        val crossSize = 10f
+        canvas.drawLine(delPos.x - crossSize, delPos.y - crossSize, delPos.x + crossSize, delPos.y + crossSize, deleteIconPaint)
+        canvas.drawLine(delPos.x + crossSize, delPos.y - crossSize, delPos.x - crossSize, delPos.y + crossSize, deleteIconPaint)
+
+        canvas.restore()
+    }
+
+    private fun getGroupBounds(items: List<CanvasItem>): RectF {
+        val bounds = RectF()
+        if (items.isEmpty()) return bounds
+        bounds.set(items[0].bounds)
+        for (i in 1 until items.size) {
+            bounds.union(items[i].bounds)
+        }
+        return bounds
     }
 
     private fun drawWordText(canvas: Canvas, item: WordItem) {
@@ -1041,6 +1179,73 @@ class DrawingView @JvmOverloads constructor(
             MotionEvent.ACTION_DOWN -> {
                 val canvasCoords = screenToCanvas(event.x, event.y)
                 
+                // 1. If we have a lasso selection, check if we hit any of the selected items to start dragging
+                if (selectedItems.isNotEmpty()) {
+                    val groupBounds = getGroupBounds(selectedItems)
+                    
+                    // Check group buttons first
+                    val buttonRadiusSq = 48f * 48f
+                    
+                    fun getScreenPos(cx: Float, cy: Float): PointF {
+                        val pts = floatArrayOf(cx, cy)
+                        viewMatrix.mapPoints(pts)
+                        return PointF(pts[0], pts[1])
+                    }
+
+                    fun isGroupButtonHit(cx: Float, cy: Float): Boolean {
+                        val pos = getScreenPos(cx, cy)
+                        val dx = event.x - pos.x
+                        val dy = event.y - pos.y
+                        return dx * dx + dy * dy <= buttonRadiusSq
+                    }
+
+                    // Delete group
+                    if (isGroupButtonHit(groupBounds.right, groupBounds.top)) {
+                        deleteSelectedItem()
+                        return true
+                    }
+
+                    // Rotate group
+                    val rotBasePos = getScreenPos(groupBounds.centerX(), groupBounds.top)
+                    val rotPos = PointF(rotBasePos.x, rotBasePos.y - 60f)
+                    val dRotX = event.x - rotPos.x
+                    val dRotY = event.y - rotPos.y
+                    if (dRotX * dRotX + dRotY * dRotY <= buttonRadiusSq) {
+                        isRotatingGroup = true
+                        groupRotationCenter.set(groupBounds.centerX(), groupBounds.centerY())
+                        groupInitialRotationAngle = Math.toDegrees(atan2((canvasCoords[1] - groupRotationCenter.y).toDouble(), (canvasCoords[0] - groupRotationCenter.x).toDouble())).toFloat()
+                        
+                        beforeGroupTransformStates = selectedItems.map { captureState(it) }
+                        initialGroupItemMatrices = selectedItems.map { 
+                            when(it) {
+                                is ImageItem -> Matrix(it.matrix)
+                                is WordItem -> Matrix(it.matrix)
+                                is StrokeItem -> Matrix() // Handled via offset/path
+                                else -> Matrix()
+                            }
+                        }.toMutableList()
+                        return true
+                    }
+
+                    val hitInSelection = selectedItems.any { isItemHit(it, canvasCoords[0], canvasCoords[1]) }
+                    if (hitInSelection) {
+                        isDraggingSelectedItems = true
+                        isDrawing = false
+                        isPanning = false
+                        lastPanX = event.x
+                        lastPanY = event.y
+                        
+                        // Capture initial states for all selected items
+                        beforeGroupTransformStates = selectedItems.map { captureState(it) }
+                        return true
+                    } else {
+                        // Tapped outside selection, clear it unless we are in LASSO tool
+                        if (activeTool != ActiveTool.LASSO) {
+                            clearLassoSelection()
+                        }
+                    }
+                }
+
                 // Check if user tapped the delete cross of the selected image/word
                 val selectedItem = selectedImage ?: selectedWord
                 if (selectedItem != null) {
@@ -1151,33 +1356,43 @@ class DrawingView @JvmOverloads constructor(
                     }
                 }
                 
-                // Hit testing for images and words
-                val hitItem = drawItems.reversed().find { isItemHit(it, canvasCoords[0], canvasCoords[1]) }
+                // Hit testing for images and words only (strokes don't intercept drawing)
+                val hitItem = drawItems.reversed().find { (it is ImageItem || it is WordItem) && isItemHit(it, canvasCoords[0], canvasCoords[1]) }
 
-                when (hitItem) {
-                    is ImageItem -> {
-                        selectedImage = hitItem
-                        selectedWord = null
-                        isImageManipulating = true
-                        isWordManipulating = false
-                        isDrawing = false
-                        isPanning = false
-                        lastPanX = event.x
-                        lastPanY = event.y
-                        beforeTransformState = captureState(hitItem)
+                if (hitItem != null && activeTool != ActiveTool.LASSO) {
+                    when (hitItem) {
+                        is ImageItem -> {
+                            selectedImage = hitItem
+                            selectedWord = null
+                            isImageManipulating = true
+                            isWordManipulating = false
+                            isDrawing = false
+                            isPanning = false
+                            lastPanX = event.x
+                            lastPanY = event.y
+                            beforeTransformState = captureState(hitItem)
+                        }
+                        is WordItem -> {
+                            selectedWord = hitItem
+                            selectedImage = null
+                            isWordManipulating = true
+                            isImageManipulating = false
+                            isDrawing = false
+                            isPanning = false
+                            lastPanX = event.x
+                            lastPanY = event.y
+                            beforeTransformState = captureState(hitItem)
+                        }
+                        else -> {}
                     }
-                    is WordItem -> {
-                        selectedWord = hitItem
-                        selectedImage = null
-                        isWordManipulating = true
-                        isImageManipulating = false
+                } else {
+                    if (activeTool == ActiveTool.LASSO) {
+                        isLassoing = true
                         isDrawing = false
-                        isPanning = false
-                        lastPanX = event.x
-                        lastPanY = event.y
-                        beforeTransformState = captureState(hitItem)
-                    }
-                    else -> {
+                        lassoPoints.clear()
+                        lassoPoints.add(PointF(canvasCoords[0], canvasCoords[1]))
+                        lassoPath = Path().apply { moveTo(canvasCoords[0], canvasCoords[1]) }
+                    } else {
                         selectedImage = null
                         selectedWord = null
                         isImageManipulating = false
@@ -1195,9 +1410,26 @@ class DrawingView @JvmOverloads constructor(
                     cancelCurrentStroke()
                     isDrawing = false
                 }
+                if (isLassoing) {
+                    isLassoing = false
+                    lassoPath = null
+                }
                 
                 val currentSelectedItem = selectedImage ?: selectedWord
-                if (currentSelectedItem != null && pointerCount >= 2) {
+                if (selectedItems.isNotEmpty() && pointerCount >= 2) {
+                    isTwoFingerGroupManipulating = true
+                    isDrawing = false
+                    isPanning = false
+                    
+                    val dx = event.getX(1) - event.getX(0)
+                    val dy = event.getY(1) - event.getY(0)
+                    twoFingerGroupStartSpan = max(1f, Math.sqrt((dx * dx + dy * dy).toDouble()).toFloat())
+                    twoFingerGroupStartAngle = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())).toFloat()
+                    val focal = screenToCanvas((event.getX(0) + event.getX(1)) / 2f, (event.getY(0) + event.getY(1)) / 2f)
+                    twoFingerGroupStartFocal.set(focal[0], focal[1])
+                    
+                    beforeGroupTransformStates = selectedItems.map { captureState(it) }
+                } else if (currentSelectedItem != null && pointerCount >= 2) {
                     isTwoFingerManipulating = true
                     val dx = event.getX(1) - event.getX(0)
                     val dy = event.getY(1) - event.getY(0)
@@ -1222,10 +1454,106 @@ class DrawingView @JvmOverloads constructor(
             }
 
             MotionEvent.ACTION_MOVE -> {
+                val canvasCoords = screenToCanvas(event.x, event.y)
                 val currentSelectedItem = selectedImage ?: selectedWord
-                if (isRotating && currentSelectedItem != null) {
+                
+                if (isTwoFingerGroupManipulating && pointerCount >= 2) {
+                    val dx = event.getX(1) - event.getX(0)
+                    val dy = event.getY(1) - event.getY(0)
+                    val currentSpan = max(1f, Math.sqrt((dx * dx + dy * dy).toDouble()).toFloat())
+                    val currentAngle = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())).toFloat()
+                    val focal = screenToCanvas((event.getX(0) + event.getX(1)) / 2f, (event.getY(0) + event.getY(1)) / 2f)
+                    
+                    val scale = currentSpan / twoFingerGroupStartSpan
+                    val rotationDelta = currentAngle - twoFingerGroupStartAngle
+                    val transX = focal[0] - twoFingerGroupStartFocal.x
+                    val transY = focal[1] - twoFingerGroupStartFocal.y
+                    
+                    for (i in selectedItems.indices) {
+                        val item = selectedItems[i]
+                        val initialState = beforeGroupTransformStates?.get(i) ?: continue
+                        
+                        when (item) {
+                            is ImageItem -> {
+                                item.matrix.set(initialState.matrix)
+                                item.matrix.postTranslate(transX, transY)
+                                item.matrix.postScale(scale, scale, twoFingerGroupStartFocal.x, twoFingerGroupStartFocal.y)
+                                item.matrix.postRotate(rotationDelta, twoFingerGroupStartFocal.x, twoFingerGroupStartFocal.y)
+                            }
+                            is WordItem -> {
+                                item.matrix.set(initialState.matrix)
+                                item.matrix.postTranslate(transX, transY)
+                                item.matrix.postScale(scale, scale, twoFingerGroupStartFocal.x, twoFingerGroupStartFocal.y)
+                                item.matrix.postRotate(rotationDelta, twoFingerGroupStartFocal.x, twoFingerGroupStartFocal.y)
+                            }
+                            is StrokeItem -> {
+                                initialState.strokePath?.let { item.path.set(it) }
+                                val matrix = Matrix()
+                                matrix.postTranslate(transX, transY)
+                                matrix.postScale(scale, scale, twoFingerGroupStartFocal.x, twoFingerGroupStartFocal.y)
+                                matrix.postRotate(rotationDelta, twoFingerGroupStartFocal.x, twoFingerGroupStartFocal.y)
+                                item.path.transform(matrix)
+                                item.boundsRect.setEmpty()
+                                item.path.computeBounds(item.boundsRect, true)
+                            }
+                        }
+                        item.invalidateCache()
+                    }
+                    invalidate()
+                } else if (isRotatingGroup) {
+                    val currentAngle = Math.toDegrees(atan2((canvasCoords[1] - groupRotationCenter.y).toDouble(), (canvasCoords[0] - groupRotationCenter.x).toDouble())).toFloat()
+                    val rotationDelta = currentAngle - groupInitialRotationAngle
+                    
+                    for (i in selectedItems.indices) {
+                        val item = selectedItems[i]
+                        val initialState = beforeGroupTransformStates?.get(i) ?: continue
+                        
+                        when (item) {
+                            is ImageItem -> {
+                                item.matrix.set(initialState.matrix)
+                                item.matrix.postRotate(rotationDelta, groupRotationCenter.x, groupRotationCenter.y)
+                            }
+                            is WordItem -> {
+                                item.matrix.set(initialState.matrix)
+                                item.matrix.postRotate(rotationDelta, groupRotationCenter.x, groupRotationCenter.y)
+                            }
+                            is StrokeItem -> {
+                                // Reset to initial path then rotate
+                                initialState.strokePath?.let { item.path.set(it) }
+                                val matrix = Matrix()
+                                matrix.postRotate(rotationDelta, groupRotationCenter.x, groupRotationCenter.y)
+                                item.path.transform(matrix)
+                                item.boundsRect.setEmpty()
+                                item.path.computeBounds(item.boundsRect, true)
+                            }
+                        }
+                        item.invalidateCache()
+                    }
+                    invalidate()
+                } else if (isDraggingSelectedItems) {
+                    val lastCanvasCoords = screenToCanvas(lastPanX, lastPanY)
+                    val dx = canvasCoords[0] - lastCanvasCoords[0]
+                    val dy = canvasCoords[1] - lastCanvasCoords[1]
+                    for (item in selectedItems) {
+                        when (item) {
+                            is ImageItem -> item.matrix.postTranslate(dx, dy)
+                            is WordItem -> item.matrix.postTranslate(dx, dy)
+                            is StrokeItem -> {
+                                item.path.offset(dx, dy)
+                                item.boundsRect.offset(dx, dy)
+                            }
+                        }
+                        item.invalidateCache()
+                    }
+                    lastPanX = event.x
+                    lastPanY = event.y
+                    invalidate()
+                } else if (isLassoing) {
+                    lassoPoints.add(PointF(canvasCoords[0], canvasCoords[1]))
+                    lassoPath?.lineTo(canvasCoords[0], canvasCoords[1])
+                    invalidate()
+                } else if (isRotating && currentSelectedItem != null) {
                     val targetItem = currentSelectedItem
-                    val canvasCoords = screenToCanvas(event.x, event.y)
                     val currentAngle = Math.toDegrees(atan2((canvasCoords[1] - rotationCenter.y).toDouble(), (canvasCoords[0] - rotationCenter.x).toDouble())).toFloat()
                     val rotationDelta = currentAngle - rotationInitialAngle
                     
@@ -1267,7 +1595,6 @@ class DrawingView @JvmOverloads constructor(
                 } else if ((isImageManipulating && selectedImage != null || isWordManipulating && selectedWord != null) && pointerCount == 1) {
                     // Single finger translate
                     val targetMatrix = selectedImage?.matrix ?: selectedWord!!.matrix
-                    val canvasCoords = screenToCanvas(event.x, event.y)
                     val lastCanvasCoords = screenToCanvas(lastPanX, lastPanY)
                     val dx = canvasCoords[0] - lastCanvasCoords[0]
                     val dy = canvasCoords[1] - lastCanvasCoords[1]
@@ -1291,14 +1618,29 @@ class DrawingView @JvmOverloads constructor(
                     lastPanX = event.x
                     lastPanY = event.y
                 } else if (isDrawing && pointerCount == 1) {
-                    val canvasCoords = screenToCanvas(event.x, event.y)
                     touchMove(canvasCoords[0], canvasCoords[1])
                     invalidate()
                 }
             }
 
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                if (isDrawing) {
+                if (isDraggingSelectedItems) {
+                    isDraggingSelectedItems = false
+                    
+                    // Push GroupTransformAction
+                    if (beforeGroupTransformStates != null) {
+                        val afterStates = selectedItems.map { captureState(it) }
+                        pushAction(GroupTransformAction(selectedItems.toList(), beforeGroupTransformStates!!, afterStates), executeNow = false)
+                        onStrokeCompleted?.invoke()
+                    }
+                    beforeGroupTransformStates = null
+                    invalidate()
+                } else if (isLassoing) {
+                    isLassoing = false
+                    lassoPath?.close()
+                    performLassoSelection()
+                    invalidate()
+                } else if (isDrawing) {
                     touchUp()
                     isDrawing = false
                     invalidate()
@@ -1322,15 +1664,45 @@ class DrawingView @JvmOverloads constructor(
                     }
                 }
 
+                if (isTwoFingerGroupManipulating) {
+                    isTwoFingerGroupManipulating = false
+                    if (beforeGroupTransformStates != null) {
+                        val afterStates = selectedItems.map { captureState(it) }
+                        pushAction(GroupTransformAction(selectedItems.toList(), beforeGroupTransformStates!!, afterStates))
+                        onStrokeCompleted?.invoke()
+                    }
+                    beforeGroupTransformStates = null
+                    
+                    // Freeze transforms for WordItems
+                    for (item in selectedItems) {
+                        if (item is WordItem) freezeWordTransform(item)
+                    }
+                    invalidate()
+                }
+                
                 isPanning = false
                 isImageManipulating = false
                 isWordManipulating = false
                 isRotating = false
                 isTwoFingerManipulating = false
+                isRotatingGroup = false
                 beforeTransformState = null
             }
 
             MotionEvent.ACTION_POINTER_UP -> {
+                if (isTwoFingerGroupManipulating) {
+                    isTwoFingerGroupManipulating = false
+                    if (beforeGroupTransformStates != null) {
+                        val afterStates = selectedItems.map { captureState(it) }
+                        pushAction(GroupTransformAction(selectedItems.toList(), beforeGroupTransformStates!!, afterStates))
+                        onStrokeCompleted?.invoke()
+                    }
+                    beforeGroupTransformStates = null
+                    for (item in selectedItems) {
+                        if (item is WordItem) freezeWordTransform(item)
+                    }
+                    invalidate()
+                }
                 if (isTwoFingerManipulating) {
                     if (selectedWord != null) {
                         freezeWordTransform(selectedWord!!)
@@ -1536,6 +1908,16 @@ class DrawingView @JvmOverloads constructor(
     }
 
     fun deleteSelectedItem(): Boolean {
+        if (selectedItems.isNotEmpty()) {
+            val itemsToRemove = selectedItems.toList()
+            val indices = itemsToRemove.map { drawItems.indexOf(it) }
+            pushAction(GroupRemoveAction(itemsToRemove, indices))
+            selectedItems.clear()
+            invalidate()
+            onStrokeCompleted?.invoke()
+            return true
+        }
+
         val image = selectedImage
         if (image != null) {
             val index = drawItems.indexOf(image)
@@ -1561,6 +1943,23 @@ class DrawingView @JvmOverloads constructor(
             }
         }
         return false
+    }
+
+    inner class GroupRemoveAction(val items: List<CanvasItem>, val indices: List<Int>) : UndoAction {
+        override fun undo() {
+            for (i in items.indices) {
+                if (indices[i] != -1) {
+                    drawItems.add(indices[i], items[i])
+                } else {
+                    drawItems.add(items[i])
+                }
+            }
+            invalidate()
+        }
+        override fun redo() {
+            drawItems.removeAll(items)
+            invalidate()
+        }
     }
 
     @Deprecated("Use deleteSelectedItem instead", ReplaceWith("deleteSelectedItem()"))
@@ -2560,5 +2959,55 @@ class DrawingView @JvmOverloads constructor(
         val projX = x1 + t * (x2 - x1)
         val projY = y1 + t * (y2 - y1)
         return Math.hypot((px - projX).toDouble(), (py - projY).toDouble()).toFloat()
+    }
+
+    // --- Lasso Selection ---
+    private fun performLassoSelection() {
+        if (lassoPoints.size < 3) {
+            clearLassoSelection()
+            return
+        }
+        
+        selectedItems.clear()
+        selectedImage = null
+        selectedWord = null
+        
+        for (item in drawItems) {
+            if (isItemInsideLasso(item, lassoPoints)) {
+                selectedItems.add(item)
+            }
+        }
+        
+        if (selectedItems.isEmpty()) {
+            lassoPath = null
+        } else {
+            // Keep lasso path visible to indicate selection area?
+            // Actually, usually it disappears and items get highlighted.
+            lassoPath = null
+        }
+        invalidate()
+    }
+
+    private fun isItemInsideLasso(item: CanvasItem, polygon: List<PointF>): Boolean {
+        val bounds = item.bounds
+        // Check if the center of the item is inside the lasso
+        return isPointInPolygon(bounds.centerX(), bounds.centerY(), polygon)
+    }
+
+    private fun isPointInPolygon(px: Float, py: Float, polygon: List<PointF>): Boolean {
+        var collision = false
+        var next = 0
+        for (current in polygon.indices) {
+            next = current + 1
+            if (next == polygon.size) next = 0
+            val vc = polygon[current]
+            val vn = polygon[next]
+            if (((vc.y >= py && vn.y < py) || (vc.y < py && vn.y >= py)) &&
+                (px < (vn.x - vc.x) * (py - vc.y) / (vn.y - vc.y) + vc.x)
+            ) {
+                collision = !collision
+            }
+        }
+        return collision
     }
 }
