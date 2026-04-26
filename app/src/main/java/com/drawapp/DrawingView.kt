@@ -631,78 +631,28 @@ class DrawingView @JvmOverloads constructor(
         // 5. Draw all committed items (with culling)
         for (item in drawItems) {
             if (RectF.intersects(item.bounds, viewport)) {
-                when (item) {
-                    is StrokeItem -> canvas.drawPath(item.path, item.paint)
-                    is ImageItem -> {
+                item.draw(canvas)
+                
+                // Draw selection/highlight on top
+                if (item is ImageItem && item == selectedImage) {
+                    drawSelectionBox(canvas, item)
+                }
+                if (item is WordItem) {
+                    if (item == searchHighlightedWord) {
                         canvas.save()
                         canvas.concat(item.matrix)
-
-                        if (item.isShowingText && item.text.isNotEmpty()) {
-                            drawImageText(canvas, item)
-                        } else {
-                            canvas.drawBitmap(item.displayBitmap, 0f, 0f, null)
+                        val localBoundsRect = RectF()
+                        if (item.strokes.isNotEmpty()) {
+                            localBoundsRect.set(item.strokes[0].bounds)
+                            for (i in 1 until item.strokes.size) {
+                                localBoundsRect.union(item.strokes[i].bounds)
+                            }
                         }
+                        canvas.drawRect(localBoundsRect, searchHighlightPaint)
                         canvas.restore()
-
-                        if (item == selectedImage) {
-                            drawSelectionBox(canvas, item)
-                        }
                     }
-                    is WordItem -> {
-                        canvas.save()
-                        canvas.concat(item.matrix)
-
-                        if (item.backgroundColor != null) {
-                            tempWordBgPaint.color = item.backgroundColor!!
-                            tempWordBgPaint.style = Paint.Style.FILL
-                            val localRect = RectF()
-                            if (item.strokes.isNotEmpty()) {
-                                localRect.set(item.strokes[0].bounds)
-                                for (i in 1 until item.strokes.size) {
-                                    localRect.union(item.strokes[i].bounds)
-                                }
-                            }
-                            canvas.drawRect(localRect, tempWordBgPaint)
-                        }
-                        
-                        // Draw search highlight if this is the focused word
-                        if (item == searchHighlightedWord) {
-                            val localBounds = item.bounds // This uses the full matrix calculation
-                            // But for highlight we want to draw in the word's space
-                            // Actually WordItem.bounds is already in world space if we don't concat.
-                            // Since we ALREADY concatted item.matrix, we should draw in local space.
-                            val localBoundsRect = RectF()
-                            if (item.strokes.isNotEmpty()) {
-                                localBoundsRect.set(item.strokes[0].bounds)
-                                for (i in 1 until item.strokes.size) {
-                                    localBoundsRect.union(item.strokes[i].bounds)
-                                }
-                            }
-                            canvas.drawRect(localBoundsRect, searchHighlightPaint)
-                        }
-
-                        if (item.isShowingText && item.text.isNotEmpty()) {
-                            drawWordText(canvas, item)
-                        } else {
-                            val wordPaint = if (item.tintColor != null) {
-                                Paint().apply { 
-                                    color = item.tintColor!!
-                                    style = Paint.Style.STROKE
-                                    strokeWidth = item.strokes.firstOrNull()?.paint?.strokeWidth ?: 5f
-                                    isAntiAlias = true
-                                    strokeCap = Paint.Cap.ROUND
-                                    strokeJoin = Paint.Join.ROUND
-                                }
-                            } else null
-
-                            for (stroke in item.strokes) {
-                                canvas.drawPath(stroke.path, wordPaint ?: stroke.paint)
-                            }
-                        }
-                        canvas.restore()
-                        if (item == selectedWord) {
-                            drawSelectionBox(canvas, item)
-                        }
+                    if (item == selectedWord) {
+                        drawSelectionBox(canvas, item)
                     }
                 }
             }
@@ -714,6 +664,56 @@ class DrawingView @JvmOverloads constructor(
         }
 
         canvas.restore()
+    }
+
+    private fun CanvasItem.draw(canvas: Canvas) {
+        when (this) {
+            is StrokeItem -> canvas.drawPath(path, paint)
+            is ImageItem -> {
+                canvas.save()
+                canvas.concat(matrix)
+                if (isShowingText && text.isNotEmpty()) {
+                    drawImageText(canvas, this)
+                } else {
+                    canvas.drawBitmap(displayBitmap, 0f, 0f, null)
+                }
+                canvas.restore()
+            }
+            is WordItem -> {
+                canvas.save()
+                canvas.concat(matrix)
+                if (backgroundColor != null) {
+                    tempWordBgPaint.color = backgroundColor!!
+                    tempWordBgPaint.style = Paint.Style.FILL
+                    val localRect = RectF()
+                    if (strokes.isNotEmpty()) {
+                        localRect.set(strokes[0].bounds)
+                        for (i in 1 until strokes.size) {
+                            localRect.union(strokes[i].bounds)
+                        }
+                    }
+                    canvas.drawRect(localRect, tempWordBgPaint)
+                }
+                if (isShowingText && text.isNotEmpty()) {
+                    drawWordText(canvas, this)
+                } else {
+                    val wordPaint = if (tintColor != null) {
+                        Paint().apply {
+                            color = tintColor!!
+                            style = Paint.Style.STROKE
+                            strokeWidth = strokes.firstOrNull()?.paint?.strokeWidth ?: 5f
+                            isAntiAlias = true
+                            strokeCap = Paint.Cap.ROUND
+                            strokeJoin = Paint.Join.ROUND
+                        }
+                    } else null
+                    for (stroke in strokes) {
+                        canvas.drawPath(stroke.path, wordPaint ?: stroke.paint)
+                    }
+                }
+                canvas.restore()
+            }
+        }
     }
 
     private fun drawSelectionBox(canvas: Canvas, item: CanvasItem) {
@@ -1723,6 +1723,26 @@ class DrawingView @JvmOverloads constructor(
         invalidate()
     }
 
+    fun getCurrentPageIndex(): Int {
+        if (notebookType != NotebookType.NOTEBOOK || height <= 0) return 0
+        // Calculate which page is in the middle of the screen
+        val centerCanvasY = (height / 2f - translateY) / scaleFactor
+        val pageFullHeight = PAGE_HEIGHT + PAGE_MARGIN
+        return (centerCanvasY / pageFullHeight).toInt().coerceIn(0, numPages - 1)
+    }
+
+    fun scrollToPage(pageIndex: Int) {
+        if (notebookType != NotebookType.NOTEBOOK) return
+        val pageFullHeight = PAGE_HEIGHT + PAGE_MARGIN
+        val targetCanvasY = pageIndex * pageFullHeight
+        
+        // Position the top of the page at the top of the screen (with a small margin)
+        translateY = -targetCanvasY * scaleFactor + 100f * scaleFactor
+        
+        updateMatrix()
+        invalidate()
+    }
+
     fun loadFromSvgDataWithOffset(items: List<SvgData>, dy: Float) {
         val loadedItems = mutableListOf<CanvasItem>()
         for (data in items) {
@@ -1869,6 +1889,33 @@ class DrawingView @JvmOverloads constructor(
                 }
             }
         }
+    }
+
+    fun createPageThumbnail(pageIndex: Int): Bitmap? {
+        val thumbWidth = 400
+        val thumbHeight = (thumbWidth * (PAGE_HEIGHT / PAGE_WIDTH)).toInt()
+        
+        val bmp = Bitmap.createBitmap(thumbWidth, thumbHeight, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bmp)
+        canvas.drawColor(Color.WHITE) // Always white background for thumbnails
+        
+        val scale = thumbWidth.toFloat() / PAGE_WIDTH
+        canvas.scale(scale, scale)
+        
+        val top = pageIndex * (PAGE_HEIGHT + PAGE_MARGIN)
+        canvas.translate(0f, -top)
+        
+        // Draw background lines
+        val pageRect = RectF(0f, top, PAGE_WIDTH, top + PAGE_HEIGHT)
+        drawLinesOnRect(canvas, pageRect)
+        
+        // Draw items
+        val items = getItemsOnPage(pageIndex)
+        for (item in items) {
+            item.draw(canvas)
+        }
+        
+        return bmp
     }
 
     // --- Cropped Bitmap for Recognition ---

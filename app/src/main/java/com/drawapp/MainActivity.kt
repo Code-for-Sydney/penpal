@@ -12,6 +12,7 @@ import android.widget.*
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import java.io.File
+import java.io.FileOutputStream
 import java.util.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -72,6 +73,8 @@ class MainActivity : AppCompatActivity() {
     private val AUTOSAVE_DEBOUNCE_MS = 2000L
     private var notebookName: String = "My Notebook"
     private var notebookId: String = ""
+    private var isDeletingPage = false
+    private fun getNotebookPagePrefix(): String = "${notebookName}_page_"
     private var currentNotebook: Notebook? = null
     private val activityScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
@@ -827,14 +830,15 @@ class MainActivity : AppCompatActivity() {
         }
         
         val dir = File(filesDir, "notebooks")
+        val prefix = getNotebookPagePrefix()
         val pageFiles = dir.listFiles { _, name -> 
-            name.startsWith("${notebookName}_page_") && name.endsWith(".svg") 
+            name.startsWith(prefix) && name.endsWith(".svg") 
         }
         
         var maxPage = -1
         
         pageFiles?.forEach { file ->
-            val numStr = file.name.substringAfter("${notebookName}_page_").substringBefore(".svg")
+            val numStr = file.name.removePrefix(prefix).removeSuffix(".svg")
             val pageNum = numStr.toIntOrNull()
             if (pageNum != null) {
                 try {
@@ -875,6 +879,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun performAutosave() {
+        if (isDeletingPage) return
         if (currentNotebook?.type == NotebookType.WHITEBOARD) {
             savePage(0)
         } else {
@@ -907,24 +912,28 @@ class MainActivity : AppCompatActivity() {
         val bgColor = drawingView.canvasBackgroundColor
         val bgType = drawingView.backgroundType.name
         
-        // Use a simple content bounds or compute it from items
-        val contentBounds = if (items.isEmpty()) null else {
-            val b = RectF()
-            // ... (ideally use a helper to compute bounds of SvgData)
-            null // Fallback
-        }
+        // Generate thumbnail on UI thread
+        val thumbBmp = drawingView.createPageThumbnail(pageIndex)
 
         activityScope.launch(Dispatchers.IO) {
             try {
+                // Save SVG
                 val svgContent = SvgSerializer.serialize(
                     items = items,
                     width = width,
                     height = height,
                     backgroundColor = bgColor,
                     backgroundType = bgType,
-                    contentBounds = contentBounds
+                    contentBounds = null
                 )
                 file.writeText(svgContent)
+                
+                // Save Thumbnail
+                if (thumbBmp != null) {
+                    val out = FileOutputStream(thumbFile)
+                    thumbBmp.compress(Bitmap.CompressFormat.PNG, 90, out)
+                    out.close()
+                }
             } catch (e: Exception) {
                 e.printStackTrace()
             }
@@ -1246,56 +1255,57 @@ class MainActivity : AppCompatActivity() {
     // ── Overview Dialog ───────────────────────────────────────────────────
 
     private fun deletePageAndShift(pageIndexToDelete: Int, overviewDialog: AlertDialog) {
-        // Delete the page files
-        deleteNotebookSvg(pageIndexToDelete)
-        
-        // Find remaining files to shift down
-        val dir = File(filesDir, "notebooks")
-        val allFiles = dir.listFiles { _, name -> 
-            name.startsWith("${notebookName}_page_") && name.endsWith(".svg") 
-        } ?: emptyArray()
-        
-        val existingPages = allFiles.mapNotNull { 
-            it.name.removePrefix("${notebookName}_page_").removeSuffix(".svg").toIntOrNull() 
-        }.filter { it > pageIndexToDelete }.sorted()
-        
-        for (pageIdx in existingPages) {
-            val oldSvg = getNotebookSvgFile(pageIdx)
-            val newSvg = getNotebookSvgFile(pageIdx - 1)
-            oldSvg.renameTo(newSvg)
+        isDeletingPage = true
+        try {
+            // Delete the page files
+            deleteNotebookSvg(pageIndexToDelete)
             
-            val oldThumb = getNotebookThumbFile(pageIdx)
-            val newThumb = getNotebookThumbFile(pageIdx - 1)
-            if (oldThumb.exists()) {
-                oldThumb.renameTo(newThumb)
+            // Find remaining files to shift down
+            val dir = File(filesDir, "notebooks")
+            val prefix = getNotebookPagePrefix()
+            val allFiles = dir.listFiles { _, name -> 
+                name.startsWith(prefix) && name.endsWith(".svg") 
+            } ?: emptyArray()
+            
+            val existingPages = allFiles.mapNotNull { 
+                it.name.removePrefix(prefix).removeSuffix(".svg").toIntOrNull() 
+            }.filter { it > pageIndexToDelete }.sorted()
+            
+            for (pageIdx in existingPages) {
+                val oldSvg = getNotebookSvgFile(pageIdx)
+                val newSvg = getNotebookSvgFile(pageIdx - 1)
+                
+                if (newSvg.exists()) newSvg.delete()
+                oldSvg.renameTo(newSvg)
+                
+                val oldThumb = getNotebookThumbFile(pageIdx)
+                val newThumb = getNotebookThumbFile(pageIdx - 1)
+                if (oldThumb.exists()) {
+                    if (newThumb.exists()) newThumb.delete()
+                    oldThumb.renameTo(newThumb)
+                }
             }
-        }
-        
-        // If we deleted the current page, load the new current page
-        if (currentPageIndex == pageIndexToDelete) {
+            
+            // Update state
+            drawingView.numPages = (drawingView.numPages - 1).coerceAtLeast(1)
+            
+            if (currentNotebook?.type == NotebookType.WHITEBOARD) {
+                currentPageIndex = 0
+                loadNotebookDrawing(0)
+            } else {
+                // In notebook mode, reload all pages to reflect shifts in the infinite scroll
+                loadAllPages()
+            }
+            
             overviewDialog.dismiss()
-            if (currentPageIndex > 0 && !getNotebookSvgFile(currentPageIndex).exists()) {
-                currentPageIndex--
-            }
-            loadNotebookDrawing(currentPageIndex)
-            showOverviewDialog()
-            return
-        } else if (currentPageIndex > pageIndexToDelete) {
-            currentPageIndex--
-            val notebooks = NotebookManager.getNotebooks(this)
-            val notebook = notebooks.find { it.id == notebookId }
-            if (notebook != null) {
-                notebook.lastDisplayedPage = currentPageIndex
-                NotebookManager.updateNotebook(this, notebook)
-            }
+            showOverviewDialog(skipAutosave = true)
+        } finally {
+            isDeletingPage = false
         }
-        
-        overviewDialog.dismiss()
-        showOverviewDialog()
     }
     
-    private fun showOverviewDialog() {
-        performAutosave() // ensure current page is up to date
+    private fun showOverviewDialog(skipAutosave: Boolean = false) {
+        if (!skipAutosave) performAutosave() // ensure current page is up to date
         val dialogView = layoutInflater.inflate(R.layout.dialog_overview, null)
         val gridView = dialogView.findViewById<GridView>(R.id.gridOverview)
         val dialog = AlertDialog.Builder(this, R.style.DarkDialogTheme)
@@ -1303,35 +1313,23 @@ class MainActivity : AppCompatActivity() {
             
         dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
         
-        // Find all pages
-        val pages = mutableListOf<Int>()
-        var pIndex = 0
-        while (true) {
-            val svg = getNotebookSvgFile(pIndex)
-            // Or if they skipped pages, just check up to a limit. Let's list files instead.
-            // But if they are sequential:
-            if (svg.exists() || pIndex == currentPageIndex) {
-                if (!pages.contains(pIndex)) {
-                    pages.add(pIndex)
-                }
-            } else if (pIndex > currentPageIndex) {
-                break
-            }
-            pIndex++
-        }
-        
-        // Actually, let's just search the directory for this notebook's pages to be robust
+        // Find all pages by scanning the directory
         val dir = File(filesDir, "notebooks")
+        val prefix = getNotebookPagePrefix()
         val allFiles = dir.listFiles { _, name -> 
-            name.startsWith("${notebookName}_page_") && name.endsWith(".svg") 
+            name.startsWith(prefix) && name.endsWith(".svg") 
         } ?: emptyArray()
         
         val existingPages = allFiles.mapNotNull { 
-            it.name.removePrefix("${notebookName}_page_").removeSuffix(".svg").toIntOrNull() 
+            it.name.removePrefix(prefix).removeSuffix(".svg").toIntOrNull() 
         }.toMutableSet()
         
-        existingPages.add(currentPageIndex) // always show current page
-        val sortedPages = existingPages.sorted().toList()
+        // Determine total pages to show: max of current numPages, highest file index, and current viewed page
+        val currentViewedPage = drawingView.getCurrentPageIndex()
+        val maxPageInFiles = existingPages.maxOrNull() ?: -1
+        val totalPages = maxOf(drawingView.numPages, maxPageInFiles + 1, currentViewedPage + 1)
+        
+        val sortedPages = (0 until totalPages).toList()
         
         val adapter = object : android.widget.BaseAdapter() {
             override fun getCount() = sortedPages.size
@@ -1354,7 +1352,7 @@ class MainActivity : AppCompatActivity() {
                     imgThumb.setImageResource(R.drawable.toolbar_background) // placeholder
                 }
                 
-                if (pageIdx == currentPageIndex) {
+                if (pageIdx == currentViewedPage) {
                     view.setBackgroundResource(R.drawable.icon_btn_bg)
                 } else {
                     view.background = null
@@ -1373,8 +1371,12 @@ class MainActivity : AppCompatActivity() {
                 
                 view.setOnClickListener {
                     flushPendingRecognition()
-                    currentPageIndex = pageIdx
-                    loadNotebookDrawing(currentPageIndex)
+                    if (currentNotebook?.type == NotebookType.WHITEBOARD) {
+                        currentPageIndex = pageIdx
+                        loadNotebookDrawing(currentPageIndex)
+                    } else {
+                        drawingView.scrollToPage(pageIdx)
+                    }
                     dialog.dismiss()
                 }
                 return view
