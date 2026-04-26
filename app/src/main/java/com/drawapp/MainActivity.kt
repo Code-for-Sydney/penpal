@@ -559,19 +559,32 @@ class MainActivity : AppCompatActivity() {
         btnBackground.setOnClickListener { showBackgroundDialog() }
         
         btnPageUp.setOnClickListener {
-
-            if (currentPageIndex > 0) {
+            val isNotebook = currentNotebook?.type == NotebookType.NOTEBOOK
+            val currentIdx = if (isNotebook) drawingView.getCurrentPageIndex() else currentPageIndex
+            
+            if (currentIdx > 0) {
                 flushPendingRecognition()
-                performAutosave() // Save current
-                currentPageIndex--
-                loadNotebookDrawing(currentPageIndex)
+                performAutosave()
+                currentPageIndex = currentIdx - 1
+                if (isNotebook) {
+                    drawingView.scrollToPage(currentPageIndex)
+                } else {
+                    loadNotebookDrawing(currentPageIndex)
+                }
             }
         }
         btnPageDown.setOnClickListener {
+            val isNotebook = currentNotebook?.type == NotebookType.NOTEBOOK
+            val currentIdx = if (isNotebook) drawingView.getCurrentPageIndex() else currentPageIndex
+            
             flushPendingRecognition()
-            performAutosave() // Save current
-            currentPageIndex++
-            loadNotebookDrawing(currentPageIndex)
+            performAutosave()
+            currentPageIndex = currentIdx + 1
+            if (isNotebook) {
+                drawingView.scrollToPage(currentPageIndex)
+            } else {
+                loadNotebookDrawing(currentPageIndex)
+            }
         }
         btnOverview.setOnClickListener { showOverviewDialog() }
         btnSearch.setOnClickListener { showSearchMode(true) }
@@ -1247,14 +1260,30 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun navigateToMatch(match: SearchMatch) {
-        if (match.pageIndex != currentPageIndex) {
+        val isNotebook = currentNotebook?.type == NotebookType.NOTEBOOK
+        val currentViewedPage = if (isNotebook) {
+            drawingView.getCurrentPageIndex()
+        } else {
+            currentPageIndex
+        }
+
+        if (match.pageIndex != currentViewedPage) {
             flushPendingRecognition()
             performAutosave()
             currentPageIndex = match.pageIndex
-            loadNotebookDrawing(currentPageIndex)
+            if (isNotebook) {
+                drawingView.scrollToPage(currentPageIndex)
+            } else {
+                loadNotebookDrawing(currentPageIndex)
+            }
         }
         
-        val item = drawingView.getItemAtIndex(match.itemIndex)
+        val item = if (isNotebook) {
+            drawingView.getItemsOnPage(match.pageIndex).getOrNull(match.itemIndex)
+        } else {
+            drawingView.getItemAtIndex(match.itemIndex)
+        }
+
         if (item is DrawingView.WordItem) {
             drawingView.searchHighlightedWord = item
             drawingView.scrollToWord(item)
