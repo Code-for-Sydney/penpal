@@ -41,9 +41,9 @@ class DrawingView @JvmOverloads constructor(
     var numPages: Int = 1
 
     // --- Page Constants (for Notebook mode) ---
-    val PAGE_WIDTH = 4000f
-    val PAGE_HEIGHT = 5656f
-    val PAGE_MARGIN = 240f
+    val PAGE_WIDTH = 2800f
+    val PAGE_HEIGHT = 3960f
+    val PAGE_MARGIN = 168f
 
     private val pageBgPaint = Paint().apply {
         color = Color.WHITE
@@ -225,6 +225,20 @@ class DrawingView @JvmOverloads constructor(
         }
     }
 
+    inner class FusedAutoGroupAction(
+        val lastStrokeAction: UndoAction,
+        val groupAction: UndoAction
+    ) : UndoAction {
+        override fun undo() {
+            groupAction.undo()
+            lastStrokeAction.undo()
+        }
+        override fun redo() {
+            lastStrokeAction.redo()
+            groupAction.redo()
+        }
+    }
+
     inner class GroupTransformAction(
         val items: List<CanvasItem>,
         val oldStates: List<ItemState>,
@@ -337,7 +351,7 @@ class DrawingView @JvmOverloads constructor(
     var brushColor: Int = Color.WHITE
         set(value) { field = value; updateCurrentPaint() }
 
-    var brushSize: Float = 12f
+    var brushSize: Float = 8.4f
         set(value) { field = value; updateCurrentPaint() }
 
 
@@ -474,11 +488,20 @@ class DrawingView @JvmOverloads constructor(
     private val inverseMatrix = Matrix()
 
     var scaleFactor = 1.0f
-    var translateX = -120f
+    var translateX = -84f
     var translateY = 0f
 
     // Zoom limits
-    private val MIN_ZOOM = 0.25f
+    private val MIN_ZOOM: Float
+        get() {
+            if (width <= 0 || height <= 0) return 0.25f
+            if (notebookType == NotebookType.WHITEBOARD) return 0.25f
+            val totalHeight = numPages * PAGE_HEIGHT + (numPages - 1) * PAGE_MARGIN
+            val fitH = height.toFloat() / totalHeight
+            val fitW = width.toFloat() / PAGE_WIDTH
+            return minOf(fitH, fitW).coerceAtLeast(0.1f)
+        }
+
     private val MAX_ZOOM: Float
         get() = if (notebookType == NotebookType.WHITEBOARD) 100.0f else 5.0f
 
@@ -582,19 +605,19 @@ class DrawingView @JvmOverloads constructor(
                 translateX = focusX - scaleChange * (focusX - translateX)
                 translateY = focusY - scaleChange * (focusY - translateY)
 
-                updateMatrix()
+                updateMatrix(allowPageCreation = false)
                 invalidate()
                 return true
             }
         }
     )
 
-    private fun updateMatrix() {
+    private fun updateMatrix(allowPageCreation: Boolean = true) {
         if (notebookType == NotebookType.NOTEBOOK && width > 0 && height > 0) {
             val totalHeight = numPages * PAGE_HEIGHT + (numPages - 1) * PAGE_MARGIN
             val screenW = width.toFloat()
             val screenH = height.toFloat()
-            val margin = 300f * scaleFactor
+            val margin = 210f * scaleFactor
             
             // X clamping
             val contentW = PAGE_WIDTH * scaleFactor
@@ -618,7 +641,7 @@ class DrawingView @JvmOverloads constructor(
                 val minTranslateY = screenH - contentH - margin
                 
                 // Auto-create page if we reach the bottom
-                if (translateY <= minTranslateY + 500f) {
+                if (translateY <= minTranslateY + 350f && allowPageCreation) {
                     numPages++
                     onPageAdded?.invoke()
                 }
@@ -685,6 +708,8 @@ class DrawingView @JvmOverloads constructor(
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
 
+        val viewport = getViewportCanvasRect()
+
         // 1. Fill background (dark for notebook, canvas color for whiteboard)
         if (notebookType == NotebookType.NOTEBOOK) {
             canvas.drawColor(Color.parseColor("#1A1A2E")) // Dark desk color
@@ -699,7 +724,9 @@ class DrawingView @JvmOverloads constructor(
             for (i in 0 until numPages) {
                 val top = i * (PAGE_HEIGHT + PAGE_MARGIN)
                 val rect = RectF(0f, top, PAGE_WIDTH, top + PAGE_HEIGHT)
-                canvas.drawRect(rect, pageBgPaint)
+                if (RectF.intersects(rect, viewport)) {
+                    canvas.drawRect(rect, pageBgPaint)
+                }
             }
             canvas.restore()
         }
@@ -714,8 +741,6 @@ class DrawingView @JvmOverloads constructor(
         initialBitmap?.let {
             canvas.drawBitmap(it, 0f, 0f, null)
         }
-
-        val viewport = getViewportCanvasRect()
 
         // 5. Draw all committed items (with culling)
         val hasGroupSelection = selectedItems.size > 1
@@ -1098,8 +1123,8 @@ class DrawingView @JvmOverloads constructor(
     private val tempMarginPaint = Paint()
 
     private fun drawLinesOnRect(canvas: Canvas, rect: RectF, isInfinite: Boolean = false) {
-        val lineSpacing = if (notebookType == NotebookType.NOTEBOOK) 50f else 25f
-        val gridSpacing = if (notebookType == NotebookType.NOTEBOOK) 40f else 20f
+        val lineSpacing = if (notebookType == NotebookType.NOTEBOOK) 70f else 35f
+        val gridSpacing = if (notebookType == NotebookType.NOTEBOOK) 56f else 28f
         
         tempLinePaint.set(linePaint)
         tempLinePaint.strokeWidth = 2f / scaleFactor
@@ -1118,7 +1143,7 @@ class DrawingView @JvmOverloads constructor(
                 count++
             }
 
-            val marginX = if (isInfinite) 120f else rect.left + 320f
+            val marginX = if (isInfinite) 84f else rect.left + 224f
             if (marginX in rect.left..rect.right) {
                 canvas.drawLine(marginX, rect.top, marginX, rect.bottom, tempMarginPaint)
             }
@@ -1965,7 +1990,7 @@ class DrawingView @JvmOverloads constructor(
     @Deprecated("Use deleteSelectedItem instead", ReplaceWith("deleteSelectedItem()"))
     fun deleteSelectedImage() = deleteSelectedItem()
 
-    fun groupStrokesIntoWord(strokesToGroup: List<StrokeItem>, text: String, wordsToMerge: List<WordItem> = emptyList()): WordItem? {
+    fun groupStrokesIntoWord(strokesToGroup: List<StrokeItem>, text: String, wordsToMerge: List<WordItem> = emptyList(), isAutoGroup: Boolean = false): WordItem? {
         val stillInCanvasLoose = strokesToGroup.filter { it in drawItems }
         val stillInCanvasWords = wordsToMerge.filter { it in drawItems }
         
@@ -1990,6 +2015,41 @@ class DrawingView @JvmOverloads constructor(
         stillInCanvasWords.firstOrNull()?.let { firstWord ->
             wordItem.tintColor = firstWord.tintColor
             wordItem.backgroundColor = firstWord.backgroundColor
+        }
+
+        // Optimization: If this is an automated grouping, merge it with all relevant previous actions
+        // (strokes and previous recognition steps) to ensure a single undo removes the entire cluster
+        // of new changes.
+        if (isAutoGroup && undoStack.isNotEmpty()) {
+            val groupAction = GroupAction(stillInCanvasLoose, stillInCanvasWords, wordItem)
+            groupAction.redo() // Apply the swap immediately
+            
+            var combinedAction: UndoAction = groupAction
+            var fusedAny = false
+            
+            while (undoStack.isNotEmpty()) {
+                val last = undoStack.last()
+                val canFuse = when (last) {
+                    is AddItemAction -> last.item in stillInCanvasLoose
+                    is FusedAutoGroupAction -> {
+                        val innerGroup = last.groupAction
+                        innerGroup is GroupAction && innerGroup.wordToAdd in stillInCanvasWords
+                    }
+                    else -> false
+                }
+                
+                if (canFuse) {
+                    val popped = undoStack.removeAt(undoStack.size - 1)
+                    val strokeAction = if (popped is FusedAutoGroupAction) popped.lastStrokeAction else popped
+                    combinedAction = FusedAutoGroupAction(strokeAction, combinedAction)
+                    fusedAny = true
+                } else {
+                    break
+                }
+            }
+            
+            pushAction(combinedAction, executeNow = false)
+            return wordItem
         }
 
         pushAction(GroupAction(stillInCanvasLoose, stillInCanvasWords, wordItem))

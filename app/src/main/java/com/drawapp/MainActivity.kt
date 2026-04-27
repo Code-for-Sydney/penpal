@@ -384,7 +384,7 @@ class MainActivity : AppCompatActivity() {
         busyStrokes.addAll(strokes)
         
         // Group immediately so they are transformable as a Word object
-        val wordItem = drawingView.groupStrokesIntoWord(strokes, "…", mergedWords)
+        val wordItem = drawingView.groupStrokesIntoWord(strokes, "…", mergedWords, isAutoGroup = true)
         
         var accumulated = ""
         var currentPrefix = ""
@@ -512,12 +512,10 @@ class MainActivity : AppCompatActivity() {
         }
         btnUndo.setOnClickListener {
             drawingView.undo(); updateButtonStates()
-            scheduleRecognition()
             scheduleAutosave()
         }
         btnRedo.setOnClickListener {
             drawingView.redo(); updateButtonStates()
-            scheduleRecognition()
             scheduleAutosave()
         }
         btnClear.setOnClickListener { 
