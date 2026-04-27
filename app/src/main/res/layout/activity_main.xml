@@ -131,6 +131,19 @@
         android:background="?attr/selectableItemBackgroundBorderless"
         android:contentDescription="Search"
         android:tint="#CCCCCC"
+        app:layout_constraintEnd_toStartOf="@id/btnExport"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <ImageButton
+        android:id="@+id/btnExport"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:layout_marginEnd="8dp"
+        android:layout_marginTop="8dp"
+        android:src="@drawable/ic_save"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:contentDescription="Export"
+        android:tint="#CCCCCC"
         app:layout_constraintEnd_toStartOf="@id/btnOverview"
         app:layout_constraintTop_toTopOf="parent" />
 

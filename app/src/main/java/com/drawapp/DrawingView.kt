@@ -73,6 +73,7 @@ class DrawingView @JvmOverloads constructor(
     sealed class CanvasItem {
         abstract val bounds: RectF
         open fun invalidateCache() {}
+        abstract fun toSvgData(): SvgData
     }
 
     data class StrokeItem(
@@ -83,6 +84,13 @@ class DrawingView @JvmOverloads constructor(
         val isEraser: Boolean = false
     ) : CanvasItem() {
         override val bounds: RectF get() = boundsRect
+        override fun toSvgData(): SvgData = StrokeData(
+            commands = commands,
+            color = paint.color,
+            strokeWidth = paint.strokeWidth,
+            opacity = paint.alpha,
+            isEraser = isEraser
+        )
     }
 
     data class ImageItem(
@@ -131,6 +139,25 @@ class DrawingView @JvmOverloads constructor(
                 matrix.mapRect(r)
                 return r
             }
+
+        override fun toSvgData(): SvgData {
+            val stream = ByteArrayOutputStream()
+            bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
+            val base64 = Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
+            val mValues = FloatArray(9)
+            matrix.getValues(mValues)
+            val tmValues = FloatArray(9)
+            textMatrix.getValues(tmValues)
+            return ImageData(
+                base64 = base64,
+                matrix = mValues,
+                removeBackground = removeBackground,
+                text = text,
+                isShowingText = isShowingText,
+                textMatrix = tmValues,
+                textBounds = FloatRect(textBounds.left, textBounds.top, textBounds.right, textBounds.bottom)
+            )
+        }
     }
 
     data class WordItem(
@@ -158,6 +185,23 @@ class DrawingView @JvmOverloads constructor(
                 cachedBounds = r
                 return r
             }
+
+        override fun toSvgData(): SvgData {
+            val mValues = FloatArray(9)
+            matrix.getValues(mValues)
+            val tmValues = FloatArray(9)
+            textMatrix.getValues(tmValues)
+            return WordData(
+                strokes = strokes.map { it.toSvgData() as StrokeData },
+                matrix = mValues,
+                text = text,
+                isShowingText = isShowingText,
+                textMatrix = tmValues,
+                textBounds = FloatRect(textBounds.left, textBounds.top, textBounds.right, textBounds.bottom),
+                tintColor = tintColor,
+                backgroundColor = backgroundColor
+            )
+        }
         
         override fun invalidateCache() {
             cachedBounds = null
@@ -3069,5 +3113,87 @@ class DrawingView @JvmOverloads constructor(
             }
         }
         return collision
+    }
+    // ══════════════════════════════════════════════════════════════════════
+    // Export Helpers
+    // ══════════════════════════════════════════════════════════════════════
+
+    fun getAllContentBounds(): RectF {
+        val bounds = RectF()
+        if (drawItems.isEmpty()) return bounds
+        bounds.set(drawItems[0].bounds)
+        for (i in 1 until drawItems.size) {
+            bounds.union(drawItems[i].bounds)
+        }
+        return bounds
+    }
+
+    fun getPageRect(pageIndex: Int): RectF {
+        val top = pageIndex * (PAGE_HEIGHT + PAGE_MARGIN)
+        return RectF(0f, top, PAGE_WIDTH, top + PAGE_HEIGHT)
+    }
+
+    fun getNonEmptyPageIndices(): List<Int> {
+        if (notebookType == NotebookType.WHITEBOARD) return listOf(0)
+        
+        val indices = mutableListOf<Int>()
+        for (i in 0 until numPages) {
+            val pageRect = getPageRect(i)
+            val hasItems = drawItems.any { RectF.intersects(it.bounds, pageRect) }
+            if (hasItems) {
+                indices.add(i)
+            }
+        }
+        return indices
+    }
+
+    /**
+     * Renders specified pages or content to an external canvas.
+     * If pageIndices is null, renders the whole content within the specified bounds.
+     */
+    fun renderToExternalCanvas(canvas: Canvas, bounds: RectF, pageIndices: List<Int>? = null) {
+        canvas.save()
+        // Translate canvas so that 'bounds.left, bounds.top' is at '0, 0'
+        canvas.translate(-bounds.left, -bounds.top)
+        
+        // Draw background
+        if (notebookType == NotebookType.NOTEBOOK) {
+            val bgPaint = Paint().apply { color = Color.WHITE; style = Paint.Style.FILL }
+            if (pageIndices != null) {
+                for (idx in pageIndices) {
+                    canvas.drawRect(getPageRect(idx), bgPaint)
+                }
+            } else {
+                canvas.drawRect(bounds, bgPaint)
+            }
+        }
+
+        // Draw items
+        for (item in drawItems) {
+            if (pageIndices != null) {
+                // If specific pages are requested, check if item intersects with any of them
+                val onRequestedPage = pageIndices.any { RectF.intersects(item.bounds, getPageRect(it)) }
+                if (onRequestedPage) {
+                    item.draw(canvas)
+                }
+            } else {
+                // Otherwise check intersection with the overall bounds
+                if (RectF.intersects(item.bounds, bounds)) {
+                    item.draw(canvas)
+                }
+            }
+        }
+        
+        canvas.restore()
+    }
+
+    fun getSvgDataForExport(pageIndices: List<Int>? = null): List<SvgData> {
+        return if (pageIndices == null) {
+            drawItems.map { it.toSvgData() }
+        } else {
+            drawItems.filter { item ->
+                pageIndices.any { RectF.intersects(item.bounds, getPageRect(it)) }
+            }.map { it.toSvgData() }
+        }
     }
 }

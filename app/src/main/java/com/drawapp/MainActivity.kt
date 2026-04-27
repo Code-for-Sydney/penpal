@@ -35,6 +35,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnToggleTools: ImageButton
     private lateinit var btnEraser: ImageButton
     private lateinit var btnLasso: ImageButton
+    private lateinit var btnExport: ImageButton
 
     private lateinit var recognitionProgress: ProgressBar
     private lateinit var recognitionIcon: TextView
@@ -146,6 +147,17 @@ class MainActivity : AppCompatActivity() {
         "#607D8B", "#E91E63", "#8BC34A", "#FF5722", "#00E5FF"
     )
 
+    private var exportFormat: String = "pdf"
+    private val createDocumentLauncher = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.CreateDocument()) { uri ->
+        if (uri != null) {
+            when (exportFormat) {
+                "pdf" -> performPdfExport(uri)
+                "svg" -> performSvgExport(uri)
+                "png" -> performPngExport(uri)
+            }
+        }
+    }
+
     // ══════════════════════════════════════════════════════════════════════
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -182,6 +194,7 @@ class MainActivity : AppCompatActivity() {
         btnJumpMarkers      = findViewById(R.id.btnJumpMarkers)
         btnBackground       = findViewById(R.id.btnBackground)
         tvPageIndicator     = findViewById(R.id.tvPageIndicator)
+        btnExport           = findViewById(R.id.btnExport)
 
         searchBarContainer  = findViewById(R.id.searchBarContainer)
         etSearch            = findViewById(R.id.etSearch)
@@ -587,6 +600,7 @@ class MainActivity : AppCompatActivity() {
         btnOverview.setOnClickListener { showOverviewDialog() }
         btnSearch.setOnClickListener { showSearchMode(true) }
         btnJumpMarkers.setOnClickListener { jumpToNextMarker() }
+        btnExport.setOnClickListener { showExportDialog() }
 
         btnCloseSearch.setOnClickListener { showSearchMode(false) }
         btnNextMatch.setOnClickListener {
@@ -1531,5 +1545,168 @@ class MainActivity : AppCompatActivity() {
             },
             onError = { _ -> }
         )
+    }
+    // ── Export ──────────────────────────────────────────────────────────
+
+    private fun showExportDialog() {
+        val options = arrayOf("PDF document (.pdf)", "SVG graphics (.svg)", "PNG image (.png)")
+        AlertDialog.Builder(this, R.style.DarkDialogTheme)
+            .setTitle("Export Drawing")
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> startExport("pdf", "application/pdf")
+                    1 -> startExport("svg", "image/svg+xml")
+                    2 -> startExport("png", "image/png")
+                }
+            }
+            .show()
+    }
+
+    private fun startExport(format: String, mimeType: String) {
+        exportFormat = format
+        val defaultName = "${notebookName.replace(" ", "_")}_export.$format"
+        createDocumentLauncher.launch(defaultName)
+    }
+
+    private fun performPdfExport(uri: android.net.Uri) {
+        activityScope.launch(Dispatchers.IO) {
+            try {
+                val pdfDocument = android.graphics.pdf.PdfDocument()
+                val isWhiteboard = currentNotebook?.type == NotebookType.WHITEBOARD
+                
+                if (isWhiteboard) {
+                    val bounds = drawingView.getAllContentBounds()
+                    if (bounds.isEmpty) {
+                        withContext(Dispatchers.Main) { Toast.makeText(this@MainActivity, "Canvas is empty", Toast.LENGTH_SHORT).show() }
+                        return@launch
+                    }
+                    // Add margin
+                    bounds.inset(-40f, -40f)
+                    
+                    val pageInfo = android.graphics.pdf.PdfDocument.PageInfo.Builder(bounds.width().toInt(), bounds.height().toInt(), 1).create()
+                    val page = pdfDocument.startPage(pageInfo)
+                    drawingView.renderToExternalCanvas(page.canvas, bounds)
+                    pdfDocument.finishPage(page)
+                } else {
+                    val pageIndices = drawingView.getNonEmptyPageIndices()
+                    if (pageIndices.isEmpty()) {
+                        withContext(Dispatchers.Main) { Toast.makeText(this@MainActivity, "Notebook is empty", Toast.LENGTH_SHORT).show() }
+                        return@launch
+                    }
+                    
+                    for ((i, idx) in pageIndices.withIndex()) {
+                        val pageRect = drawingView.getPageRect(idx)
+                        val pageInfo = android.graphics.pdf.PdfDocument.PageInfo.Builder(pageRect.width().toInt(), pageRect.height().toInt(), i + 1).create()
+                        val page = pdfDocument.startPage(pageInfo)
+                        drawingView.renderToExternalCanvas(page.canvas, pageRect, listOf(idx))
+                        pdfDocument.finishPage(page)
+                    }
+                }
+
+                contentResolver.openOutputStream(uri)?.use { out ->
+                    pdfDocument.writeTo(out)
+                }
+                pdfDocument.close()
+                withContext(Dispatchers.Main) { Toast.makeText(this@MainActivity, "Exported PDF successfully", Toast.LENGTH_SHORT).show() }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                withContext(Dispatchers.Main) { Toast.makeText(this@MainActivity, "Export failed: ${e.message}", Toast.LENGTH_LONG).show() }
+            }
+        }
+    }
+
+    private fun performSvgExport(uri: android.net.Uri) {
+        activityScope.launch(Dispatchers.IO) {
+            try {
+                val isWhiteboard = currentNotebook?.type == NotebookType.WHITEBOARD
+                val svgString: String
+                
+                if (isWhiteboard) {
+                    val bounds = drawingView.getAllContentBounds()
+                    val svgData = drawingView.getSvgDataForExport()
+                    svgString = SvgSerializer.serialize(
+                        items = svgData,
+                        width = bounds.width().toInt(),
+                        height = bounds.height().toInt(),
+                        backgroundColor = drawingView.canvasBackgroundColor,
+                        backgroundType = "NONE",
+                        contentBounds = bounds
+                    )
+                } else {
+                    val pageIndices = drawingView.getNonEmptyPageIndices()
+                    if (pageIndices.isEmpty()) {
+                        withContext(Dispatchers.Main) { Toast.makeText(this@MainActivity, "Notebook is empty", Toast.LENGTH_SHORT).show() }
+                        return@launch
+                    }
+                    
+                    // For SVG notebook export, we'll create one long SVG containing all non-empty pages
+                    val firstPage = drawingView.getPageRect(pageIndices.first())
+                    val lastPage = drawingView.getPageRect(pageIndices.last())
+                    val combinedBounds = RectF(0f, firstPage.top, drawingView.PAGE_WIDTH, lastPage.bottom)
+                    
+                    val svgData = drawingView.getSvgDataForExport(pageIndices)
+                    svgString = SvgSerializer.serialize(
+                        items = svgData,
+                        width = combinedBounds.width().toInt(),
+                        height = combinedBounds.height().toInt(),
+                        backgroundColor = Color.WHITE,
+                        backgroundType = drawingView.backgroundType.name,
+                        contentBounds = combinedBounds
+                    )
+                }
+
+                contentResolver.openOutputStream(uri)?.use { out ->
+                    out.write(svgString.toByteArray())
+                }
+                withContext(Dispatchers.Main) { Toast.makeText(this@MainActivity, "Exported SVG successfully", Toast.LENGTH_SHORT).show() }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                withContext(Dispatchers.Main) { Toast.makeText(this@MainActivity, "Export failed: ${e.message}", Toast.LENGTH_LONG).show() }
+            }
+        }
+    }
+
+    private fun performPngExport(uri: android.net.Uri) {
+        activityScope.launch(Dispatchers.IO) {
+            try {
+                val isWhiteboard = currentNotebook?.type == NotebookType.WHITEBOARD
+                val bitmap: Bitmap
+                
+                if (isWhiteboard) {
+                    val bounds = drawingView.getAllContentBounds()
+                    if (bounds.isEmpty) {
+                        withContext(Dispatchers.Main) { Toast.makeText(this@MainActivity, "Canvas is empty", Toast.LENGTH_SHORT).show() }
+                        return@launch
+                    }
+                    bounds.inset(-20f, -20f)
+                    
+                    bitmap = Bitmap.createBitmap(bounds.width().toInt(), bounds.height().toInt(), Bitmap.Config.ARGB_8888)
+                    val canvas = android.graphics.Canvas(bitmap)
+                    drawingView.renderToExternalCanvas(canvas, bounds)
+                } else {
+                    val pageIndices = drawingView.getNonEmptyPageIndices()
+                    if (pageIndices.isEmpty()) {
+                        withContext(Dispatchers.Main) { Toast.makeText(this@MainActivity, "Notebook is empty", Toast.LENGTH_SHORT).show() }
+                        return@launch
+                    }
+                    
+                    val firstPage = drawingView.getPageRect(pageIndices.first())
+                    val lastPage = drawingView.getPageRect(pageIndices.last())
+                    val combinedBounds = RectF(0f, firstPage.top, drawingView.PAGE_WIDTH, lastPage.bottom)
+                    
+                    bitmap = Bitmap.createBitmap(combinedBounds.width().toInt(), combinedBounds.height().toInt(), Bitmap.Config.ARGB_8888)
+                    val canvas = android.graphics.Canvas(bitmap)
+                    drawingView.renderToExternalCanvas(canvas, combinedBounds, pageIndices)
+                }
+
+                contentResolver.openOutputStream(uri)?.use { out ->
+                    bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+                }
+                withContext(Dispatchers.Main) { Toast.makeText(this@MainActivity, "Exported PNG successfully", Toast.LENGTH_SHORT).show() }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                withContext(Dispatchers.Main) { Toast.makeText(this@MainActivity, "Export failed: ${e.message}", Toast.LENGTH_LONG).show() }
+            }
+        }
     }
 }
