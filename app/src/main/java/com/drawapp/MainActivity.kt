@@ -16,6 +16,9 @@ import java.io.FileOutputStream
 import java.util.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import org.json.JSONArray
+import org.json.JSONObject
+
 
 class MainActivity : AppCompatActivity() {
 
@@ -65,7 +68,7 @@ class MainActivity : AppCompatActivity() {
     // ── Recognizer ─────────────────────────────────────────────────────────
     private lateinit var recognizer: HandwritingRecognizer
     private val recognitionHandler = Handler(Looper.getMainLooper())
-    private val DEBOUNCE_MS = 800L
+    private val DEBOUNCE_MS = 2000L
     private var hasPendingRecognition = false
     private val recognitionRunnable = Runnable { 
         hasPendingRecognition = false
@@ -80,15 +83,12 @@ class MainActivity : AppCompatActivity() {
     private var currentNotebook: Notebook? = null
     private val activityScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
+    private var currentPageIndex: Int = 0
+    private var fullRecognizedText: String = ""
+    private var pendingClusterBitmap: Bitmap? = null
     private val busyStrokes = mutableSetOf<DrawingView.StrokeItem>()
 
-    private var currentPageIndex: Int = 0
 
-    // Multi-cluster tracking
-    private var pendingClusterStrokes: List<DrawingView.StrokeItem>? = null
-    private var pendingClusterMergedWords: List<DrawingView.WordItem>? = null
-    private var pendingClusterBitmap: android.graphics.Bitmap? = null
-    private var fullRecognizedText: String = ""
 
     // ── Misc ───────────────────────────────────────────────────────────────
     private val pickMedia = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia()) { uri ->
@@ -230,6 +230,10 @@ class MainActivity : AppCompatActivity() {
         drawingView.onWordModified = { word ->
             triggerRecognitionForWord(word)
         }
+        drawingView.onRecognizeSelectedItems = { items ->
+            handleLassoRecognition(items)
+        }
+
         updateColorSwatch()
         updateToolState()
         setupRecognizer()
@@ -280,35 +284,6 @@ class MainActivity : AppCompatActivity() {
 
         // Wire stroke callback → debounced recognition & autosave
         drawingView.onStrokeCompleted = {
-            val clusterData = drawingView.getRecentClusterWithStrokes()
-            var currentStrokes = clusterData?.strokes ?: emptyList()
-            val mergedWords = clusterData?.mergedWords ?: emptyList()
-            
-            // Filter out strokes that are already being recognized to prevent duplication
-            currentStrokes = currentStrokes.filter { it !in busyStrokes }
-            
-            if (pendingClusterStrokes != null && currentStrokes.isNotEmpty()) {
-                val prevStrokes = pendingClusterStrokes!!
-                // If the new stroke is not part of the current pending cluster, flush recognition for the previous one
-                if (currentStrokes.none { it in prevStrokes }) {
-                    if (pendingClusterBitmap != null) {
-                        val prevBitmap = pendingClusterBitmap!!
-                        val prevMerged = pendingClusterMergedWords ?: emptyList()
-                        
-                        // Clear pending state BEFORE triggering to prevent recursion or accidental re-flushing
-                        pendingClusterStrokes = null
-                        pendingClusterBitmap = null
-                        pendingClusterMergedWords = null
-                        
-                        triggerRecognitionForBitmap(prevBitmap, prevStrokes, prevMerged)
-                    }
-                }
-            }
-            
-            pendingClusterStrokes = if (currentStrokes.isNotEmpty()) currentStrokes else null
-            pendingClusterMergedWords = if (currentStrokes.isNotEmpty()) mergedWords else null
-            pendingClusterBitmap = if (currentStrokes.isNotEmpty()) clusterData?.bitmap else null
-
             if (recognizer.isReady) {
                 recognitionHandler.removeCallbacks(recognitionRunnable)
                 recognitionHandler.postDelayed(recognitionRunnable, DEBOUNCE_MS)
@@ -318,6 +293,7 @@ class MainActivity : AppCompatActivity() {
             recognitionHandler.removeCallbacks(autosaveRunnable)
             recognitionHandler.postDelayed(autosaveRunnable, AUTOSAVE_DEBOUNCE_MS)
         }
+
 
         // Observe readiness to update UI
         activityScope.launch {
@@ -381,76 +357,82 @@ class MainActivity : AppCompatActivity() {
     private fun triggerRecognition() {
         if (!recognizer.isReady) return
         
-        val bitmap = pendingClusterBitmap ?: return
-        val strokes = pendingClusterStrokes ?: return
-        val mergedWords = pendingClusterMergedWords ?: emptyList()
+        val pageIndex = drawingView.getCurrentPageIndex()
+        val bitmap = drawingView.createFullPageBitmap(pageIndex) ?: return
         
-        pendingClusterStrokes = null
-        pendingClusterMergedWords = null
-        pendingClusterBitmap = null
-
-        triggerRecognitionForBitmap(bitmap, strokes, mergedWords)
+        // Reset fullRecognizedText for new page-wide recognition
+        fullRecognizedText = ""
+        
+        triggerRecognitionForFullPage(bitmap, pageIndex)
     }
 
-    private fun triggerRecognitionForBitmap(bitmap: Bitmap, strokes: List<DrawingView.StrokeItem>, mergedWords: List<DrawingView.WordItem> = emptyList()) {
-        if (strokes.isEmpty()) return
-        busyStrokes.addAll(strokes)
-        
-        // Group immediately so they are transformable as a Word object
-        val wordItem = drawingView.groupStrokesIntoWord(strokes, "…", mergedWords, isAutoGroup = true)
-        
-        var accumulated = ""
-        var currentPrefix = ""
-        var prefixEvaluated = false
+    private fun triggerRecognitionForFullPage(bitmap: Bitmap, pageIndex: Int) {
+        setRecognitionState(RecognitionState.RUNNING)
+        recognitionText.text = "Analyzing page..."
 
+        val prompt = """
+            Detect all handwriting in this image. For each word, number, or star (*), 
+            provide its text and its bounding box in JSON format: 
+            [{"text": "...", "box_2d": [ymin, xmin, ymax, xmax]}, ...]. 
+            Coordinates are 0-1000 relative to the image. 
+            Output ONLY the JSON.
+        """.trimIndent()
+
+        var accumulated = ""
         recognizer.recognize(
             bitmap = bitmap,
+            prompt = prompt,
             onPartialResult = { partial ->
-                if (!prefixEvaluated) {
-                    // If we merged words, we might want to preserve the text of the first one?
-                    // Actually, let's just use the current fullRecognizedText if we are continuing a sequence,
-                    // but if we merged a word, fullRecognizedText might be irrelevant for this specific WordItem.
-                    // However, triggerRecognitionForBitmap is usually called for the "recent" cluster.
-                    currentPrefix = if (fullRecognizedText.isNotEmpty()) "$fullRecognizedText " else ""
-                    prefixEvaluated = true
-                }
                 accumulated += partial
-                recognitionText.text = currentPrefix + accumulated.trim()
-                recognitionText.setTextColor(Color.WHITE)
-                
-                // Update the word item text as we go
-                wordItem?.text = accumulated.trim()
             },
             onDone = {
-                if (!prefixEvaluated) {
-                    currentPrefix = if (fullRecognizedText.isNotEmpty()) "$fullRecognizedText " else ""
-                    prefixEvaluated = true
-                }
-                if (accumulated.isNotBlank()) {
-                    val result = currentPrefix + accumulated.trim()
-                    fullRecognizedText = result
-                    wordItem?.text = accumulated.trim()
+                val cleanJson = extractJson(accumulated)
+                try {
+                    val array = JSONArray(cleanJson)
+                    val detectedBoxes = mutableListOf<DrawingView.DetectedBox>()
+                    for (i in 0 until array.length()) {
+                        val obj = array.getJSONObject(i)
+                        val text = obj.getString("text")
+                        val box = obj.getJSONArray("box_2d")
+                        detectedBoxes.add(DrawingView.DetectedBox(
+                            text,
+                            box.getDouble(0).toFloat(),
+                            box.getDouble(1).toFloat(),
+                            box.getDouble(2).toFloat(),
+                            box.getDouble(3).toFloat()
+                        ))
+                    }
+                    drawingView.groupStrokesByBoxes(pageIndex, detectedBoxes)
+                    setRecognitionState(RecognitionState.DONE)
+                    recognitionText.text = "Page analyzed: ${detectedBoxes.size} items found"
                     scheduleAutosave()
-                } else if (fullRecognizedText.isBlank()) {
-                    recognitionText.text = "(nothing recognized)"
-                    recognitionText.setTextColor(Color.parseColor("#88FFFFFF"))
-                    wordItem?.text = ""
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                    setRecognitionState(RecognitionState.ERROR)
+                    recognitionText.text = "Parse error — tap ✦ to retry"
                 }
-                busyStrokes.removeAll(strokes)
-                drawingView.invalidate()
             },
             onError = { msg ->
-                busyStrokes.removeAll(strokes)
                 setRecognitionState(RecognitionState.ERROR)
                 recognitionText.text = "Error: $msg"
-                recognitionText.setTextColor(Color.parseColor("#FF6B6B"))
-                wordItem?.text = ""
-                drawingView.invalidate()
             }
         )
     }
 
+    private fun extractJson(text: String): String {
+        val start = text.indexOf("[")
+        val end = text.lastIndexOf("]")
+        if (start != -1 && end != -1 && end > start) {
+            return text.substring(start, end + 1)
+        }
+        return text
+    }
+
+
+
+
     private fun triggerRecognitionForWord(word: DrawingView.WordItem) {
+
         val strokesInCanvasSpace = drawingView.dissolveWordToStrokes(word)
         if (strokesInCanvasSpace.isEmpty()) return
         
@@ -470,6 +452,63 @@ class MainActivity : AppCompatActivity() {
             }
         )
     }
+
+    private fun handleLassoRecognition(items: List<DrawingView.CanvasItem>) {
+        if (items.isEmpty()) return
+
+        // 1. Check if we can just toggle text mode (all items have text and no raw strokes)
+        val hasRawStrokes = items.any { it is DrawingView.StrokeItem }
+        val allHaveText = items.all { (it is DrawingView.WordItem && it.text.isNotEmpty()) || (it is DrawingView.ImageItem && it.text.isNotEmpty()) }
+
+        if (allHaveText && !hasRawStrokes) {
+            // Determine target state (if any are showing strokes, switch all to text)
+            val anyShowingStrokes = items.any { (it is DrawingView.WordItem && !it.isShowingText) || (it is DrawingView.ImageItem && !it.isShowingText) }
+            val targetShowText = anyShowingStrokes
+            
+            for (item in items) {
+                drawingView.setItemStyle(item, "isShowingText", targetShowText)
+            }
+            drawingView.invalidate()
+            return
+        }
+
+        // 2. Otherwise, we need to recognize (either new strokes or missing text)
+        if (!recognizer.isReady) {
+            Toast.makeText(this, "Recognizer not ready", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val bitmap = drawingView.createBitmapForItems(items) ?: return
+        setRecognitionState(RecognitionState.RUNNING)
+        recognitionText.text = "Recognizing selection..."
+
+        var resultText = ""
+        recognizer.recognize(
+            bitmap = bitmap,
+            onPartialResult = { partial ->
+                resultText = partial.trim()
+            },
+            onDone = {
+                if (resultText.isNotEmpty()) {
+                    val word = drawingView.groupSelectedItemsIntoWord(items, resultText)
+                    word?.isShowingText = true
+                    drawingView.clearLassoSelection()
+                    drawingView.invalidate()
+                    setRecognitionState(RecognitionState.DONE)
+                    recognitionText.text = "Selection recognized: $resultText"
+                    scheduleAutosave()
+                } else {
+                    setRecognitionState(RecognitionState.IDLE)
+                    recognitionText.text = "No text recognized"
+                }
+            },
+            onError = { msg ->
+                setRecognitionState(RecognitionState.ERROR)
+                recognitionText.text = "Recognition failed: $msg"
+            }
+        )
+    }
+
 
     // ══════════════════════════════════════════════════════════════════════
     // RecognitionState UI
@@ -848,7 +887,7 @@ class MainActivity : AppCompatActivity() {
                 recognitionText.text = "Draw something to recognize…"
                 recognitionText.setTextColor(Color.parseColor("#88FFFFFF"))
                 setRecognitionState(RecognitionState.IDLE)
-                busyStrokes.clear()
+                 busyStrokes.clear()
                 // Trigger autosave to preserve background type even if canvas is cleared
                 performAutosave()
             }
