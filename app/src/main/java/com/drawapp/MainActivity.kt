@@ -392,7 +392,8 @@ class MainActivity : AppCompatActivity() {
                     val detectedBoxes = mutableListOf<DrawingView.DetectedBox>()
                     for (i in 0 until array.length()) {
                         val obj = array.getJSONObject(i)
-                        val text = obj.getString("text")
+                        val text = obj.optString("text", obj.optString("label", ""))
+                        if (text.isEmpty() || !obj.has("box_2d")) continue
                         val box = obj.getJSONArray("box_2d")
                         detectedBoxes.add(DrawingView.DetectedBox(
                             text,
@@ -404,12 +405,18 @@ class MainActivity : AppCompatActivity() {
                     }
                     drawingView.groupStrokesByBoxes(pageIndex, detectedBoxes)
                     setRecognitionState(RecognitionState.DONE)
-                    recognitionText.text = "Page analyzed: ${detectedBoxes.size} items found"
+                    if (detectedBoxes.isEmpty()) {
+                        recognitionText.text = "0 items. Model said: $accumulated"
+                    } else {
+                        recognitionText.text = "Page analyzed: ${detectedBoxes.size} items found"
+                    }
                     scheduleAutosave()
                 } catch (e: Exception) {
                     e.printStackTrace()
+                    android.util.Log.e("Penpal", "Parse error. Raw model output: $accumulated")
                     setRecognitionState(RecognitionState.ERROR)
-                    recognitionText.text = "Parse error — tap ✦ to retry"
+                    val shortOutput = if (accumulated.length > 50) accumulated.substring(0, 50) + "..." else accumulated
+                    recognitionText.text = "Parse error: $shortOutput"
                 }
             },
             onError = { msg ->
@@ -420,12 +427,21 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun extractJson(text: String): String {
-        val start = text.indexOf("[")
-        val end = text.lastIndexOf("]")
+        // 1. Strip markdown code fences (```json ... ``` or ``` ... ```)
+        val stripped = text
+            .replace(Regex("```(?:json)?\\s*"), "")
+            .replace("```", "")
+            .trim()
+
+        // 2. Extract the outermost JSON array [...]
+        val start = stripped.indexOf("[")
+        val end = stripped.lastIndexOf("]")
         if (start != -1 && end != -1 && end > start) {
-            return text.substring(start, end + 1)
+            return stripped.substring(start, end + 1)
         }
-        return text
+
+        // 3. Fallback: return empty array so JSONArray parsing succeeds with 0 items
+        return "[]"
     }
 
 
@@ -441,7 +457,7 @@ class MainActivity : AppCompatActivity() {
         recognizer.recognize(
             bitmap = bitmap,
             onPartialResult = { partial ->
-                word.text = partial.trim()
+                word.text += partial
                 drawingView.invalidate()
             },
             onDone = {
@@ -486,7 +502,7 @@ class MainActivity : AppCompatActivity() {
         recognizer.recognize(
             bitmap = bitmap,
             onPartialResult = { partial ->
-                resultText = partial.trim()
+                resultText += partial
             },
             onDone = {
                 if (resultText.isNotEmpty()) {

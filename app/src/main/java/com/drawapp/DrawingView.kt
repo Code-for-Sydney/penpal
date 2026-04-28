@@ -2352,10 +2352,37 @@ class DrawingView @JvmOverloads constructor(
         
         // Culling: only draw items on this page
         val items = getItemsOnPage(pageIndex)
+        
+        // Boost stroke width for OCR visibility on full page
+        // To get ~4px thickness on the final 1024px bitmap, we need absolute width of 4 / scale.
+        val minStrokeWidth = 4f / scale
+        val originalWidths = mutableMapOf<StrokeItem, Float>()
+        
+        for (item in items) {
+            if (item is StrokeItem) {
+                originalWidths[item] = item.paint.strokeWidth
+                if (item.paint.strokeWidth < minStrokeWidth) {
+                    item.paint.strokeWidth = minStrokeWidth
+                }
+            } else if (item is WordItem) {
+                for (stroke in item.strokes) {
+                    originalWidths[stroke] = stroke.paint.strokeWidth
+                    if (stroke.paint.strokeWidth < minStrokeWidth) {
+                        stroke.paint.strokeWidth = minStrokeWidth
+                    }
+                }
+            }
+        }
+
         for (item in items) {
             // Draw only strokes and words (skip images if we just want handwriting)
             // But sometimes handwriting is on images... let's draw images too.
             item.draw(canvas)
+        }
+        
+        // Restore original stroke widths
+        for ((stroke, originalWidth) in originalWidths) {
+            stroke.paint.strokeWidth = originalWidth
         }
         
         return bmp
