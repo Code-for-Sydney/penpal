@@ -680,7 +680,13 @@ class DrawingView @JvmOverloads constructor(
                 if (contentH < screenH * 0.8f) {
                     translateY = (screenH - contentH) / 2f
                 } else {
-                    translateY = translateY.coerceIn(screenH - contentH - margin, margin)
+                    val minY = screenH - contentH - margin
+                    val maxY = margin
+                    if (minY <= maxY) {
+                        translateY = translateY.coerceIn(minY, maxY)
+                    } else {
+                        translateY = (screenH - contentH) / 2f
+                    }
                 }
             } else {
                 val minTranslateY = screenH - contentH - margin
