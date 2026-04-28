@@ -87,6 +87,7 @@ class MainActivity : AppCompatActivity() {
     private var fullRecognizedText: String = ""
     private var pendingClusterBitmap: Bitmap? = null
     private val busyStrokes = mutableSetOf<DrawingView.StrokeItem>()
+    private val lastPageDetectionResults = mutableMapOf<Int, List<DrawingView.DetectedBox>>()
 
 
 
@@ -403,6 +404,7 @@ class MainActivity : AppCompatActivity() {
                             box.getDouble(3).toFloat()
                         ))
                     }
+                    lastPageDetectionResults[pageIndex] = detectedBoxes
                     drawingView.groupStrokesByBoxes(pageIndex, detectedBoxes)
                     setRecognitionState(RecognitionState.DONE)
                     if (detectedBoxes.isEmpty()) {
@@ -494,7 +496,49 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        val bitmap = drawingView.createBitmapForItems(items) ?: return
+        // Separate items that already have text from those that don't.
+        // This avoids re-detecting text already found in full-page scans.
+        val itemsWithText = items.filter { item ->
+            (item is DrawingView.WordItem && item.text.isNotEmpty()) ||
+            (item is DrawingView.ImageItem && item.text.isNotEmpty())
+        }
+        val itemsWithoutText = items.filter { !itemsWithText.contains(it) }
+
+        // Check if we already have a detection for this area from full-page results
+        val pageResults = lastPageDetectionResults[drawingView.getCurrentPageIndex()]
+        if (pageResults != null && itemsWithoutText.isNotEmpty()) {
+            val selectionBounds = RectF(itemsWithoutText[0].bounds)
+            for (i in 1 until itemsWithoutText.size) {
+                selectionBounds.union(itemsWithoutText[i].bounds)
+            }
+            
+            val pageTop = drawingView.getCurrentPageIndex() * (drawingView.PAGE_HEIGHT + drawingView.PAGE_MARGIN)
+            val normLeft = selectionBounds.left * 1000f / drawingView.PAGE_WIDTH
+            val normRight = selectionBounds.right * 1000f / drawingView.PAGE_WIDTH
+            val normTop = (selectionBounds.top - pageTop) * 1000f / drawingView.PAGE_HEIGHT
+            val normBottom = (selectionBounds.bottom - pageTop) * 1000f / drawingView.PAGE_HEIGHT
+            val selectionRectNorm = RectF(normLeft, normTop, normRight, normBottom)
+
+            val match = pageResults.find { box ->
+                val boxRect = RectF(box.xmin, box.ymin, box.xmax, box.ymax)
+                val intersection = RectF(boxRect)
+                if (intersection.intersect(selectionRectNorm)) {
+                    val intersectArea = intersection.width() * intersection.height()
+                    val selectionArea = selectionRectNorm.width() * selectionRectNorm.height()
+                    val boxArea = boxRect.width() * boxRect.height()
+                    intersectArea / selectionArea > 0.7f && intersectArea / boxArea > 0.7f
+                } else false
+            }
+            
+            if (match != null) {
+                // Use cached result
+                processRecognitionResult(items, itemsWithText, itemsWithoutText, match.text)
+                return
+            }
+        }
+
+        // Render only the items without text to the bitmap for recognition
+        val bitmap = drawingView.createBitmapForItems(itemsWithoutText) ?: return
         setRecognitionState(RecognitionState.RUNNING)
         recognitionText.text = "Recognizing selection..."
 
@@ -505,24 +549,59 @@ class MainActivity : AppCompatActivity() {
                 resultText += partial
             },
             onDone = {
-                if (resultText.isNotEmpty()) {
-                    val word = drawingView.groupSelectedItemsIntoWord(items, resultText)
-                    word?.isShowingText = true
-                    drawingView.clearLassoSelection()
-                    drawingView.invalidate()
-                    setRecognitionState(RecognitionState.DONE)
-                    recognitionText.text = "Selection recognized: $resultText"
-                    scheduleAutosave()
-                } else {
-                    setRecognitionState(RecognitionState.IDLE)
-                    recognitionText.text = "No text recognized"
-                }
+                processRecognitionResult(items, itemsWithText, itemsWithoutText, resultText)
             },
             onError = { msg ->
                 setRecognitionState(RecognitionState.ERROR)
                 recognitionText.text = "Recognition failed: $msg"
             }
         )
+    }
+
+    private fun processRecognitionResult(
+        originalItems: List<DrawingView.CanvasItem>,
+        itemsWithText: List<DrawingView.CanvasItem>,
+        itemsWithoutText: List<DrawingView.CanvasItem>,
+        newResultText: String
+    ) {
+        // Combine with existing text from itemsWithText
+        val parts = mutableListOf<Pair<RectF, String>>()
+        for (item in itemsWithText) {
+            val txt = when(item) {
+                is DrawingView.WordItem -> item.text
+                is DrawingView.ImageItem -> item.text
+                else -> ""
+            }
+            if (txt.isNotEmpty()) parts.add(item.bounds to txt)
+        }
+        
+        if (newResultText.isNotEmpty()) {
+            val newBounds = RectF()
+            if (itemsWithoutText.isNotEmpty()) {
+                newBounds.set(itemsWithoutText[0].bounds)
+                for (i in 1 until itemsWithoutText.size) {
+                    newBounds.union(itemsWithoutText[i].bounds)
+                }
+            }
+            parts.add(newBounds to newResultText)
+        }
+        
+        // Sort parts by X coordinate (left edge) to maintain reading order
+        parts.sortBy { it.first.left }
+        val finalText = parts.joinToString(" ") { it.second }.trim()
+
+        if (finalText.isNotEmpty()) {
+            val word = drawingView.groupSelectedItemsIntoWord(originalItems, finalText)
+            word?.isShowingText = true
+            drawingView.clearLassoSelection()
+            drawingView.invalidate()
+            setRecognitionState(RecognitionState.DONE)
+            recognitionText.text = "Selection recognized: $finalText"
+            scheduleAutosave()
+        } else {
+            setRecognitionState(RecognitionState.IDLE)
+            recognitionText.text = "No text recognized"
+        }
     }
 
 
