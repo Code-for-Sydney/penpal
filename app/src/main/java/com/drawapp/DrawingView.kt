@@ -674,30 +674,45 @@ class DrawingView @JvmOverloads constructor(
             
             // Y clamping
             val contentH = totalHeight * scaleFactor
-            if (contentH < screenH) {
-                // If content is smaller than screen, we can still pan a bit or center it.
-                // Let's center it if it's much smaller, otherwise allow some panning.
-                if (contentH < screenH * 0.8f) {
-                    translateY = (screenH - contentH) / 2f
+            val limitBottom = screenH - contentH - margin
+            val limitTop = margin
+
+            // 1. Page creation logic (works for both small and large content)
+            if (allowPageCreation) {
+                val trigger = if (contentH < screenH) {
+                    // For small content, trigger if we pull the page up enough
+                    screenH - contentH - 350f
                 } else {
-                    val minY = screenH - contentH - margin
-                    val maxY = margin
-                    if (minY <= maxY) {
-                        translateY = translateY.coerceIn(minY, maxY)
-                    } else {
-                        translateY = (screenH - contentH) / 2f
-                    }
+                    // Original logic for large content
+                    limitBottom + 350f
                 }
-            } else {
-                val minTranslateY = screenH - contentH - margin
                 
-                // Auto-create page if we reach the bottom
-                if (translateY <= minTranslateY + 350f && allowPageCreation) {
+                if (translateY <= trigger) {
                     numPages++
                     onPageAdded?.invoke()
                 }
+            }
+
+            // 2. Clamping logic
+            if (contentH < screenH * 0.8f) {
+                val center = (screenH - contentH) / 2f
+                if (allowPageCreation && translateY < center - 10f) {
+                    // Allow some upward panning to trigger a new page
+                    translateY = translateY.coerceIn(screenH - contentH - 500f, center)
+                } else {
+                    translateY = center
+                }
+            } else {
+                // Determine safe range for coerceIn
+                var rMin = minOf(limitBottom, limitTop)
+                var rMax = maxOf(limitBottom, limitTop)
                 
-                translateY = translateY.coerceIn(minTranslateY, margin)
+                if (allowPageCreation && contentH < screenH) {
+                    // Expand lower bound to allow pulling up for a new page
+                    rMin = minOf(rMin, screenH - contentH - 500f)
+                }
+                
+                translateY = translateY.coerceIn(rMin, rMax)
             }
         }
 
