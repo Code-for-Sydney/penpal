@@ -7,6 +7,8 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import java.io.ByteArrayOutputStream
 import kotlinx.coroutines.channels.Channel
+import kotlin.coroutines.resumeWithException
+import kotlin.coroutines.resume
 
 /**
  * Wraps LiteRT-LM (Gemma) for handwriting recognition.
@@ -149,6 +151,17 @@ class HandwritingRecognizer private constructor(private val context: Context) {
     ) {
         val request = RecognitionRequest(bitmap, prompt, onPartialResult, onDone, onError)
         requestChannel.trySend(request)
+    }
+
+    suspend fun recognizeSuspend(bitmap: Bitmap, prompt: String? = null): String = suspendCancellableCoroutine { cont ->
+        var accumulated = ""
+        recognize(
+            bitmap = bitmap,
+            prompt = prompt,
+            onPartialResult = { partial -> accumulated += partial },
+            onDone = { if (cont.isActive) cont.resume(accumulated, onCancellation = null) },
+            onError = { msg -> if (cont.isActive) cont.resumeWithException(Exception(msg)) }
+        )
     }
 
     private suspend fun processRecognition(request: RecognitionRequest) {

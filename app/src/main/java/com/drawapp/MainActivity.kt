@@ -38,6 +38,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnToggleTools: ImageButton
     private lateinit var btnEraser: ImageButton
     private lateinit var btnLasso: ImageButton
+    private lateinit var btnTransform: ImageButton
     private lateinit var btnExport: ImageButton
 
     private lateinit var recognitionProgress: ProgressBar
@@ -184,6 +185,7 @@ class MainActivity : AppCompatActivity() {
         btnToggleTools      = findViewById(R.id.btnToggleTools)
         btnEraser           = findViewById(R.id.btnEraser)
         btnLasso            = findViewById(R.id.btnLasso)
+        btnTransform        = findViewById(R.id.btnTransform)
         recognitionProgress = findViewById(R.id.recognitionProgress)
         recognitionIcon     = findViewById(R.id.recognitionIcon)
         recognitionText     = findViewById(R.id.recognitionText)
@@ -258,6 +260,14 @@ class MainActivity : AppCompatActivity() {
     private fun setupNotebookMode() {
         findViewById<View>(R.id.pageNavigationContainer).visibility = View.GONE // Use scroll instead
         btnBackground.visibility = View.VISIBLE
+        
+        currentNotebook?.let {
+            try {
+                drawingView.backgroundType = DrawingView.BackgroundType.valueOf(it.defaultBackground)
+            } catch (e: Exception) {
+                drawingView.backgroundType = DrawingView.BackgroundType.RULED
+            }
+        }
         
         loadAllPages()
     }
@@ -688,6 +698,14 @@ class MainActivity : AppCompatActivity() {
             }
             updateToolState()
         }
+        btnTransform.setOnClickListener {
+            if (drawingView.activeTool == DrawingView.ActiveTool.TRANSFORM) {
+                drawingView.activeTool = DrawingView.ActiveTool.BRUSH
+            } else {
+                drawingView.activeTool = DrawingView.ActiveTool.TRANSFORM
+            }
+            updateToolState()
+        }
         btnToggleTools.setOnClickListener {
             if (toolToolbar.visibility == View.VISIBLE) {
                 toolToolbar.visibility = View.GONE
@@ -823,11 +841,21 @@ class MainActivity : AppCompatActivity() {
             btnLasso.setColorFilter(Color.parseColor("#CCCCCC"))
             btnLasso.alpha = 0.8f
         }
+
+        // Transform highlight
+        if (drawingView.activeTool == DrawingView.ActiveTool.TRANSFORM) {
+            btnTransform.setColorFilter(Color.WHITE)
+            btnTransform.alpha = 1.0f
+        } else {
+            btnTransform.setColorFilter(Color.parseColor("#CCCCCC"))
+            btnTransform.alpha = 0.8f
+        }
         
         // Update Toggle button icon based on current tool
         when (drawingView.activeTool) {
             DrawingView.ActiveTool.ERASER -> btnToggleTools.setImageResource(R.drawable.ic_eraser)
             DrawingView.ActiveTool.LASSO -> btnToggleTools.setImageResource(R.drawable.ic_lasso)
+            DrawingView.ActiveTool.TRANSFORM -> btnToggleTools.setImageResource(R.drawable.ic_transform)
             else -> btnToggleTools.setImageResource(R.drawable.ic_brush)
         }
     }

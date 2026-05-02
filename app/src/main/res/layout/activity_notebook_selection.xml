@@ -32,6 +32,19 @@
         app:layout_constraintTop_toBottomOf="@id/tvTitle" />
 
     <com.google.android.material.floatingactionbutton.FloatingActionButton
+        android:id="@+id/fabImportPdf"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginEnd="24dp"
+        android:layout_marginBottom="16dp"
+        android:src="@drawable/ic_pdf"
+        app:backgroundTint="#7C4DFF"
+        app:layout_constraintBottom_toTopOf="@id/fabAddNotebook"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:tint="#FFFFFF"
+        android:contentDescription="Import PDF" />
+
+    <com.google.android.material.floatingactionbutton.FloatingActionButton
         android:id="@+id/fabAddNotebook"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
@@ -49,7 +62,8 @@
         android:background="#1C1C1E"
         android:visibility="gone"
         android:clickable="true"
-        android:focusable="true">
+        android:focusable="true"
+        android:elevation="10dp">
 
         <LinearLayout
             android:layout_width="wrap_content"
@@ -71,6 +85,49 @@
                 android:text="Loading Gemma model..."
                 android:textColor="#FFFFFF"
                 android:textSize="18sp" />
+        </LinearLayout>
+    </FrameLayout>
+
+    <FrameLayout
+        android:id="@+id/importProgressOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#CC000000"
+        android:visibility="gone"
+        android:clickable="true"
+        android:focusable="true"
+        android:elevation="11dp">
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:orientation="vertical"
+            android:gravity="center">
+
+            <ProgressBar
+                android:layout_width="64dp"
+                android:layout_height="64dp"
+                android:indeterminateTint="#7C4DFF" />
+
+            <TextView
+                android:id="@+id/tvImportStatusText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="Importing PDF..."
+                android:textColor="#FFFFFF"
+                android:textSize="20sp"
+                android:textStyle="bold" />
+                
+            <TextView
+                android:id="@+id/tvImportDetailText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="Recognizing text on page 1..."
+                android:textColor="#AAAAAA"
+                android:textSize="14sp" />
         </LinearLayout>
     </FrameLayout>
 

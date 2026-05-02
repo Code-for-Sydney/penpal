@@ -22,7 +22,8 @@ data class StrokeData(
     val color: Int,
     val strokeWidth: Float,
     val opacity: Int,
-    val isEraser: Boolean = false
+    val isEraser: Boolean = false,
+    val isLocked: Boolean = false
 ) : SvgData()
 
 data class ImageData(
@@ -32,7 +33,8 @@ data class ImageData(
     val text: String = "",
     val isShowingText: Boolean = false,
     val textMatrix: FloatArray? = null,
-    val textBounds: FloatRect? = null
+    val textBounds: FloatRect? = null,
+    val isLocked: Boolean = false
 ) : SvgData()
 
 data class WordData(
@@ -43,7 +45,8 @@ data class WordData(
     val textMatrix: FloatArray? = null,
     val textBounds: FloatRect? = null,
     val tintColor: Int? = null,
-    val backgroundColor: Int? = null
+    val backgroundColor: Int? = null,
+    val isLocked: Boolean = false
 ) : SvgData()
 
 data class FloatRect(val left: Float, val top: Float, val right: Float, val bottom: Float)
@@ -97,14 +100,16 @@ object SvgSerializer {
                     sb.append(""" stroke="$hex" stroke-width="${item.strokeWidth}"""")
                     sb.append(""" stroke-opacity="$opacity"""")
                     sb.append(""" stroke-linecap="round" stroke-linejoin="round" fill="none"""")
+                    if (item.isLocked) sb.append(""" data-locked="true"""")
                     sb.appendLine("""/>""")
                 }
                 is ImageData -> {
                     val m = item.matrix
                     val transform = "matrix(${m[0]},${m[3]},${m[1]},${m[4]},${m[2]},${m[5]})"
-                    sb.append("""  <image id="image-$index" transform="$transform" href="data:image/png;base64,${item.base64}"""")
+                    sb.append("""  <image id="image-$index" transform="$transform" href="data:image/jpeg;base64,${item.base64}"""")
                     sb.append(""" data-remove-bg="${item.removeBackground}"""")
                     sb.append(""" data-text="${item.text}" data-showing-text="${item.isShowingText}"""")
+                    if (item.isLocked) sb.append(""" data-locked="true"""")
                     item.textMatrix?.let { tm ->
                         val tmStr = "matrix(${tm[0]},${tm[3]},${tm[1]},${tm[4]},${tm[2]},${tm[5]})"
                         sb.append(""" data-text-transform="$tmStr"""")
@@ -118,6 +123,7 @@ object SvgSerializer {
                     val m = item.matrix
                     val transform = "matrix(${m[0]},${m[3]},${m[1]},${m[4]},${m[2]},${m[5]})"
                     sb.append("""  <g id="word-$index" transform="$transform" data-text="${item.text}" data-showing-text="${item.isShowingText}"""")
+                    if (item.isLocked) sb.append(""" data-locked="true"""")
                     item.tintColor?.let { sb.append(""" data-tint="${colorToHex(it)}"""") }
                     item.backgroundColor?.let { sb.append(""" data-bg-fill="${colorToHex(it)}"""") }
                     
@@ -173,7 +179,8 @@ object SvgSerializer {
                             commands = commands,
                             color = parseHexColor(strokeColor),
                             strokeWidth = strokeWidth,
-                            opacity = (strokeOpacity * 255).toInt().coerceIn(0, 255)
+                            opacity = (strokeOpacity * 255).toInt().coerceIn(0, 255),
+                            isLocked = parser.getAttributeValue(null, "data-locked") == "true"
                         ))
                     }
                 } else if (parser.name == "image") {
@@ -182,6 +189,8 @@ object SvgSerializer {
                     val m = parseMatrix(transform)
                     val base64Data = if (href.startsWith("data:image/png;base64,")) {
                         href.substring("data:image/png;base64,".length)
+                    } else if (href.startsWith("data:image/jpeg;base64,")) {
+                        href.substring("data:image/jpeg;base64,".length)
                     } else href
                     val removeBg = parser.getAttributeValue(null, "data-remove-bg") != "false"
                     val text = parser.getAttributeValue(null, "data-text") ?: ""
@@ -195,13 +204,15 @@ object SvgSerializer {
                             FloatRect(parts[0].toFloat(), parts[1].toFloat(), parts[2].toFloat(), parts[3].toFloat())
                         } else null
                     } else null
+                    val isLocked = parser.getAttributeValue(null, "data-locked") == "true"
                     
-                    items.add(ImageData(base64Data, m, removeBg, text, isShowingText, textMatrix, textBounds))
+                    items.add(ImageData(base64Data, m, removeBg, text, isShowingText, textMatrix, textBounds, isLocked))
                 } else if (parser.name == "g") {
                     val text = parser.getAttributeValue(null, "data-text") ?: ""
                     val transform = parser.getAttributeValue(null, "transform") ?: ""
                     val m = parseMatrix(transform)
                     val isShowingText = parser.getAttributeValue(null, "data-showing-text") == "true"
+                    val isLocked = parser.getAttributeValue(null, "data-locked") == "true"
                     
                     val textMatrixStr = parser.getAttributeValue(null, "data-text-transform")
                     val textMatrix = if (textMatrixStr != null) parseMatrix(textMatrixStr) else null
@@ -225,7 +236,7 @@ object SvgSerializer {
                         }
                         innerEvent = parser.next()
                     }
-                    items.add(WordData(strokes, m, text, isShowingText, textMatrix, textBounds, tintColor, backgroundColor))
+                    items.add(WordData(strokes, m, text, isShowingText, textMatrix, textBounds, tintColor, backgroundColor, isLocked))
                 }
             }
             eventType = parser.next()

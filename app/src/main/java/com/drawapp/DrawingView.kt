@@ -20,14 +20,16 @@ class DrawingView @JvmOverloads constructor(
 ) : View(context, attrs, defStyleAttr) {
     
     enum class BackgroundType { NONE, RULED, GRAPH }
-    enum class ActiveTool { BRUSH, ERASER, LASSO }
+    enum class ActiveTool { BRUSH, ERASER, LASSO, TRANSFORM }
 
     var activeTool: ActiveTool = ActiveTool.BRUSH
         set(value) {
             field = value
             isEraser = (value == ActiveTool.ERASER)
-            if (value != ActiveTool.LASSO) {
+            if (value != ActiveTool.LASSO && value != ActiveTool.TRANSFORM) {
                 clearLassoSelection()
+                selectedImage = null
+                selectedWord = null
             }
             updateCurrentPaint()
             invalidate()
@@ -72,6 +74,7 @@ class DrawingView @JvmOverloads constructor(
     // --- Data classes ---
     sealed class CanvasItem {
         abstract val bounds: RectF
+        var isLocked: Boolean = false
         open fun invalidateCache() {}
         abstract fun toSvgData(): SvgData
     }
@@ -89,7 +92,8 @@ class DrawingView @JvmOverloads constructor(
             color = paint.color,
             strokeWidth = paint.strokeWidth,
             opacity = paint.alpha,
-            isEraser = isEraser
+            isEraser = isEraser,
+            isLocked = isLocked
         )
     }
 
@@ -151,11 +155,10 @@ class DrawingView @JvmOverloads constructor(
             return ImageData(
                 base64 = base64,
                 matrix = mValues,
-                removeBackground = removeBackground,
-                text = text,
                 isShowingText = isShowingText,
                 textMatrix = tmValues,
-                textBounds = FloatRect(textBounds.left, textBounds.top, textBounds.right, textBounds.bottom)
+                textBounds = FloatRect(textBounds.left, textBounds.top, textBounds.right, textBounds.bottom),
+                isLocked = isLocked
             )
         }
     }
@@ -180,6 +183,8 @@ class DrawingView @JvmOverloads constructor(
                     for (i in 1 until strokes.size) {
                         r.union(strokes[i].bounds)
                     }
+                } else if (!textBounds.isEmpty) {
+                    r.set(textBounds)
                 }
                 matrix.mapRect(r)
                 cachedBounds = r
@@ -199,7 +204,8 @@ class DrawingView @JvmOverloads constructor(
                 textMatrix = tmValues,
                 textBounds = FloatRect(textBounds.left, textBounds.top, textBounds.right, textBounds.bottom),
                 tintColor = tintColor,
-                backgroundColor = backgroundColor
+                backgroundColor = backgroundColor,
+                isLocked = isLocked
             )
         }
         
@@ -598,8 +604,8 @@ class DrawingView @JvmOverloads constructor(
             }
 
             override fun onScale(detector: ScaleGestureDetector): Boolean {
-                // Remove item manipulation from here, handled in onTouchEvent
-
+                if (activeTool == ActiveTool.TRANSFORM) return true
+                
                 // Canvas panning/zooming
                 val oldScale = scaleFactor
                 var detectorScale = detector.scaleFactor
@@ -1372,9 +1378,9 @@ class DrawingView @JvmOverloads constructor(
                 }
                 
                 // Hit testing for images and words only (strokes don't intercept drawing)
-                val hitItem = drawItems.reversed().find { (it is ImageItem || it is WordItem) && isItemHit(it, canvasCoords[0], canvasCoords[1]) }
+                val hitItem = drawItems.reversed().find { (it is ImageItem || it is WordItem) && !it.isLocked && isItemHit(it, canvasCoords[0], canvasCoords[1]) }
 
-                if (hitItem != null && activeTool != ActiveTool.LASSO) {
+                if (hitItem != null && activeTool == ActiveTool.TRANSFORM) {
                     when (hitItem) {
                         is ImageItem -> {
                             selectedImage = hitItem
@@ -1460,7 +1466,7 @@ class DrawingView @JvmOverloads constructor(
                     
                     beforeTransformState = captureState(currentSelectedItem)
                     isPanning = false
-                } else if (!isImageManipulating && !isWordManipulating) {
+                } else if (!isImageManipulating && !isWordManipulating && activeTool != ActiveTool.TRANSFORM) {
                     isPanning = true
                     lastPanX = event.x
                     lastPanY = event.y
@@ -2120,9 +2126,9 @@ class DrawingView @JvmOverloads constructor(
                         matrix.postTranslate(0f, dy)
                         
                         val textMatrix = Matrix()
-                        textMatrix.setValues(data.textMatrix)
-                        // Note: textMatrix is usually local to the image, but if it has translation it might need shifting?
-                        // Actually, textMatrix in ImageItem is usually local.
+                        if (data.textMatrix != null) {
+                            textMatrix.setValues(data.textMatrix)
+                        }
                         
                         ImageItem(bmp, matrix, data.removeBackground, data.text, data.isShowingText, textMatrix, data.textBounds?.let { RectF(it.left, it.top, it.right, it.bottom) } ?: RectF())
                     } else null
@@ -2157,7 +2163,9 @@ class DrawingView @JvmOverloads constructor(
                     matrix.postTranslate(0f, dy)
                     
                     val textMatrix = Matrix()
-                    textMatrix.setValues(data.textMatrix)
+                    if (data.textMatrix != null) {
+                        textMatrix.setValues(data.textMatrix)
+                    }
                     
                     WordItem(strokes, matrix, data.text, data.isShowingText, textMatrix, data.textBounds?.let { RectF(it.left, it.top, it.right, it.bottom) } ?: RectF(), data.tintColor, data.backgroundColor)
                 }
@@ -2585,7 +2593,8 @@ class DrawingView @JvmOverloads constructor(
                         commands = item.commands,
                         color = item.paint.color,
                         strokeWidth = item.paint.strokeWidth,
-                        opacity = item.paint.alpha
+                        opacity = item.paint.alpha,
+                        isLocked = item.isLocked
                     )
                 }
                 is ImageItem -> {
@@ -2599,7 +2608,7 @@ class DrawingView @JvmOverloads constructor(
                     item.textMatrix.getValues(tm)
                     val tb = FloatRect(item.textBounds.left, item.textBounds.top, item.textBounds.right, item.textBounds.bottom)
                     
-                    ImageData(base64, m, item.removeBackground, item.text, item.isShowingText, tm, tb)
+                    ImageData(base64, m, item.removeBackground, item.text, item.isShowingText, tm, tb, item.isLocked)
                 }
                 is WordItem -> {
                     val strokeDataList = item.strokes.map {
@@ -2607,7 +2616,8 @@ class DrawingView @JvmOverloads constructor(
                             commands = it.commands,
                             color = it.paint.color,
                             strokeWidth = it.paint.strokeWidth,
-                            opacity = it.paint.alpha
+                            opacity = it.paint.alpha,
+                            isLocked = it.isLocked
                         )
                     }
                     val m = FloatArray(9)
@@ -2617,7 +2627,7 @@ class DrawingView @JvmOverloads constructor(
                     item.textMatrix.getValues(tm)
                     val tb = FloatRect(item.textBounds.left, item.textBounds.top, item.textBounds.right, item.textBounds.bottom)
                     
-                    WordData(strokeDataList, m, item.text, item.isShowingText, tm, tb, item.tintColor, item.backgroundColor)
+                    WordData(strokeDataList, m, item.text, item.isShowingText, tm, tb, item.tintColor, item.backgroundColor, item.isLocked)
                 }
             }
         }
@@ -2633,7 +2643,9 @@ class DrawingView @JvmOverloads constructor(
         for (data in dataList) {
             when (data) {
                 is StrokeData -> {
-                    drawItems.add(createStrokeItem(data))
+                    val item = createStrokeItem(data)
+                    item.isLocked = data.isLocked
+                    drawItems.add(item)
                 }
                 is ImageData -> {
                     try {
@@ -2653,7 +2665,9 @@ class DrawingView @JvmOverloads constructor(
                                 textBounds.set(it.left, it.top, it.right, it.bottom)
                             }
                             
-                            drawItems.add(ImageItem(bitmap, matrix, data.removeBackground, data.text, data.isShowingText, textMatrix, textBounds))
+                            val img = ImageItem(bitmap, matrix, data.removeBackground, data.text, data.isShowingText, textMatrix, textBounds)
+                            img.isLocked = data.isLocked
+                            drawItems.add(img)
                         }
                     } catch (e: Exception) {
                         e.printStackTrace()
@@ -2669,12 +2683,14 @@ class DrawingView @JvmOverloads constructor(
                         textMatrix.setValues(data.textMatrix)
                     }
                     
-                    val textBounds = RectF()
-                    data.textBounds?.let {
-                        textBounds.set(it.left, it.top, it.right, it.bottom)
-                    }
-                    
-                    drawItems.add(WordItem(strokes, matrix, data.text, data.isShowingText, textMatrix, textBounds, data.tintColor, data.backgroundColor))
+                        val textBounds = RectF()
+                        data.textBounds?.let {
+                            textBounds.set(it.left, it.top, it.right, it.bottom)
+                        }
+                        
+                        val word = WordItem(strokes, matrix, data.text, data.isShowingText, textMatrix, textBounds, data.tintColor, data.backgroundColor)
+                        word.isLocked = data.isLocked
+                        drawItems.add(word)
                 }
             }
         }
@@ -2892,6 +2908,7 @@ class DrawingView @JvmOverloads constructor(
     }
 
     private fun isItemHit(item: CanvasItem, canvasX: Float, canvasY: Float): Boolean {
+        if (item.isLocked) return false
         val localCoords = floatArrayOf(canvasX, canvasY)
         val inv = Matrix()
         val matrix = when(item) {
@@ -2955,7 +2972,7 @@ class DrawingView @JvmOverloads constructor(
                     wordsToModify.add(Pair(item, hitStroke))
                 }
             } else if (item is ImageItem) {
-                if (isItemHit(item, canvasX, canvasY)) {
+                if (!item.isLocked && isItemHit(item, canvasX, canvasY)) {
                     itemsToRemove.add(item)
                 }
             }
@@ -2999,6 +3016,7 @@ class DrawingView @JvmOverloads constructor(
     }
 
     private fun isStrokeHit(item: StrokeItem, x: Float, y: Float, radius: Float): Boolean {
+        if (item.isLocked) return false
         if (!RectF.intersects(item.bounds, RectF(x - radius, y - radius, x + radius, y + radius))) return false
         
         var lastPt: PointF? = null
