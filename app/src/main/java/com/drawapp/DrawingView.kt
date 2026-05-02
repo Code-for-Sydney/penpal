@@ -23,13 +23,13 @@ class DrawingView @JvmOverloads constructor(
 ) : View(context, attrs, defStyleAttr) {
     
     enum class BackgroundType { NONE, RULED, GRAPH }
-    enum class ActiveTool { BRUSH, ERASER, LASSO }
+    enum class ActiveTool { BRUSH, ERASER, LASSO, SELECT }
 
     var activeTool: ActiveTool = ActiveTool.BRUSH
         set(value) {
             field = value
             isEraser = (value == ActiveTool.ERASER)
-            if (value != ActiveTool.LASSO) {
+            if (value != ActiveTool.LASSO && value != ActiveTool.SELECT) {
                 clearLassoSelection()
             }
             updateCurrentPaint()
@@ -101,7 +101,7 @@ class DrawingView @JvmOverloads constructor(
     data class ImageItem(
         val bitmap: Bitmap,
         var matrix: Matrix,
-        var removeBackground: Boolean = true,
+        var removeBackground: Boolean = false,
         var text: String = "",
         var isShowingText: Boolean = false,
         var textMatrix: Matrix = Matrix(),
@@ -130,8 +130,8 @@ class DrawingView @JvmOverloads constructor(
                         val r = Color.red(color)
                         val g = Color.green(color)
                         val b = Color.blue(color)
-                        // If it's very bright, make it transparent
-                        if (r > 240 && g > 240 && b > 240) {
+                        // If it's very bright (common for PDF/image backgrounds), make it transparent
+                        if (r > 220 && g > 220 && b > 220) {
                             result.setPixel(x, y, Color.TRANSPARENT)
                         }
                     }
@@ -473,6 +473,15 @@ class DrawingView @JvmOverloads constructor(
     private val selectedItems = mutableListOf<CanvasItem>()
     private var isLassoing = false
     private var isDraggingSelectedItems = false
+    private var isResizing = false
+    private var isRotating = false
+    private var manipulationPivot = PointF()
+    private var manipulationStartAngle = 0f
+    private var manipulationStartDistance = 0f
+    private var manipulationStartMatrix = Matrix()
+    private var manipulationStartBounds = RectF()
+    private var beforeManipulationStates: List<ItemState>? = null
+    
     private var initialGroupItemMatrices = mutableListOf<Matrix>()
     private var beforeGroupTransformStates: List<ItemState>? = null
     
@@ -1043,12 +1052,35 @@ class DrawingView @JvmOverloads constructor(
         }
 
         val delPos = getButtonScreenPos(globalBounds.right, globalBounds.top)
-        val colPos = getButtonScreenPos(globalBounds.right, globalBounds.bottom)
+        val resPos = getButtonScreenPos(globalBounds.right, globalBounds.bottom)
         val filPos = getButtonScreenPos(globalBounds.left, globalBounds.bottom)
         val togPos = getButtonScreenPos(globalBounds.left, globalBounds.top)
+        val rotPos = getButtonScreenPos(globalBounds.centerX(), globalBounds.top - 40f) // Above the box
+        val colPos = getButtonScreenPos(globalBounds.centerX(), globalBounds.bottom)
         
         canvas.save()
         canvas.setMatrix(Matrix()) // Reset to screen space
+
+        // Rotation Handle (Top Center)
+        canvas.drawCircle(rotPos.x, rotPos.y, buttonRadius, Paint().apply { color = Color.WHITE; style = Paint.Style.FILL; setShadowLayer(4f, 0f, 2f, Color.BLACK) })
+        val rotPaint = Paint().apply { color = Color.BLACK; style = Paint.Style.STROKE; strokeWidth = 3f; isAntiAlias = true }
+        val arcRect = RectF(rotPos.x - 10f, rotPos.y - 10f, rotPos.x + 10f, rotPos.y + 10f)
+        canvas.drawArc(arcRect, -45f, 270f, false, rotPaint)
+        // Arrow head
+        val arrowPath = Path().apply {
+            moveTo(rotPos.x + 10f, rotPos.y - 5f)
+            lineTo(rotPos.x + 15f, rotPos.y)
+            lineTo(rotPos.x + 5f, rotPos.y)
+            close()
+        }
+        canvas.drawPath(arrowPath, Paint().apply { color = Color.BLACK; style = Paint.Style.FILL })
+
+        // Resize Handle (Bottom Right Tab)
+        val resizeTabPaint = Paint().apply { color = Color.WHITE; style = Paint.Style.FILL; setShadowLayer(4f, 0f, 2f, Color.BLACK) }
+        canvas.drawRoundRect(resPos.x - 12f, resPos.y - 12f, resPos.x + 12f, resPos.y + 12f, 4f, 4f, resizeTabPaint)
+        val resizeLinePaint = Paint().apply { color = Color.GRAY; strokeWidth = 2f }
+        canvas.drawLine(resPos.x - 6f, resPos.y + 6f, resPos.x + 6f, resPos.y - 6f, resizeLinePaint)
+        canvas.drawLine(resPos.x, resPos.y + 6f, resPos.x + 6f, resPos.y, resizeLinePaint)
 
         // Delete Button
         canvas.drawCircle(delPos.x, delPos.y, buttonRadius, deleteBgPaint)
@@ -1057,7 +1089,7 @@ class DrawingView @JvmOverloads constructor(
         canvas.drawLine(delPos.x - crossSize, delPos.y - crossSize, delPos.x + crossSize, delPos.y + crossSize, crossPaint)
         canvas.drawLine(delPos.x + crossSize, delPos.y - crossSize, delPos.x - crossSize, delPos.y + crossSize, crossPaint)
 
-        // Color Button (Not for ImageItem anymore, for WordItem and StrokeItem)
+        // Color Button (Moved to Bottom-Center)
         if (item is WordItem || item is StrokeItem) {
             canvas.drawCircle(colPos.x, colPos.y, buttonRadius, Paint().apply { color = Color.WHITE; style = Paint.Style.FILL; setShadowLayer(4f, 0f, 2f, Color.BLACK) })
             canvas.drawCircle(colPos.x, colPos.y, buttonRadius * 0.7f, Paint().apply { 
@@ -1070,7 +1102,7 @@ class DrawingView @JvmOverloads constructor(
             })
         }
 
-        // Fill Button (Not for ImageItem anymore, only for WordItem)
+        // Fill Button
         if (item is WordItem) {
             canvas.drawCircle(filPos.x, filPos.y, buttonRadius, Paint().apply { color = Color.WHITE; style = Paint.Style.FILL; setShadowLayer(4f, 0f, 2f, Color.BLACK) })
             val bgColor = item.backgroundColor
@@ -1089,9 +1121,9 @@ class DrawingView @JvmOverloads constructor(
         val tIconPaint = Paint().apply { color = Color.BLACK; textSize = 28f; textAlign = Paint.Align.CENTER; typeface = Typeface.DEFAULT_BOLD }
         canvas.drawText("T", togPos.x, togPos.y - (tIconPaint.fontMetrics.ascent + tIconPaint.fontMetrics.descent) / 2, tIconPaint)
 
-        // Image-specific: Background removal
+        // Image-specific: Background removal (Bottom-Left)
         if (item is ImageItem) {
-            val bgTogPos = getButtonScreenPos(globalBounds.centerX(), globalBounds.top)
+            val bgTogPos = filPos
             canvas.drawCircle(bgTogPos.x, bgTogPos.y, buttonRadius, Paint().apply { color = Color.WHITE; style = Paint.Style.FILL; setShadowLayer(4f, 0f, 2f, Color.BLACK) })
             val toggleIconPaint = Paint().apply { color = Color.BLACK; textSize = 16f; textAlign = Paint.Align.CENTER; typeface = Typeface.DEFAULT_BOLD }
             canvas.drawText(if (item.removeBackground) "B" else "W", bgTogPos.x, bgTogPos.y - (toggleIconPaint.fontMetrics.ascent + toggleIconPaint.fontMetrics.descent) / 2, toggleIconPaint)
@@ -1118,11 +1150,30 @@ class DrawingView @JvmOverloads constructor(
 
         val delPos = getScreenPos(groupBounds.right, groupBounds.top)
         val togPos = getScreenPos(groupBounds.left, groupBounds.top)
-        val colPos = getScreenPos(groupBounds.right, groupBounds.bottom)
+        val resPos = getScreenPos(groupBounds.right, groupBounds.bottom)
         val filPos = getScreenPos(groupBounds.left, groupBounds.bottom)
+        val rotPos = getScreenPos(groupBounds.centerX(), groupBounds.top - 40f)
+        val colPos = getScreenPos(groupBounds.centerX(), groupBounds.bottom)
 
         canvas.save()
         canvas.setMatrix(Matrix()) // Switch to screen space for buttons
+
+        // Rotation Handle
+        canvas.drawCircle(rotPos.x, rotPos.y, buttonRadius, Paint().apply { color = Color.WHITE; style = Paint.Style.FILL; setShadowLayer(4f, 0f, 2f, Color.BLACK) })
+        val rotPaint = Paint().apply { color = Color.BLACK; style = Paint.Style.STROKE; strokeWidth = 3f; isAntiAlias = true }
+        canvas.drawArc(rotPos.x - 10f, rotPos.y - 10f, rotPos.x + 10f, rotPos.y + 10f, -45f, 270f, false, rotPaint)
+        canvas.drawPath(Path().apply {
+            moveTo(rotPos.x + 10f, rotPos.y - 5f)
+            lineTo(rotPos.x + 15f, rotPos.y)
+            lineTo(rotPos.x + 5f, rotPos.y)
+            close()
+        }, Paint().apply { color = Color.BLACK; style = Paint.Style.FILL })
+
+        // Resize Handle
+        canvas.drawRoundRect(resPos.x - 12f, resPos.y - 12f, resPos.x + 12f, resPos.y + 12f, 4f, 4f, Paint().apply { color = Color.WHITE; style = Paint.Style.FILL; setShadowLayer(4f, 0f, 2f, Color.BLACK) })
+        val resLinePaint = Paint().apply { color = Color.GRAY; strokeWidth = 2f }
+        canvas.drawLine(resPos.x - 6f, resPos.y + 6f, resPos.x + 6f, resPos.y - 6f, resLinePaint)
+        canvas.drawLine(resPos.x, resPos.y + 6f, resPos.x + 6f, resPos.y, resLinePaint)
 
         // Delete Button
         canvas.drawCircle(delPos.x, delPos.y, buttonRadius, deleteBgPaint)
@@ -1135,7 +1186,7 @@ class DrawingView @JvmOverloads constructor(
         val tIconPaint = Paint(toggleIconPaint).apply { textSize = 28f }
         canvas.drawText("T", togPos.x, togPos.y - (tIconPaint.fontMetrics.ascent + tIconPaint.fontMetrics.descent) / 2, tIconPaint)
 
-        // Color Button (Bottom-Right)
+        // Color Button
         canvas.drawCircle(colPos.x, colPos.y, buttonRadius, Paint().apply { color = Color.WHITE; style = Paint.Style.FILL; setShadowLayer(4f, 0f, 2f, Color.BLACK) })
         canvas.drawCircle(colPos.x, colPos.y, buttonRadius * 0.7f, Paint().apply { 
             val firstWord = items.filterIsInstance<WordItem>().firstOrNull()
@@ -1370,7 +1421,7 @@ class DrawingView @JvmOverloads constructor(
                     val groupBounds = RectF(getGroupBounds(selectedItems)).apply { inset(-SELECTION_BUFFER, -SELECTION_BUFFER) }
                     
                     // Check group buttons first
-                    val buttonRadiusSq = 48f * 48f
+                    val buttonRadiusSq = 64f * 64f // Increased from 48 for easier tapping
                     
                     fun getScreenPos(cx: Float, cy: Float): PointF {
                         val pts = floatArrayOf(cx, cy)
@@ -1385,13 +1436,13 @@ class DrawingView @JvmOverloads constructor(
                         return dx * dx + dy * dy <= buttonRadiusSq
                     }
 
-                    // Delete group
+                    // Delete group (Top-Right)
                     if (isGroupButtonHit(groupBounds.right, groupBounds.top)) {
                         deleteSelectedItem()
                         return true
                     }
 
-                    // Recognize / Toggle group
+                    // Recognize / Toggle group (Top-Left)
                     if (isGroupButtonHit(groupBounds.left, groupBounds.top)) {
                         val firstItem = selectedItems.firstOrNull()
                         if (selectedItems.size == 1 && firstItem is PromptItem) {
@@ -1406,18 +1457,46 @@ class DrawingView @JvmOverloads constructor(
                         return true
                     }
 
-                    // Color button (bottom-right)
-                    if (isGroupButtonHit(groupBounds.right, groupBounds.bottom)) {
+                    // Color button (bottom-center)
+                    if (isGroupButtonHit(groupBounds.centerX(), groupBounds.bottom)) {
                         showColorPicker(selectedItems.toList(), isBackground = false)
                         return true
                     }
 
-                    // Fill button (bottom-left)
-                    if (isGroupButtonHit(groupBounds.left, groupBounds.bottom)) {
+                    // Background removal for ImageItem (Bottom-Left)
+                    if (selectedItems.size == 1 && selectedItems[0] is ImageItem && isGroupButtonHit(groupBounds.left, groupBounds.bottom)) {
+                        val image = selectedItems[0] as ImageItem
+                        image.removeBackground = !image.removeBackground
+                        image.invalidateCache()
+                        invalidate()
+                        return true
+                    }
+
+                    // Fill button (bottom-left) - Only for WordItems
+                    if (selectedItems.any { it is WordItem } && isGroupButtonHit(groupBounds.left, groupBounds.bottom)) {
                         showColorPicker(selectedItems.toList(), isBackground = true)
                         return true
                     }
 
+                    // Rotate Handle (Top-Center)
+                    if (isGroupButtonHit(groupBounds.centerX(), groupBounds.top - 40f)) {
+                        isRotating = true
+                        manipulationPivot.set(groupBounds.centerX(), groupBounds.centerY())
+                        manipulationStartAngle = Math.toDegrees(atan2((canvasCoords[1] - manipulationPivot.y).toDouble(), (canvasCoords[0] - manipulationPivot.x).toDouble())).toFloat()
+                        beforeManipulationStates = selectedItems.map { captureState(it) }
+                        return true
+                    }
+
+                    // Resize Handle (Bottom-Right)
+                    if (isGroupButtonHit(groupBounds.right, groupBounds.bottom)) {
+                        isResizing = true
+                        manipulationPivot.set(groupBounds.left, groupBounds.top) // Fixed top-left for resize
+                        val dx = canvasCoords[0] - manipulationPivot.x
+                        val dy = canvasCoords[1] - manipulationPivot.y
+                        manipulationStartDistance = max(1f, Math.sqrt((dx * dx + dy * dy).toDouble()).toFloat())
+                        beforeManipulationStates = selectedItems.map { captureState(it) }
+                        return true
+                    }
 
                     val hitInSelection = selectedItems.any { isItemHit(it, canvasCoords[0], canvasCoords[1]) }
                     if (hitInSelection) {
@@ -1437,14 +1516,32 @@ class DrawingView @JvmOverloads constructor(
                         
                         return true
                     } else {
-                        // Tapped outside selection, clear it unless we are in LASSO tool
-                        if (activeTool != ActiveTool.LASSO) {
+                        // Tapped outside selection, clear it unless we are in LASSO tool or SELECT mode
+                        if (activeTool != ActiveTool.LASSO && activeTool != ActiveTool.SELECT) {
                             clearLassoSelection()
                         }
                     }
                 }
 
-                if (activeTool == ActiveTool.LASSO) {
+                if (activeTool == ActiveTool.SELECT) {
+                    val hitItem = drawItems.reversed().find { isItemHit(it, canvasCoords[0], canvasCoords[1]) }
+                    if (hitItem != null) {
+                        selectedItems.clear()
+                        selectedItems.add(hitItem)
+                        isDraggingSelectedItems = true
+                        lastPanX = event.x
+                        lastPanY = event.y
+                        beforeGroupTransformStates = selectedItems.map { captureState(it) }
+                        
+                        if (hitItem is PromptItem) {
+                            onPromptEditRequested?.invoke(hitItem)
+                        }
+                        invalidate()
+                        return true
+                    } else {
+                        clearLassoSelection()
+                    }
+                } else if (activeTool == ActiveTool.LASSO) {
                     isLassoing = true
                     isDrawing = false
                     lassoPoints.clear()
@@ -1468,25 +1565,11 @@ class DrawingView @JvmOverloads constructor(
                     lassoPath = null
                 }
                 
-                val currentSelectedItem = selectedImage ?: selectedWord
-                if (selectedItems.isNotEmpty() && pointerCount >= 2) {
-                    isTwoFingerGroupManipulating = true
-                    isDrawing = false
-                    isPanning = false
-                    
-                    val dx = event.getX(1) - event.getX(0)
-                    val dy = event.getY(1) - event.getY(0)
-                    twoFingerGroupStartSpan = max(1f, Math.sqrt((dx * dx + dy * dy).toDouble()).toFloat())
-                    twoFingerGroupStartAngle = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())).toFloat()
-                    val focal = screenToCanvas((event.getX(0) + event.getX(1)) / 2f, (event.getY(0) + event.getY(1)) / 2f)
-                    twoFingerGroupStartFocal.set(focal[0], focal[1])
-                    
-                    beforeGroupTransformStates = selectedItems.map { captureState(it) }
-                } else {
-                    isPanning = true
-                    lastPanX = event.x
-                    lastPanY = event.y
-                }
+                // ALWAYS pan when 2 fingers are down
+                isPanning = true
+                lastPanX = event.x
+                lastPanY = event.y
+                
                 invalidate()
             }
 
@@ -1494,49 +1577,69 @@ class DrawingView @JvmOverloads constructor(
                 val canvasCoords = screenToCanvas(event.x, event.y)
                 val currentSelectedItem = selectedImage ?: selectedWord
                 
-                if (isTwoFingerGroupManipulating && pointerCount >= 2) {
-                    val dx = event.getX(1) - event.getX(0)
-                    val dy = event.getY(1) - event.getY(0)
-                    val currentSpan = max(1f, Math.sqrt((dx * dx + dy * dy).toDouble()).toFloat())
-                    val currentAngle = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())).toFloat()
-                    val focal = screenToCanvas((event.getX(0) + event.getX(1)) / 2f, (event.getY(0) + event.getY(1)) / 2f)
-                    
-                    val scale = currentSpan / twoFingerGroupStartSpan
-                    val rotationDelta = currentAngle - twoFingerGroupStartAngle
-                    val transX = focal[0] - twoFingerGroupStartFocal.x
-                    val transY = focal[1] - twoFingerGroupStartFocal.y
+                if (isRotating) {
+                    val currentAngle = Math.toDegrees(atan2((canvasCoords[1] - manipulationPivot.y).toDouble(), (canvasCoords[0] - manipulationPivot.x).toDouble())).toFloat()
+                    val rotationDelta = currentAngle - manipulationStartAngle
                     
                     for (i in selectedItems.indices) {
                         val item = selectedItems[i]
-                        val initialState = beforeGroupTransformStates?.get(i) ?: continue
+                        val initialState = beforeManipulationStates?.get(i) ?: continue
                         
                         when (item) {
                             is ImageItem -> {
                                 item.matrix.set(initialState.matrix)
-                                item.matrix.postTranslate(transX, transY)
-                                item.matrix.postScale(scale, scale, twoFingerGroupStartFocal.x, twoFingerGroupStartFocal.y)
-                                item.matrix.postRotate(rotationDelta, twoFingerGroupStartFocal.x, twoFingerGroupStartFocal.y)
+                                item.matrix.postRotate(rotationDelta, manipulationPivot.x, manipulationPivot.y)
                             }
                             is WordItem -> {
                                 item.matrix.set(initialState.matrix)
-                                item.matrix.postTranslate(transX, transY)
-                                item.matrix.postScale(scale, scale, twoFingerGroupStartFocal.x, twoFingerGroupStartFocal.y)
-                                item.matrix.postRotate(rotationDelta, twoFingerGroupStartFocal.x, twoFingerGroupStartFocal.y)
+                                item.matrix.postRotate(rotationDelta, manipulationPivot.x, manipulationPivot.y)
                             }
                             is StrokeItem -> {
                                 initialState.strokePath?.let { item.path.set(it) }
                                 val matrix = Matrix()
-                                matrix.postTranslate(transX, transY)
-                                matrix.postScale(scale, scale, twoFingerGroupStartFocal.x, twoFingerGroupStartFocal.y)
+                                matrix.postRotate(rotationDelta, manipulationPivot.x, manipulationPivot.y)
                                 item.path.transform(matrix)
                                 item.boundsRect.setEmpty()
                                 item.path.computeBounds(item.boundsRect, true)
                             }
                             is PromptItem -> {
                                 item.matrix.set(initialState.matrix)
-                                item.matrix.postTranslate(transX, transY)
-                                item.matrix.postScale(scale, scale, twoFingerGroupStartFocal.x, twoFingerGroupStartFocal.y)
-                                item.matrix.postRotate(rotationDelta, twoFingerGroupStartFocal.x, twoFingerGroupStartFocal.y)
+                                item.matrix.postRotate(rotationDelta, manipulationPivot.x, manipulationPivot.y)
+                            }
+                        }
+                        item.invalidateCache()
+                    }
+                    invalidate()
+                } else if (isResizing) {
+                    val dx = canvasCoords[0] - manipulationPivot.x
+                    val dy = canvasCoords[1] - manipulationPivot.y
+                    val currentDistance = max(1f, Math.sqrt((dx * dx + dy * dy).toDouble()).toFloat())
+                    val scale = currentDistance / manipulationStartDistance
+                    
+                    for (i in selectedItems.indices) {
+                        val item = selectedItems[i]
+                        val initialState = beforeManipulationStates?.get(i) ?: continue
+                        
+                        when (item) {
+                            is ImageItem -> {
+                                item.matrix.set(initialState.matrix)
+                                item.matrix.postScale(scale, scale, manipulationPivot.x, manipulationPivot.y)
+                            }
+                            is WordItem -> {
+                                item.matrix.set(initialState.matrix)
+                                item.matrix.postScale(scale, scale, manipulationPivot.x, manipulationPivot.y)
+                            }
+                            is StrokeItem -> {
+                                initialState.strokePath?.let { item.path.set(it) }
+                                val matrix = Matrix()
+                                matrix.postScale(scale, scale, manipulationPivot.x, manipulationPivot.y)
+                                item.path.transform(matrix)
+                                item.boundsRect.setEmpty()
+                                item.path.computeBounds(item.boundsRect, true)
+                            }
+                            is PromptItem -> {
+                                item.matrix.set(initialState.matrix)
+                                item.matrix.postScale(scale, scale, manipulationPivot.x, manipulationPivot.y)
                             }
                         }
                         item.invalidateCache()
@@ -1619,15 +1722,17 @@ class DrawingView @JvmOverloads constructor(
             }
 
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                if (isDraggingSelectedItems) {
-                    isDraggingSelectedItems = false
-                    
-                    // Push GroupTransformAction
-                    if (beforeGroupTransformStates != null) {
+                if (isResizing || isRotating || isDraggingSelectedItems) {
+                    val statesBefore = beforeManipulationStates ?: beforeGroupTransformStates
+                    if (statesBefore != null) {
                         val afterStates = selectedItems.map { captureState(it) }
-                        pushAction(GroupTransformAction(selectedItems.toList(), beforeGroupTransformStates!!, afterStates), executeNow = false)
+                        pushAction(GroupTransformAction(selectedItems.toList(), statesBefore, afterStates), executeNow = false)
                         onStrokeCompleted?.invoke()
                     }
+                    isResizing = false
+                    isRotating = false
+                    isDraggingSelectedItems = false
+                    beforeManipulationStates = null
                     beforeGroupTransformStates = null
                     invalidate()
                 } else if (isLassoing) {
@@ -2990,7 +3095,10 @@ class DrawingView @JvmOverloads constructor(
             else -> item.bounds
         }
         
-        // Slightly expand hit area for thin strokes
+        if (item is StrokeItem) {
+            return isStrokeHit(item, canvasX, canvasY, 30f)
+        }
+
         val hitBounds = RectF(localBounds)
         if (item is WordItem) hitBounds.inset(-20f, -20f)
         

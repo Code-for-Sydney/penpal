@@ -40,6 +40,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnLasso: ImageButton
     private lateinit var btnExport: ImageButton
     private lateinit var btnAddPrompt: ImageButton
+    private lateinit var btnSelectMode: ImageButton
 
     private lateinit var recognitionProgress: ProgressBar
     private lateinit var recognitionIcon: TextView
@@ -196,6 +197,7 @@ class MainActivity : AppCompatActivity() {
         btnToggleTools      = findViewById(R.id.btnToggleTools)
         btnEraser           = findViewById(R.id.btnEraser)
         btnLasso            = findViewById(R.id.btnLasso)
+        btnSelectMode       = findViewById(R.id.btnSelectMode)
         recognitionProgress = findViewById(R.id.recognitionProgress)
         recognitionIcon     = findViewById(R.id.recognitionIcon)
         recognitionText     = findViewById(R.id.recognitionText)
@@ -672,12 +674,21 @@ class MainActivity : AppCompatActivity() {
             }
             updateToolState()
         }
+        btnSelectMode.setOnClickListener {
+            if (drawingView.activeTool == DrawingView.ActiveTool.SELECT) {
+                drawingView.activeTool = DrawingView.ActiveTool.BRUSH
+            } else {
+                drawingView.activeTool = DrawingView.ActiveTool.SELECT
+            }
+            updateToolState()
+        }
         btnToggleTools.setOnClickListener {
             if (toolToolbar.visibility == View.VISIBLE) {
                 toolToolbar.visibility = View.GONE
             } else {
                 toolToolbar.visibility = View.VISIBLE
             }
+            updateToolState()
         }
         findViewById<ImageButton>(R.id.btnAddImage).setOnClickListener {
             pickMedia.launch(androidx.activity.result.PickVisualMediaRequest(androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly))
@@ -812,12 +823,29 @@ class MainActivity : AppCompatActivity() {
             btnLasso.setColorFilter(Color.parseColor("#CCCCCC"))
             btnLasso.alpha = 0.8f
         }
+        // Select mode highlight
+        if (drawingView.activeTool == DrawingView.ActiveTool.SELECT) {
+            btnSelectMode.setColorFilter(Color.WHITE)
+            btnSelectMode.alpha = 1.0f
+            btnSelectMode.setImageResource(R.drawable.ic_select)
+        } else if (drawingView.activeTool == DrawingView.ActiveTool.BRUSH) {
+            btnSelectMode.setColorFilter(Color.WHITE)
+            btnSelectMode.alpha = 1.0f
+            btnSelectMode.setImageResource(R.drawable.ic_brush)
+        } else {
+            btnSelectMode.setColorFilter(Color.parseColor("#CCCCCC"))
+            btnSelectMode.alpha = 0.8f
+            btnSelectMode.setImageResource(R.drawable.ic_select)
+        }
         
-        // Update Toggle button icon based on current tool
-        when (drawingView.activeTool) {
-            DrawingView.ActiveTool.ERASER -> btnToggleTools.setImageResource(R.drawable.ic_eraser)
-            DrawingView.ActiveTool.LASSO -> btnToggleTools.setImageResource(R.drawable.ic_lasso)
-            else -> btnToggleTools.setImageResource(R.drawable.ic_brush)
+        // Ensure Toggle button reflects toolbar visibility
+        btnToggleTools.setImageResource(R.drawable.ic_gear)
+        if (toolToolbar.visibility == View.VISIBLE) {
+            btnToggleTools.alpha = 1.0f
+            btnToggleTools.setColorFilter(Color.WHITE)
+        } else {
+            btnToggleTools.alpha = 0.5f
+            btnToggleTools.setColorFilter(Color.parseColor("#CCCCCC"))
         }
     }
 
