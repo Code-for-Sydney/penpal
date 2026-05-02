@@ -39,6 +39,7 @@ class HandwritingRecognizer private constructor(private val context: Context) {
     private data class RecognitionRequest(
         val bitmap: Bitmap,
         val prompt: String? = null,
+        val isBackground: Boolean = false,
         val onPartialResult: (String) -> Unit,
         val onDone: () -> Unit,
         val onError: (String) -> Unit
@@ -145,11 +146,12 @@ class HandwritingRecognizer private constructor(private val context: Context) {
     fun recognize(
         bitmap: Bitmap,
         prompt: String? = null,
+        isBackground: Boolean = false,
         onPartialResult: (String) -> Unit,
         onDone: () -> Unit,
         onError: (String) -> Unit
     ) {
-        val request = RecognitionRequest(bitmap, prompt, onPartialResult, onDone, onError)
+        val request = RecognitionRequest(bitmap, prompt, isBackground, onPartialResult, onDone, onError)
         requestChannel.trySend(request)
     }
 
@@ -174,26 +176,31 @@ class HandwritingRecognizer private constructor(private val context: Context) {
 
         var conversation: Conversation? = null
         try {
-            _isProcessing.value = true
-            conversation = currentEngine.createConversation()
+            if (!request.isBackground) {
+                _isProcessing.value = true
+            }
+            
+            withTimeout(30000L) { // 30 second timeout per request
+                conversation = currentEngine.createConversation()
 
-            // Convert Android Bitmap → Encoded Bytes (JPEG) for LiteRT-LM
-            val stream = ByteArrayOutputStream()
-            request.bitmap.compress(Bitmap.CompressFormat.JPEG, 70, stream)
-            val imageBytes = stream.toByteArray()
+                // Convert Android Bitmap → Encoded Bytes (JPEG) for LiteRT-LM
+                val stream = ByteArrayOutputStream()
+                request.bitmap.compress(Bitmap.CompressFormat.JPEG, 70, stream)
+                val imageBytes = stream.toByteArray()
 
-            // Construct multimodal message
-            val prompt = request.prompt ?: "Analyze the handwriting in this image. What word, letter, number, or text is drawn? Detect symbols like stars (*) or asterisks as well. Reply with ONLY the recognized text."
-            val content = Contents.of(
-                Content.ImageBytes(imageBytes),
-                Content.Text(prompt)
-            )
+                // Construct multimodal message
+                val prompt = request.prompt ?: "Analyze the handwriting in this image. What word, letter, number, or text is drawn? Detect symbols like stars (*) or asterisks as well. Reply with ONLY the recognized text."
+                val content = Contents.of(
+                    Content.ImageBytes(imageBytes),
+                    Content.Text(prompt)
+                )
 
-            // Stream tokens back on Main thread
-            conversation.sendMessageAsync(content).collect { partial ->
-                val text = partial.toString()
-                withContext(Dispatchers.Main) {
-                    if (text.isNotBlank()) request.onPartialResult(text)
+                // Stream tokens back on Main thread
+                conversation?.sendMessageAsync(content)?.collect { partial ->
+                    val text = partial.toString()
+                    withContext(Dispatchers.Main) {
+                        if (text.isNotBlank()) request.onPartialResult(text)
+                    }
                 }
             }
 
@@ -202,11 +209,19 @@ class HandwritingRecognizer private constructor(private val context: Context) {
             }
         } catch (e: Exception) {
             withContext(Dispatchers.Main) {
-                request.onError("Recognition failed: ${e.message}")
+                if (e is TimeoutCancellationException) {
+                    request.onError("Recognition timed out")
+                } else {
+                    request.onError("Recognition failed: ${e.message}")
+                }
+                // Important: also call onDone to clear any pending states if needed, 
+                // but usually onError is enough if handled.
             }
         } finally {
             conversation?.close()
-            _isProcessing.value = false
+            if (!request.isBackground) {
+                _isProcessing.value = false
+            }
         }
     }
 

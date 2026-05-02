@@ -12,6 +12,9 @@ import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.max
 import kotlin.math.min
+import android.text.StaticLayout
+import android.text.TextPaint
+import android.text.Layout
 
 class DrawingView @JvmOverloads constructor(
     context: Context,
@@ -102,7 +105,9 @@ class DrawingView @JvmOverloads constructor(
         var text: String = "",
         var isShowingText: Boolean = false,
         var textMatrix: Matrix = Matrix(),
-        var textBounds: RectF = RectF()
+        var textBounds: RectF = RectF(),
+        var pdfWords: List<PdfHelper.PdfWord> = emptyList(),
+        var isAiRecognized: Boolean = false
     ) : CanvasItem() {
         private var _processedBitmap: Bitmap? = null
         val displayBitmap: Bitmap
@@ -588,9 +593,12 @@ class DrawingView @JvmOverloads constructor(
     private var twoFingerStartFocal = PointF()
 
     private var beforeTransformState: ItemState? = null
+    
+    /** Optional sub-rect for precise search highlighting */
+    var searchHighlightedSubRect: RectF? = null
 
-    /** Currently focused word for search results */
-    var searchHighlightedWord: WordItem? = null
+    /** Currently focused item for search results */
+    var searchHighlightedItem: CanvasItem? = null
         set(value) { field = value; invalidate() }
 
     // Scale gesture detector
@@ -814,6 +822,22 @@ class DrawingView @JvmOverloads constructor(
         val hasGroupSelection = selectedItems.size > 1
         for (item in drawItems) {
             if (RectF.intersects(item.bounds, viewport)) {
+                // Draw search highlight behind the item
+                if (item == searchHighlightedItem) {
+                    if (searchHighlightedSubRect != null) {
+                        canvas.save()
+                        when (item) {
+                            is ImageItem -> canvas.concat(item.matrix)
+                            is WordItem -> canvas.concat(item.matrix)
+                            else -> {}
+                        }
+                        canvas.drawRect(searchHighlightedSubRect!!, searchHighlightPaint)
+                        canvas.restore()
+                    } else {
+                        canvas.drawRect(item.bounds, searchHighlightPaint)
+                    }
+                }
+                
                 item.draw(canvas)
                 
                 // Draw individual selection/highlight on top only if NOT in a multi-item group
@@ -1051,7 +1075,6 @@ class DrawingView @JvmOverloads constructor(
         val localBounds = if (!item.textBounds.isEmpty) {
             item.textBounds
         } else {
-            // Fallback to current strokes if textBounds is missing (legacy support)
             val b = RectF(item.strokes[0].bounds)
             for (i in 1 until item.strokes.size) {
                 b.union(item.strokes[i].bounds)
@@ -1059,34 +1082,13 @@ class DrawingView @JvmOverloads constructor(
             b
         }
         
-        // Use the color of the first stroke or the tint color
-        textPaint.color = item.tintColor ?: if (item.strokes.isNotEmpty()) {
+        val color = item.tintColor ?: if (item.strokes.isNotEmpty()) {
             item.strokes[0].paint.color
         } else {
             Color.BLACK
         }
         
-        // Scale text to fit bounds (approximated)
-        val text = item.text
-        textPaint.textSize = 100f // Base size for measurement
-        val textWidth = textPaint.measureText(text)
-        val fontMetrics = textPaint.fontMetrics
-        val textHeight = fontMetrics.descent - fontMetrics.ascent
-        
-        val scaleX = if (textWidth > 0) localBounds.width() / textWidth else 1f
-        val scaleY = if (textHeight > 0) localBounds.height() / textHeight else 1f
-        val scale = min(scaleX, scaleY) * 0.9f // small margin
-        
-        textPaint.textSize = 100f * scale
-        
-        val centerX = localBounds.centerX()
-        val centerY = localBounds.centerY()
-        
-        // Center text vertically
-        val finalMetrics = textPaint.fontMetrics
-        val baseline = centerY - (finalMetrics.ascent + finalMetrics.descent) / 2
-        
-        canvas.drawText(text, centerX, baseline, textPaint)
+        drawWrappedText(canvas, item.text, localBounds, color)
         canvas.restore()
     }
 
@@ -1100,26 +1102,50 @@ class DrawingView @JvmOverloads constructor(
             RectF(0f, 0f, item.bitmap.width.toFloat(), item.bitmap.height.toFloat())
         }
         
-        textPaint.color = Color.BLACK
+        drawWrappedText(canvas, item.text, localBounds, Color.BLACK)
+        canvas.restore()
+    }
+
+    private fun drawWrappedText(canvas: Canvas, text: String, bounds: RectF, color: Int) {
+        if (text.isEmpty()) return
         
-        val text = item.text
-        textPaint.textSize = 100f
-        val textWidth = textPaint.measureText(text)
-        val fontMetrics = textPaint.fontMetrics
-        val textHeight = fontMetrics.descent - fontMetrics.ascent
+        val tp = TextPaint(textPaint)
+        tp.color = color
+        tp.textAlign = Paint.Align.LEFT // StaticLayout handles its own alignment
         
-        val scaleX = if (textWidth > 0) localBounds.width() / textWidth else 1f
-        val scaleY = if (textHeight > 0) localBounds.height() / textHeight else 1f
-        val scale = min(scaleX, scaleY) * 0.9f
+        val width = bounds.width().toInt().coerceAtLeast(1)
+        val height = bounds.height()
+
+        // Binary search for optimal font size to fill the box
+        var low = 1f
+        var high = 1000f // Large upper bound for giant items
+        var optimalSize = 10f
         
-        textPaint.textSize = 100f * scale
+        repeat(12) { // 12 iterations gives good precision
+            val mid = (low + high) / 2
+            tp.textSize = mid
+            val layout = StaticLayout.Builder.obtain(text, 0, text.length, tp, width)
+                .setAlignment(Layout.Alignment.ALIGN_CENTER)
+                .build()
+            
+            if (layout.height <= height) {
+                optimalSize = mid
+                low = mid
+            } else {
+                high = mid
+            }
+        }
         
-        val centerX = localBounds.centerX()
-        val centerY = localBounds.centerY()
-        val finalMetrics = textPaint.fontMetrics
-        val baseline = centerY - (finalMetrics.ascent + finalMetrics.descent) / 2
-        
-        canvas.drawText(text, centerX, baseline, textPaint)
+        tp.textSize = optimalSize
+        val finalLayout = StaticLayout.Builder.obtain(text, 0, text.length, tp, width)
+            .setAlignment(Layout.Alignment.ALIGN_CENTER)
+            .build()
+            
+        canvas.save()
+        // Center vertically within the bounds
+        val yOffset = bounds.top + (height - finalLayout.height) / 2f
+        canvas.translate(bounds.left, yOffset)
+        finalLayout.draw(canvas)
         canvas.restore()
     }
 
@@ -1873,7 +1899,7 @@ class DrawingView @JvmOverloads constructor(
         initialBitmap = null
         selectedImage = null
         selectedWord = null
-        searchHighlightedWord = null
+        searchHighlightedItem = null
         scaleFactor = 1.0f
         translateX = -120f
         translateY = 0f
@@ -1881,12 +1907,30 @@ class DrawingView @JvmOverloads constructor(
         invalidate()
     }
 
-    fun scrollToWord(word: WordItem) {
-        val bounds = word.bounds
+    fun centerOnItem(item: CanvasItem) {
+        val bounds = item.bounds
         val centerX = bounds.centerX()
         val centerY = bounds.centerY()
         
-        // Center the word in the view
+        // Center the item in the view
+        translateX = width / 2f - centerX * scaleFactor
+        translateY = height / 2f - centerY * scaleFactor
+        
+        updateMatrix()
+        invalidate()
+    }
+
+    fun centerOnRect(item: CanvasItem, localRect: RectF) {
+        val globalRect = RectF(localRect)
+        when (item) {
+            is ImageItem -> item.matrix.mapRect(globalRect)
+            is WordItem -> item.matrix.mapRect(globalRect)
+            else -> {}
+        }
+        
+        val centerX = globalRect.centerX()
+        val centerY = globalRect.centerY()
+        
         translateX = width / 2f - centerX * scaleFactor
         translateY = height / 2f - centerY * scaleFactor
         
@@ -2446,7 +2490,17 @@ class DrawingView @JvmOverloads constructor(
                     item.textMatrix.getValues(tm)
                     val tb = FloatRect(item.textBounds.left, item.textBounds.top, item.textBounds.right, item.textBounds.bottom)
                     
-                    ImageData(base64, m, item.removeBackground, item.text, item.isShowingText, tm, tb, item.isLocked)
+                    ImageData(
+                        base64 = base64,
+                        matrix = m,
+                        removeBackground = item.removeBackground,
+                        text = item.text,
+                        isShowingText = item.isShowingText,
+                        textMatrix = tm,
+                        textBounds = tb,
+                        pdfWords = item.pdfWords,
+                        isLocked = item.isLocked
+                    )
                 }
                 is WordItem -> {
                     val strokeDataList = item.strokes.map {
@@ -2465,7 +2519,17 @@ class DrawingView @JvmOverloads constructor(
                     item.textMatrix.getValues(tm)
                     val tb = FloatRect(item.textBounds.left, item.textBounds.top, item.textBounds.right, item.textBounds.bottom)
                     
-                    WordData(strokeDataList, m, item.text, item.isShowingText, tm, tb, item.tintColor, item.backgroundColor, item.isLocked)
+                    WordData(
+                        strokes = strokeDataList,
+                        matrix = m,
+                        text = item.text,
+                        isShowingText = item.isShowingText,
+                        textMatrix = tm,
+                        textBounds = tb,
+                        tintColor = item.tintColor,
+                        backgroundColor = item.backgroundColor,
+                        isLocked = item.isLocked
+                    )
                 }
             }
         }
@@ -2655,14 +2719,34 @@ class DrawingView @JvmOverloads constructor(
                 val m = FloatArray(9); matrix.getValues(m)
                 val tm = FloatArray(9); textMatrix.getValues(tm)
                 val tb = FloatRect(textBounds.left, textBounds.top, textBounds.right, textBounds.bottom)
-                ImageData(base64, m, removeBackground, text, isShowingText, tm, tb)
+                ImageData(
+                    base64 = base64,
+                    matrix = m,
+                    removeBackground = removeBackground,
+                    text = text,
+                    isShowingText = isShowingText,
+                    textMatrix = tm,
+                    textBounds = tb,
+                    pdfWords = pdfWords,
+                    isLocked = isLocked
+                )
             }
             is WordItem -> {
                 val sData = strokes.map { StrokeData(it.commands, it.paint.color, it.paint.strokeWidth, it.paint.alpha, it.isEraser) }
                 val m = FloatArray(9); matrix.getValues(m)
                 val tm = FloatArray(9); textMatrix.getValues(tm)
                 val tb = FloatRect(textBounds.left, textBounds.top, textBounds.right, textBounds.bottom)
-                WordData(sData, m, text, isShowingText, tm, tb, tintColor, backgroundColor)
+                WordData(
+                    strokes = sData,
+                    matrix = m,
+                    text = text,
+                    isShowingText = isShowingText,
+                    textMatrix = tm,
+                    textBounds = tb,
+                    tintColor = tintColor,
+                    backgroundColor = backgroundColor,
+                    isLocked = isLocked
+                )
             }
         }
     }

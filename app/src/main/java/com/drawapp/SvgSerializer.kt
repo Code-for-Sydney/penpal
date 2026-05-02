@@ -34,6 +34,8 @@ data class ImageData(
     val isShowingText: Boolean = false,
     val textMatrix: FloatArray? = null,
     val textBounds: FloatRect? = null,
+    val pdfWords: List<PdfHelper.PdfWord> = emptyList(),
+    val isAiRecognized: Boolean = false,
     val isLocked: Boolean = false
 ) : SvgData()
 
@@ -108,7 +110,7 @@ object SvgSerializer {
                     val transform = "matrix(${m[0]},${m[3]},${m[1]},${m[4]},${m[2]},${m[5]})"
                     sb.append("""  <image id="image-$index" transform="$transform" href="data:image/jpeg;base64,${item.base64}"""")
                     sb.append(""" data-remove-bg="${item.removeBackground}"""")
-                    sb.append(""" data-text="${item.text}" data-showing-text="${item.isShowingText}"""")
+                    sb.append(""" data-text="${escapeXml(item.text)}" data-showing-text="${item.isShowingText}"""")
                     if (item.isLocked) sb.append(""" data-locked="true"""")
                     item.textMatrix?.let { tm ->
                         val tmStr = "matrix(${tm[0]},${tm[3]},${tm[1]},${tm[4]},${tm[2]},${tm[5]})"
@@ -117,12 +119,17 @@ object SvgSerializer {
                     item.textBounds?.let { tb ->
                         sb.append(""" data-text-bounds="${tb.left},${tb.top},${tb.right},${tb.bottom}"""")
                     }
+                    if (item.pdfWords.isNotEmpty()) {
+                        val wordsStr = item.pdfWords.joinToString(";") { "${it.text.replace(":", " ")}:${it.bounds.left},${it.bounds.top},${it.bounds.right},${it.bounds.bottom}" }
+                        sb.append(""" data-pdf-words="$wordsStr"""")
+                    }
+                    if (item.isAiRecognized) sb.append(""" data-ai-recognized="true"""")
                     sb.appendLine("/>")
                 }
                 is WordData -> {
                     val m = item.matrix
                     val transform = "matrix(${m[0]},${m[3]},${m[1]},${m[4]},${m[2]},${m[5]})"
-                    sb.append("""  <g id="word-$index" transform="$transform" data-text="${item.text}" data-showing-text="${item.isShowingText}"""")
+                    sb.append("""  <g id="word-$index" transform="$transform" data-text="${escapeXml(item.text)}" data-showing-text="${item.isShowingText}"""")
                     if (item.isLocked) sb.append(""" data-locked="true"""")
                     item.tintColor?.let { sb.append(""" data-tint="${colorToHex(it)}"""") }
                     item.backgroundColor?.let { sb.append(""" data-bg-fill="${colorToHex(it)}"""") }
@@ -205,8 +212,35 @@ object SvgSerializer {
                         } else null
                     } else null
                     val isLocked = parser.getAttributeValue(null, "data-locked") == "true"
+                    val isAiRecognized = parser.getAttributeValue(null, "data-ai-recognized") == "true"
+                    val pdfWordsStr = parser.getAttributeValue(null, "data-pdf-words")
+                    val pdfWords = if (pdfWordsStr != null) {
+                        pdfWordsStr.split(";").mapNotNull { wordPart ->
+                            val colonIdx = wordPart.lastIndexOf(":")
+                            if (colonIdx != -1) {
+                                val wordText = wordPart.substring(0, colonIdx)
+                                val coords = wordPart.substring(colonIdx + 1).split(",")
+                                if (coords.size == 4) {
+                                    PdfHelper.PdfWord(wordText, RectF(coords[0].toFloat(), coords[1].toFloat(), coords[2].toFloat(), coords[3].toFloat()))
+                                } else null
+                            } else null
+                        }
+                    } else emptyList()
                     
-                    items.add(ImageData(base64Data, m, removeBg, text, isShowingText, textMatrix, textBounds, isLocked))
+                    items.add(
+                        ImageData(
+                            base64 = base64Data,
+                            matrix = m,
+                            removeBackground = removeBg,
+                            text = text,
+                            isShowingText = isShowingText,
+                            textMatrix = textMatrix,
+                            textBounds = textBounds,
+                            pdfWords = pdfWords,
+                            isAiRecognized = isAiRecognized,
+                            isLocked = isLocked
+                        )
+                    )
                 } else if (parser.name == "g") {
                     val text = parser.getAttributeValue(null, "data-text") ?: ""
                     val transform = parser.getAttributeValue(null, "transform") ?: ""
@@ -236,12 +270,34 @@ object SvgSerializer {
                         }
                         innerEvent = parser.next()
                     }
-                    items.add(WordData(strokes, m, text, isShowingText, textMatrix, textBounds, tintColor, backgroundColor, isLocked))
+                    items.add(
+                        WordData(
+                            strokes = strokes,
+                            matrix = m,
+                            text = text,
+                            isShowingText = isShowingText,
+                            textMatrix = textMatrix,
+                            textBounds = textBounds,
+                            tintColor = tintColor,
+                            backgroundColor = backgroundColor,
+                            isLocked = isLocked
+                        )
+                    )
                 }
             }
             eventType = parser.next()
         }
         return SvgResult(items, backgroundType)
+    }
+
+    private fun escapeXml(text: String): String {
+        return text.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\"", "&quot;")
+            .replace("'", "&apos;")
+            .replace("\n", "&#10;")
+            .replace("\r", "&#13;")
     }
 
     private fun parseMatrix(transform: String): FloatArray {

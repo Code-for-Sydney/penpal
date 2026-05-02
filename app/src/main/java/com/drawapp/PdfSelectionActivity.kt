@@ -29,6 +29,7 @@ class PdfSelectionActivity : AppCompatActivity() {
     private var currentPage: PdfRenderer.Page? = null
     private var currentPageIndex: Int = 0
     private var currentBitmap: Bitmap? = null
+    private var pdfUri: Uri? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -49,8 +50,8 @@ class PdfSelectionActivity : AppCompatActivity() {
             return
         }
 
-        val pdfUri = Uri.parse(pdfUriString)
-        setupPdfRenderer(pdfUri)
+        pdfUri = Uri.parse(pdfUriString)
+        setupPdfRenderer(pdfUri!!)
 
         btnBack.setOnClickListener { finish() }
         btnPrev.setOnClickListener { navigatePage(-1) }
@@ -131,6 +132,32 @@ class PdfSelectionActivity : AppCompatActivity() {
 
             val cropped = Bitmap.createBitmap(fullBitmap, safeRect.left, safeRect.top, safeRect.width(), safeRect.height())
             
+            // Extract digital text and word bounds from the crop region
+            var extractedText = ""
+            var pdfWordsStr = ""
+            pdfUri?.let { uri ->
+                extractedText = PdfHelper.extractTextInRect(
+                    this,
+                    uri,
+                    currentPageIndex,
+                    android.graphics.RectF(safeRect),
+                    fullBitmap.width.toFloat(),
+                    fullBitmap.height.toFloat()
+                )
+                
+                // Also get individual words for precise search in the snippet
+                val allWords = PdfHelper.extractWords(this, uri, currentPageIndex, fullBitmap.width.toFloat(), fullBitmap.height.toFloat())
+                val cropRectF = android.graphics.RectF(safeRect)
+                val filteredWords = allWords.filter { cropRectF.contains(it.bounds.centerX(), it.bounds.centerY()) }
+                // Adjust coordinates to be relative to the crop origin
+                val relativeWords = filteredWords.map { word ->
+                    val rb = android.graphics.RectF(word.bounds)
+                    rb.offset(-cropRectF.left, -cropRectF.top)
+                    PdfHelper.PdfWord(word.text, rb)
+                }
+                pdfWordsStr = relativeWords.joinToString(";") { "${it.text.replace(":", " ")}:${it.bounds.left},${it.bounds.top},${it.bounds.right},${it.bounds.bottom}" }
+            }
+
             // Save to temp file and return path
             val fileName = "pdf_snippet_${UUID.randomUUID()}.png"
             val file = File(cacheDir, fileName)
@@ -140,6 +167,8 @@ class PdfSelectionActivity : AppCompatActivity() {
 
             val resultIntent = android.content.Intent()
             resultIntent.putExtra("SNIPPET_PATH", file.absolutePath)
+            resultIntent.putExtra("EXTRACTED_TEXT", extractedText)
+            resultIntent.putExtra("PDF_WORDS", pdfWordsStr)
             setResult(RESULT_OK, resultIntent)
             finish()
         } catch (e: Exception) {

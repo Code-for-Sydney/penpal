@@ -359,37 +359,13 @@ class NotebookSelectionActivity : AppCompatActivity() {
                         page.close()
                         
                         withContext(Dispatchers.Main) {
-                            tvImportDetail.text = "Performing text recognition..."
+                            tvImportDetail.text = "Extracting digital text..."
                         }
                         
-                        // OCR Prompt
-                        val prompt = """
-                            Detect all handwriting in this image. For each word, number, or star (*), 
-                            provide its text and its bounding box in JSON format: 
-                            [{"text": "...", "box_2d": [ymin, xmin, ymax, xmax]}, ...]. 
-                            Coordinates are 0-1000 relative to the image. 
-                            Output ONLY the JSON.
-                        """.trimIndent()
+                        // Extract digital text instead of OCR
+                        val fullText = PdfHelper.extractText(this@NotebookSelectionActivity, uri, pageIdx)
                         
-                        val recognitionResult = recognizer.recognizeSuspend(bitmap, prompt)
-                        val cleanJson = extractJson(recognitionResult)
                         val svgDataList = mutableListOf<SvgData>()
-                        
-                        // Parse OCR and join text for searchability
-                        val fullText = StringBuilder()
-                        try {
-                            val array = JSONArray(cleanJson)
-                            for (i in 0 until array.length()) {
-                                val obj = array.getJSONObject(i)
-                                val text = obj.optString("text", obj.optString("label", ""))
-                                if (text.isNotEmpty()) {
-                                    if (fullText.isNotEmpty()) fullText.append(" ")
-                                    fullText.append(text)
-                                }
-                            }
-                        } catch (e: Exception) {
-                            e.printStackTrace()
-                        }
                         
                         // Add FULL PDF page as a locked ImageItem
                         // Use JPEG for better compression and faster loading
@@ -408,12 +384,15 @@ class NotebookSelectionActivity : AppCompatActivity() {
                         val mValues = FloatArray(9)
                         matrix.getValues(mValues)
 
+                        val pdfWords = PdfHelper.extractWords(this@NotebookSelectionActivity, uri, index, PAGE_WIDTH, PAGE_HEIGHT)
+
                         svgDataList.add(ImageData(
                             base64 = base64,
                             matrix = mValues,
                             removeBackground = false,
-                            text = fullText.toString(),
+                            text = fullText,
                             isShowingText = false,
+                            pdfWords = pdfWords,
                             isLocked = true // Keep fixed in position
                         ))
                         

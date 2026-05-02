@@ -49,4 +49,7 @@ dependencies {
     // JSON serialization
     implementation 'com.google.code.gson:gson:2.10.1'
 
+    // PDFBox for digital text extraction
+    implementation 'com.tom-roush:pdfbox-android:2.0.27.0'
+
 }

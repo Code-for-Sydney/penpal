@@ -58,7 +58,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnPrevMatch: ImageButton
     private lateinit var tvSearchCount: TextView
 
-    private data class SearchMatch(val pageIndex: Int, val text: String, val itemIndex: Int)
+    private data class SearchMatch(val pageIndex: Int, val text: String, val itemIndex: Int, val subRect: RectF? = null)
     private var allMatches = mutableListOf<SearchMatch>()
     private var currentMatchIndex = -1
 
@@ -88,6 +88,7 @@ class MainActivity : AppCompatActivity() {
     private var pendingClusterBitmap: Bitmap? = null
     private val busyStrokes = mutableSetOf<DrawingView.StrokeItem>()
     private val lastPageDetectionResults = mutableMapOf<Int, List<DrawingView.DetectedBox>>()
+    private val recognizedSessionItems = mutableSetOf<Int>()
 
 
 
@@ -99,6 +100,7 @@ class MainActivity : AppCompatActivity() {
                 val bitmap = android.graphics.BitmapFactory.decodeStream(inputStream)
                 if (bitmap != null) {
                     val imageItem = drawingView.addImage(bitmap)
+                    recognizedSessionItems.add(System.identityHashCode(imageItem))
                     triggerImageSummaryRecognition(imageItem, bitmap)
                     updateButtonStates()
                     scheduleAutosave()
@@ -125,7 +127,16 @@ class MainActivity : AppCompatActivity() {
                 try {
                     val bitmap = android.graphics.BitmapFactory.decodeFile(snippetPath)
                     if (bitmap != null) {
+                        val extractedText = result.data?.getStringExtra("EXTRACTED_TEXT") ?: ""
+                        val pdfWordsStr = result.data?.getStringExtra("PDF_WORDS")
                         val imageItem = drawingView.addImage(bitmap)
+                        recognizedSessionItems.add(System.identityHashCode(imageItem))
+                        if (extractedText.isNotEmpty()) {
+                            imageItem.text = extractedText
+                        }
+                        if (!pdfWordsStr.isNullOrEmpty()) {
+                            imageItem.pdfWords = PdfHelper.parseWords(pdfWordsStr)
+                        }
                         triggerImageSummaryRecognition(imageItem, bitmap)
                         updateButtonStates()
                         scheduleAutosave()
@@ -1149,6 +1160,21 @@ class MainActivity : AppCompatActivity() {
             }
             if (result.items.isNotEmpty()) {
                 drawingView.loadFromSvgData(result.items)
+                
+                // Trigger background recognition for any images/PDFs on the page
+                result.items.forEach { itemData ->
+                    if (itemData is ImageData) {
+                        // Find the corresponding item in drawingView
+                        val imageItem = drawingView.getItemsOnPage(pageIndex).find { 
+                            it is DrawingView.ImageItem && it.text == itemData.text
+                        } as? DrawingView.ImageItem
+                        
+                        if (imageItem != null && !imageItem.isAiRecognized && !recognizedSessionItems.contains(System.identityHashCode(imageItem))) {
+                            recognizedSessionItems.add(System.identityHashCode(imageItem))
+                            triggerImageSummaryRecognition(imageItem, imageItem.bitmap)
+                        }
+                    }
+                }
             }
         } catch (e: Exception) {
             e.printStackTrace()
@@ -1310,7 +1336,7 @@ class MainActivity : AppCompatActivity() {
             etSearch.setText("")
             allMatches.clear()
             currentMatchIndex = -1
-            drawingView.searchHighlightedWord = null
+            drawingView.searchHighlightedItem = null
             updateSearchUI()
             val imm = getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
             imm.hideSoftInputFromWindow(etSearch.windowToken, 0)
@@ -1322,7 +1348,7 @@ class MainActivity : AppCompatActivity() {
             allMatches.clear()
             currentMatchIndex = -1
             updateSearchUI()
-            drawingView.searchHighlightedWord = null
+            drawingView.searchHighlightedItem = null
             return
         }
 
@@ -1342,12 +1368,26 @@ class MainActivity : AppCompatActivity() {
                 val file = getNotebookSvgFile(pageIdx)
                 if (file.exists()) {
                     val content = file.readText()
-                    // Quick check for performance
-                    if (content.contains("data-text=", ignoreCase = true) && content.contains(query, ignoreCase = true)) {
+                    // Quick check for performance - just check if it has text at all
+                    if (content.contains("data-text=", ignoreCase = true)) {
                         val result = SvgSerializer.deserialize(content)
                         result.items.forEachIndexed { index, item ->
-                            if (item is WordData && item.text.contains(query, ignoreCase = true)) {
-                                matches.add(SearchMatch(pageIdx, item.text, index))
+                            if (item is ImageData && item.pdfWords.isNotEmpty()) {
+                                item.pdfWords.forEach { pdfWord ->
+                                    if (pdfWord.text.contains(query, ignoreCase = true)) {
+                                        matches.add(SearchMatch(pageIdx, pdfWord.text, index, pdfWord.bounds))
+                                    }
+                                }
+                            } else {
+                                val text = when (item) {
+                                    is WordData -> item.text
+                                    is ImageData -> item.text
+                                    else -> ""
+                                }.replace("\n", " ").replace("\r", " ").replace(Regex("\\s+"), " ")
+                                
+                                if (text.isNotBlank() && text.contains(query, ignoreCase = true)) {
+                                    matches.add(SearchMatch(pageIdx, text, index))
+                                }
                             }
                         }
                     }
@@ -1363,7 +1403,7 @@ class MainActivity : AppCompatActivity() {
                     navigateToMatch(allMatches[currentMatchIndex])
                 } else {
                     currentMatchIndex = -1
-                    drawingView.searchHighlightedWord = null
+                    drawingView.searchHighlightedItem = null
                 }
                 updateSearchUI()
             }
@@ -1395,9 +1435,15 @@ class MainActivity : AppCompatActivity() {
             drawingView.getItemAtIndex(match.itemIndex)
         }
 
-        if (item is DrawingView.WordItem) {
-            drawingView.searchHighlightedWord = item
-            drawingView.scrollToWord(item)
+        if (item != null) {
+            drawingView.searchHighlightedItem = item
+            if (match.subRect != null) {
+                drawingView.searchHighlightedSubRect = match.subRect
+                drawingView.centerOnRect(item, match.subRect)
+            } else {
+                drawingView.searchHighlightedSubRect = null
+                drawingView.centerOnItem(item)
+            }
         }
     }
 
@@ -1631,14 +1677,24 @@ class MainActivity : AppCompatActivity() {
     private fun triggerImageSummaryRecognition(imageItem: DrawingView.ImageItem, bitmap: Bitmap) {
         if (!recognizer.isReady) return
         
+        val hasExistingText = imageItem.text.isNotEmpty()
+        val prompt = if (hasExistingText) {
+            "This image already has some digital text. Please find and transcribe any ADDITIONAL handwriting or describe any diagrams/images you see. Be concise."
+        } else {
+            "Transcribe all handwriting in this image and provide a short summary of any diagrams or images. Keep it to one line if possible."
+        }
+
         recognizer.recognize(
             bitmap = bitmap,
-            prompt = "Provide a very short, one-line summary of what is in this image. No more than 10 words.",
+            prompt = prompt,
+            isBackground = true,
             onPartialResult = { partial ->
-                imageItem.text = (imageItem.text + partial).trim()
+                if (imageItem.text.contains(partial.trim())) return@recognize
+                imageItem.text = (imageItem.text + " " + partial).trim().replace(Regex("\\s+"), " ")
                 drawingView.invalidate()
             },
             onDone = {
+                imageItem.isAiRecognized = true
                 scheduleAutosave()
                 drawingView.invalidate()
             },
