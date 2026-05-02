@@ -51,6 +51,16 @@ data class WordData(
     val isLocked: Boolean = false
 ) : SvgData()
 
+data class PromptData(
+    val prompt: String,
+    val result: String,
+    val isShowingResult: Boolean,
+    val matrix: FloatArray,
+    val width: Float,
+    val height: Float,
+    val isLocked: Boolean = false
+) : SvgData()
+
 data class FloatRect(val left: Float, val top: Float, val right: Float, val bottom: Float)
 
 data class SvgResult(
@@ -152,6 +162,15 @@ object SvgSerializer {
                         sb.appendLine("""/>""")
                     }
                     sb.appendLine("  </g>")
+                }
+                is PromptData -> {
+                    val m = item.matrix
+                    val transform = "matrix(${m[0]},${m[3]},${m[1]},${m[4]},${m[2]},${m[5]})"
+                    sb.append("""  <rect id="prompt-$index" transform="$transform" width="${item.width}" height="${item.height}"""")
+                    sb.append(""" data-type="prompt" data-prompt="${escapeXml(item.prompt)}" data-result="${escapeXml(item.result)}"""")
+                    sb.append(""" data-showing-result="${item.isShowingResult}"""")
+                    if (item.isLocked) sb.append(""" data-locked="true"""")
+                    sb.appendLine("/>")
                 }
             }
         }
@@ -283,6 +302,17 @@ object SvgSerializer {
                             isLocked = isLocked
                         )
                     )
+                } else if (parser.name == "rect" && parser.getAttributeValue(null, "data-type") == "prompt") {
+                    val transform = parser.getAttributeValue(null, "transform") ?: ""
+                    val m = parseMatrix(transform)
+                    val width = parser.getAttributeValue(null, "width")?.toFloatOrNull() ?: 600f
+                    val height = parser.getAttributeValue(null, "height")?.toFloatOrNull() ?: 400f
+                    val prompt = parser.getAttributeValue(null, "data-prompt") ?: ""
+                    val result = parser.getAttributeValue(null, "data-result") ?: ""
+                    val showingResult = parser.getAttributeValue(null, "data-showing-result") == "true"
+                    val isLocked = parser.getAttributeValue(null, "data-locked") == "true"
+                    
+                    items.add(PromptData(prompt, result, showingResult, m, width, height, isLocked))
                 }
             }
             eventType = parser.next()

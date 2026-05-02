@@ -197,6 +197,8 @@ class HandwritingRecognizer private constructor(private val context: Context) {
 
                 // Stream tokens back on Main thread
                 conversation?.sendMessageAsync(content)?.collect { partial ->
+                    // LiteRT-LM (Gemma) response might need specific text extraction
+                    // Using .toString() if .text is not available in this version of the SDK
                     val text = partial.toString()
                     withContext(Dispatchers.Main) {
                         if (text.isNotBlank()) request.onPartialResult(text)

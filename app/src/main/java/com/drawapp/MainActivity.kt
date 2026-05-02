@@ -39,6 +39,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnEraser: ImageButton
     private lateinit var btnLasso: ImageButton
     private lateinit var btnExport: ImageButton
+    private lateinit var btnAddPrompt: ImageButton
 
     private lateinit var recognitionProgress: ProgressBar
     private lateinit var recognitionIcon: TextView
@@ -207,6 +208,7 @@ class MainActivity : AppCompatActivity() {
         btnBackground       = findViewById(R.id.btnBackground)
         tvPageIndicator     = findViewById(R.id.tvPageIndicator)
         btnExport           = findViewById(R.id.btnExport)
+        btnAddPrompt        = findViewById(R.id.btnAddPrompt)
 
         searchBarContainer  = findViewById(R.id.searchBarContainer)
         etSearch            = findViewById(R.id.etSearch)
@@ -244,6 +246,12 @@ class MainActivity : AppCompatActivity() {
         }
         drawingView.onRecognizeSelectedItems = { items ->
             handleLassoRecognition(items)
+        }
+        drawingView.onPromptTriggered = { promptItem ->
+            triggerPromptGemma(promptItem)
+        }
+        drawingView.onPromptEditRequested = { promptItem ->
+            showPromptEditDialog(promptItem)
         }
 
         updateColorSwatch()
@@ -679,6 +687,11 @@ class MainActivity : AppCompatActivity() {
         }
         btnBackground.setOnClickListener { showBackgroundDialog() }
         
+        btnAddPrompt.setOnClickListener {
+            val item = drawingView.addPromptItem()
+            showPromptEditDialog(item)
+        }
+        
         btnPageUp.setOnClickListener {
             val isNotebook = currentNotebook?.type == NotebookType.NOTEBOOK
             val currentIdx = if (isNotebook) drawingView.getCurrentPageIndex() else currentPageIndex
@@ -856,6 +869,9 @@ class MainActivity : AppCompatActivity() {
             }
             is DrawingView.StrokeItem -> {
                 drawingView.setItemStyle(item, "paintColor", color)
+            }
+            is DrawingView.PromptItem -> {
+                // Not applicable
             }
         }
         drawingView.invalidate()
@@ -1247,12 +1263,12 @@ class MainActivity : AppCompatActivity() {
                         for (stroke in item.strokes) {
                             val path = android.graphics.Path()
                             for (cmd in stroke.commands) {
-                                    when (cmd) {
-                                        is com.drawapp.PathCommand.MoveTo -> path.moveTo(cmd.x, cmd.y)
-                                        is com.drawapp.PathCommand.QuadTo -> path.quadTo(cmd.x1, cmd.y1, cmd.x2, cmd.y2)
-                                        is com.drawapp.PathCommand.CubicTo -> path.cubicTo(cmd.x1, cmd.y1, cmd.x2, cmd.y2, cmd.x3, cmd.y3)
-                                        is com.drawapp.PathCommand.LineTo -> path.lineTo(cmd.x, cmd.y)
-                                    }
+                                when (cmd) {
+                                    is com.drawapp.PathCommand.MoveTo -> path.moveTo(cmd.x, cmd.y)
+                                    is com.drawapp.PathCommand.QuadTo -> path.quadTo(cmd.x1, cmd.y1, cmd.x2, cmd.y2)
+                                    is com.drawapp.PathCommand.CubicTo -> path.cubicTo(cmd.x1, cmd.y1, cmd.x2, cmd.y2, cmd.x3, cmd.y3)
+                                    is com.drawapp.PathCommand.LineTo -> path.lineTo(cmd.x, cmd.y)
+                                }
                             }
                             val b = RectF()
                             path.computeBounds(b, true)
@@ -1280,12 +1296,12 @@ class MainActivity : AppCompatActivity() {
                         for (stroke in item.strokes) {
                             val path = android.graphics.Path()
                             for (cmd in stroke.commands) {
-                                    when (cmd) {
-                                        is com.drawapp.PathCommand.MoveTo -> path.moveTo(cmd.x, cmd.y)
-                                        is com.drawapp.PathCommand.QuadTo -> path.quadTo(cmd.x1, cmd.y1, cmd.x2, cmd.y2)
-                                        is com.drawapp.PathCommand.CubicTo -> path.cubicTo(cmd.x1, cmd.y1, cmd.x2, cmd.y2, cmd.x3, cmd.y3)
-                                        is com.drawapp.PathCommand.LineTo -> path.lineTo(cmd.x, cmd.y)
-                                    }
+                                when (cmd) {
+                                    is com.drawapp.PathCommand.MoveTo -> path.moveTo(cmd.x, cmd.y)
+                                    is com.drawapp.PathCommand.QuadTo -> path.quadTo(cmd.x1, cmd.y1, cmd.x2, cmd.y2)
+                                    is com.drawapp.PathCommand.CubicTo -> path.cubicTo(cmd.x1, cmd.y1, cmd.x2, cmd.y2, cmd.x3, cmd.y3)
+                                    is com.drawapp.PathCommand.LineTo -> path.lineTo(cmd.x, cmd.y)
+                                }
                             }
                             val paint = android.graphics.Paint().apply {
                                 color = if (stroke.isEraser) bgColor else stroke.color
@@ -1302,6 +1318,20 @@ class MainActivity : AppCompatActivity() {
                             canvas.drawPath(path, paint)
                         }
                     }
+                }
+                is PromptData -> {
+                    // Just draw a rectangle placeholder
+                    val matrix = android.graphics.Matrix()
+                    matrix.setValues(item.matrix)
+                    canvas.save()
+                    canvas.concat(matrix)
+                    val paint = android.graphics.Paint().apply {
+                        color = Color.LTGRAY
+                        style = android.graphics.Paint.Style.FILL
+                        alpha = 100
+                    }
+                    canvas.drawRect(0f, 0f, item.width, item.height, paint)
+                    canvas.restore()
                 }
             }
         }
@@ -1382,7 +1412,8 @@ class MainActivity : AppCompatActivity() {
                                 val text = when (item) {
                                     is WordData -> item.text
                                     is ImageData -> item.text
-                                    else -> ""
+                                    is PromptData -> item.prompt + " " + item.result
+                                    is StrokeData -> ""
                                 }.replace("\n", " ").replace("\r", " ").replace(Regex("\\s+"), " ")
                                 
                                 if (text.isNotBlank() && text.contains(query, ignoreCase = true)) {
@@ -1863,5 +1894,121 @@ class MainActivity : AppCompatActivity() {
                 withContext(Dispatchers.Main) { Toast.makeText(this@MainActivity, "Export failed: ${e.message}", Toast.LENGTH_LONG).show() }
             }
         }
+    }
+
+    private fun showPromptEditDialog(item: DrawingView.PromptItem) {
+        val editText = EditText(this)
+        editText.setText(item.prompt)
+        editText.setSelection(item.prompt.length)
+        
+        AlertDialog.Builder(this)
+            .setTitle("Edit Prompt")
+            .setView(editText)
+            .setPositiveButton("Ask Gemma") { _, _ ->
+                item.prompt = editText.text.toString()
+                item.result = ""
+                item.isShowingResult = true
+                triggerPromptGemma(item)
+                drawingView.invalidate()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun triggerPromptGemma(item: DrawingView.PromptItem) {
+        if (!recognizer.isReady) {
+            Toast.makeText(this, "Gemma is not ready", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val contextText = collectAllNotebookText(excludeItem = item)
+        val userPrompt = item.prompt
+        
+        val fullPrompt = """
+            You are a helpful AI assistant called Gemma. 
+            The user is working on a notebook. Below is the text from their notebook:
+            ---
+            $contextText
+            ---
+            The user's question or prompt is: $userPrompt
+            
+            Provide a helpful, concise response that fits in a small text box. 
+            Keep it to 3-5 sentences maximum.
+        """.trimIndent()
+
+        item.result = "Gemma is thinking..."
+        drawingView.invalidate()
+        
+        setRecognitionState(RecognitionState.RUNNING)
+        var accumulated = ""
+        
+        // Use a bitmap from the current page to satisfy the multimodal requirement if needed, 
+        // though we mainly care about the text context.
+        val bitmap = drawingView.createFullPageBitmap(drawingView.getCurrentPageIndex()) ?: return
+
+        recognizer.recognize(
+            bitmap = bitmap,
+            prompt = fullPrompt,
+            onPartialResult = { partial ->
+                accumulated += partial
+                item.result = accumulated
+                drawingView.invalidate()
+            },
+            onDone = {
+                item.result = accumulated
+                setRecognitionState(RecognitionState.DONE)
+                drawingView.invalidate()
+                scheduleAutosave()
+            },
+            onError = { msg ->
+                item.result = "Error: $msg"
+                setRecognitionState(RecognitionState.ERROR)
+                drawingView.invalidate()
+            }
+        )
+    }
+
+    private fun collectAllNotebookText(excludeItem: DrawingView.CanvasItem? = null): String {
+        val sb = StringBuilder()
+        val isNotebook = currentNotebook?.type == NotebookType.NOTEBOOK
+        
+        if (isNotebook) {
+            for (i in 0 until drawingView.numPages) {
+                val pageItems = drawingView.getItemsOnPage(i)
+                if (pageItems.isNotEmpty()) {
+                    sb.appendLine("Page ${i + 1}:")
+                    for (item in pageItems) {
+                        if (item === excludeItem) continue
+                        val text = when (item) {
+                            is DrawingView.WordItem -> item.text
+                            is DrawingView.ImageItem -> item.text
+                            is DrawingView.PromptItem -> "AI Prompt: ${item.prompt}\nAI Result: ${item.result}"
+                            is DrawingView.StrokeItem -> ""
+                        }
+                        if (text.isNotEmpty()) {
+                            sb.appendLine("- $text")
+                        }
+                    }
+                    sb.appendLine()
+                }
+            }
+        } else {
+            // Whiteboard mode: just collect all items
+            val items = drawingView.getItemsOnPage(0)
+            for (item in items) {
+                if (item === excludeItem) continue
+                val text = when (item) {
+                    is DrawingView.WordItem -> item.text
+                    is DrawingView.ImageItem -> item.text
+                    is DrawingView.PromptItem -> "AI Prompt: ${item.prompt}\nAI Result: ${item.result}"
+                    is DrawingView.StrokeItem -> ""
+                }
+                if (text.isNotEmpty()) {
+                    sb.appendLine("- $text")
+                }
+            }
+        }
+        
+        return sb.toString()
     }
 }
