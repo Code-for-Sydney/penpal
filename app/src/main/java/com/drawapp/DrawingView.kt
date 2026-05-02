@@ -959,9 +959,8 @@ class DrawingView @JvmOverloads constructor(
 
         // Toggle Button
         canvas.drawCircle(togPos.x, togPos.y, buttonRadius, Paint().apply { color = Color.WHITE; style = Paint.Style.FILL; setShadowLayer(4f, 0f, 2f, Color.BLACK) })
-        val eyePaint = Paint().apply { color = Color.BLACK; style = Paint.Style.STROKE; strokeWidth = 3f; isAntiAlias = true }
-        canvas.drawCircle(togPos.x, togPos.y, buttonRadius * 0.4f, eyePaint)
-        canvas.drawCircle(togPos.x, togPos.y, buttonRadius * 0.1f, Paint().apply { color = Color.BLACK; style = Paint.Style.FILL })
+        val tIconPaint = Paint().apply { color = Color.BLACK; textSize = 28f; textAlign = Paint.Align.CENTER; typeface = Typeface.DEFAULT_BOLD }
+        canvas.drawText("T", togPos.x, togPos.y - (tIconPaint.fontMetrics.ascent + tIconPaint.fontMetrics.descent) / 2, tIconPaint)
 
         // Image-specific: Background removal
         if (item is ImageItem) {

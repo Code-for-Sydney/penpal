@@ -482,37 +482,37 @@ class MainActivity : AppCompatActivity() {
     private fun handleLassoRecognition(items: List<DrawingView.CanvasItem>) {
         if (items.isEmpty()) return
 
-        // 1. Check if we can just toggle text mode (all items have text and no raw strokes)
-        val hasRawStrokes = items.any { it is DrawingView.StrokeItem }
-        val allHaveText = items.all { (it is DrawingView.WordItem && it.text.isNotEmpty()) || (it is DrawingView.ImageItem && it.text.isNotEmpty()) }
-
-        if (allHaveText && !hasRawStrokes) {
-            // Determine target state (if any are showing strokes, switch all to text)
-            val anyShowingStrokes = items.any { (it is DrawingView.WordItem && !it.isShowingText) || (it is DrawingView.ImageItem && !it.isShowingText) }
-            val targetShowText = anyShowingStrokes
-            
-            for (item in items) {
-                drawingView.setItemStyle(item, "isShowingText", targetShowText)
-            }
-            drawingView.invalidate()
-            return
-        }
-
-        // 2. Otherwise, we need to recognize (either new strokes or missing text)
-        if (!recognizer.isReady) {
-            Toast.makeText(this, "Recognizer not ready", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        // Separate items that already have text from those that don't.
-        // This avoids re-detecting text already found in full-page scans.
+        // 1. Separate recognized and unrecognized items
         val itemsWithText = items.filter { item ->
             (item is DrawingView.WordItem && item.text.isNotEmpty()) ||
             (item is DrawingView.ImageItem && item.text.isNotEmpty())
         }
         val itemsWithoutText = items.filter { !itemsWithText.contains(it) }
+        val hasRawStrokes = items.any { it is DrawingView.StrokeItem }
 
-        // Check if we already have a detection for this area from full-page results
+        // 2. Fast path: All items already recognized and no raw strokes -> Toggle mode
+        if (itemsWithText.size == items.size && !hasRawStrokes) {
+            val anyShowingStrokes = items.any { (it is DrawingView.WordItem && !it.isShowingText) || (it is DrawingView.ImageItem && !it.isShowingText) }
+            val target = anyShowingStrokes
+            for (item in items) {
+                drawingView.setItemStyle(item, "isShowingText", target)
+            }
+            drawingView.invalidate()
+            return
+        }
+
+        // 3. Consolidate text from existing recognized items
+        val parts = mutableListOf<Pair<RectF, String>>()
+        for (item in itemsWithText) {
+            val txt = when(item) {
+                is DrawingView.WordItem -> item.text
+                is DrawingView.ImageItem -> item.text
+                else -> ""
+            }
+            if (txt.isNotEmpty()) parts.add(item.bounds to txt)
+        }
+
+        // 4. Try to find text for unrecognized items in background scan cache
         val pageResults = lastPageDetectionResults[drawingView.getCurrentPageIndex()]
         if (pageResults != null && itemsWithoutText.isNotEmpty()) {
             val selectionBounds = RectF(itemsWithoutText[0].bounds)
@@ -538,78 +538,35 @@ class MainActivity : AppCompatActivity() {
                 } else false
             }
             
-            if (match != null) {
-                // Use cached result
-                processRecognitionResult(items, itemsWithText, itemsWithoutText, match.text)
-                return
+            if (match != null && match.text.isNotEmpty()) {
+                parts.add(selectionBounds to match.text)
             }
         }
 
-        // Render only the items without text to the bitmap for recognition
-        val bitmap = drawingView.createBitmapForItems(itemsWithoutText) ?: return
-        setRecognitionState(RecognitionState.RUNNING)
-        recognitionText.text = "Recognizing selection..."
-
-        var resultText = ""
-        recognizer.recognize(
-            bitmap = bitmap,
-            onPartialResult = { partial ->
-                resultText += partial
-            },
-            onDone = {
-                processRecognitionResult(items, itemsWithText, itemsWithoutText, resultText)
-            },
-            onError = { msg ->
-                setRecognitionState(RecognitionState.ERROR)
-                recognitionText.text = "Recognition failed: $msg"
-            }
-        )
-    }
-
-    private fun processRecognitionResult(
-        originalItems: List<DrawingView.CanvasItem>,
-        itemsWithText: List<DrawingView.CanvasItem>,
-        itemsWithoutText: List<DrawingView.CanvasItem>,
-        newResultText: String
-    ) {
-        // Combine with existing text from itemsWithText
-        val parts = mutableListOf<Pair<RectF, String>>()
-        for (item in itemsWithText) {
-            val txt = when(item) {
-                is DrawingView.WordItem -> item.text
-                is DrawingView.ImageItem -> item.text
-                else -> ""
-            }
-            if (txt.isNotEmpty()) parts.add(item.bounds to txt)
-        }
-        
-        if (newResultText.isNotEmpty()) {
-            val newBounds = RectF()
-            if (itemsWithoutText.isNotEmpty()) {
-                newBounds.set(itemsWithoutText[0].bounds)
-                for (i in 1 until itemsWithoutText.size) {
-                    newBounds.union(itemsWithoutText[i].bounds)
-                }
-            }
-            parts.add(newBounds to newResultText)
-        }
-        
-        // Sort parts by X coordinate (left edge) to maintain reading order
+        // 5. Finalize consolidated text and group items
         parts.sortBy { it.first.left }
         val finalText = parts.joinToString(" ") { it.second }.trim()
 
+        // Group Word/Stroke items
+        val word = drawingView.groupSelectedItemsIntoWord(items, finalText)
+        word?.isShowingText = true
+        
+        // Toggle Image items
+        for (item in items) {
+            if (item is DrawingView.ImageItem) item.isShowingText = true
+        }
+
+        drawingView.clearLassoSelection()
+        drawingView.invalidate()
+        
         if (finalText.isNotEmpty()) {
-            val word = drawingView.groupSelectedItemsIntoWord(originalItems, finalText)
-            word?.isShowingText = true
-            drawingView.clearLassoSelection()
-            drawingView.invalidate()
             setRecognitionState(RecognitionState.DONE)
-            recognitionText.text = "Selection recognized: $finalText"
-            scheduleAutosave()
+            recognitionText.text = "Selection: $finalText"
         } else {
             setRecognitionState(RecognitionState.IDLE)
-            recognitionText.text = "No text recognized"
+            recognitionText.text = "Items grouped"
         }
+        scheduleAutosave()
     }
 
 
