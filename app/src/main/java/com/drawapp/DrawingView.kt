@@ -20,16 +20,14 @@ class DrawingView @JvmOverloads constructor(
 ) : View(context, attrs, defStyleAttr) {
     
     enum class BackgroundType { NONE, RULED, GRAPH }
-    enum class ActiveTool { BRUSH, ERASER, LASSO, TRANSFORM }
+    enum class ActiveTool { BRUSH, ERASER, LASSO }
 
     var activeTool: ActiveTool = ActiveTool.BRUSH
         set(value) {
             field = value
             isEraser = (value == ActiveTool.ERASER)
-            if (value != ActiveTool.LASSO && value != ActiveTool.TRANSFORM) {
+            if (value != ActiveTool.LASSO) {
                 clearLassoSelection()
-                selectedImage = null
-                selectedWord = null
             }
             updateCurrentPaint()
             invalidate()
@@ -604,8 +602,6 @@ class DrawingView @JvmOverloads constructor(
             }
 
             override fun onScale(detector: ScaleGestureDetector): Boolean {
-                if (activeTool == ActiveTool.TRANSFORM) return true
-                
                 // Canvas panning/zooming
                 val oldScale = scaleFactor
                 var detectorScale = detector.scaleFactor
@@ -1305,123 +1301,16 @@ class DrawingView @JvmOverloads constructor(
                     }
                 }
 
-                // Check if user tapped the delete cross of the selected image/word
-                val selectedItem = selectedImage ?: selectedWord
-                if (selectedItem != null) {
-                    // TRANSFORM canvasCoords to LOCAL SPACE of the item
-                    val localCoords = floatArrayOf(canvasCoords[0], canvasCoords[1])
-                    val localInverse = Matrix()
-                    
-                    val itemMatrix = when(selectedItem) {
-                        is ImageItem -> selectedItem.matrix
-                        is WordItem -> selectedItem.matrix
-                        else -> Matrix()
-                    }
-                    
-                    val touchRadiusSq = 48f * 48f // 48dp target in screen space
-                    
-                    val localBounds = when(selectedItem) {
-                        is ImageItem -> RectF(0f, 0f, selectedItem.bitmap.width.toFloat(), selectedItem.bitmap.height.toFloat())
-                        is WordItem -> selectedItem.textBounds
-                        else -> selectedItem.bounds
-                    }
-
-                    fun isScreenButtonHit(cx: Float, cy: Float): Boolean {
-                        val pts = floatArrayOf(cx, cy)
-                        viewMatrix.mapPoints(pts)
-                        
-                        val dx = event.x - pts[0]
-                        val dy = event.y - pts[1]
-                        return dx * dx + dy * dy <= touchRadiusSq
-                    }
-
-                    val globalBounds = RectF(selectedItem.bounds).apply { inset(-SELECTION_BUFFER, -SELECTION_BUFFER) }
-
-                    // Check delete button (top-right)
-                    if (isScreenButtonHit(globalBounds.right, globalBounds.top)) {
-                        deleteSelectedItem()
-                        return true
-                    }
-                    
-                    // Check toggle button (top-left)
-                    if (isScreenButtonHit(globalBounds.left, globalBounds.top)) {
-                        val oldValue = if (selectedItem is WordItem) selectedItem.isShowingText else if (selectedItem is ImageItem) selectedItem.isShowingText else false
-                        val newValue = !oldValue
-                        pushAction(StyleAction(selectedItem, "isShowingText", oldValue, newValue))
-                        invalidate()
-                        return true
-                    }
-
-                    // Check background toggle for ImageItem (top-center)
-                    if (selectedItem is ImageItem) {
-                        if (isScreenButtonHit(globalBounds.centerX(), globalBounds.top)) {
-                            val oldValue = selectedItem.removeBackground
-                            val newValue = !oldValue
-                            pushAction(StyleAction(selectedItem, "removeBackground", oldValue, newValue))
-                            invalidate()
-                            return true
-                        }
-                    }
-
-                    // Check color button (bottom-right)
-                    if ((selectedItem is WordItem || selectedItem is StrokeItem) && isScreenButtonHit(globalBounds.right, globalBounds.bottom)) {
-                        showColorPicker(listOf(selectedItem), isBackground = false)
-                        return true
-                    }
-
-                    // Check fill color button (bottom-left)
-                    if (selectedItem is WordItem && isScreenButtonHit(globalBounds.left, globalBounds.bottom)) {
-                        showColorPicker(listOf(selectedItem), isBackground = true)
-                        return true
-                    }
-
-                }
-                
-                // Hit testing for images and words only (strokes don't intercept drawing)
-                val hitItem = drawItems.reversed().find { (it is ImageItem || it is WordItem) && !it.isLocked && isItemHit(it, canvasCoords[0], canvasCoords[1]) }
-
-                if (hitItem != null && activeTool == ActiveTool.TRANSFORM) {
-                    when (hitItem) {
-                        is ImageItem -> {
-                            selectedImage = hitItem
-                            selectedWord = null
-                            isImageManipulating = true
-                            isWordManipulating = false
-                            isDrawing = false
-                            isPanning = false
-                            lastPanX = event.x
-                            lastPanY = event.y
-                            beforeTransformState = captureState(hitItem)
-                        }
-                        is WordItem -> {
-                            selectedWord = hitItem
-                            selectedImage = null
-                            isWordManipulating = true
-                            isImageManipulating = false
-                            isDrawing = false
-                            isPanning = false
-                            lastPanX = event.x
-                            lastPanY = event.y
-                            beforeTransformState = captureState(hitItem)
-                        }
-                        else -> {}
-                    }
+                if (activeTool == ActiveTool.LASSO) {
+                    isLassoing = true
+                    isDrawing = false
+                    lassoPoints.clear()
+                    lassoPoints.add(PointF(canvasCoords[0], canvasCoords[1]))
+                    lassoPath = Path().apply { moveTo(canvasCoords[0], canvasCoords[1]) }
                 } else {
-                    if (activeTool == ActiveTool.LASSO) {
-                        isLassoing = true
-                        isDrawing = false
-                        lassoPoints.clear()
-                        lassoPoints.add(PointF(canvasCoords[0], canvasCoords[1]))
-                        lassoPath = Path().apply { moveTo(canvasCoords[0], canvasCoords[1]) }
-                    } else {
-                        selectedImage = null
-                        selectedWord = null
-                        isImageManipulating = false
-                        isWordManipulating = false
-                        isDrawing = true
-                        isPanning = false
-                        touchStart(canvasCoords[0], canvasCoords[1])
-                    }
+                    isDrawing = true
+                    isPanning = false
+                    touchStart(canvasCoords[0], canvasCoords[1])
                 }
                 invalidate()
             }
@@ -1450,23 +1339,7 @@ class DrawingView @JvmOverloads constructor(
                     twoFingerGroupStartFocal.set(focal[0], focal[1])
                     
                     beforeGroupTransformStates = selectedItems.map { captureState(it) }
-                } else if (currentSelectedItem != null && pointerCount >= 2) {
-                    isTwoFingerManipulating = true
-                    val dx = event.getX(1) - event.getX(0)
-                    val dy = event.getY(1) - event.getY(0)
-                    twoFingerStartSpan = max(1f, Math.sqrt((dx * dx + dy * dy).toDouble()).toFloat())
-                    twoFingerStartAngle = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())).toFloat()
-                    twoFingerStartMatrix.set(when(currentSelectedItem) {
-                        is ImageItem -> currentSelectedItem.matrix
-                        is WordItem -> currentSelectedItem.matrix
-                        else -> Matrix()
-                    })
-                    val focal = screenToCanvas((event.getX(0) + event.getX(1)) / 2f, (event.getY(0) + event.getY(1)) / 2f)
-                    twoFingerStartFocal.set(focal[0], focal[1])
-                    
-                    beforeTransformState = captureState(currentSelectedItem)
-                    isPanning = false
-                } else if (!isImageManipulating && !isWordManipulating && activeTool != ActiveTool.TRANSFORM) {
+                } else {
                     isPanning = true
                     lastPanX = event.x
                     lastPanY = event.y
@@ -1574,11 +1447,10 @@ class DrawingView @JvmOverloads constructor(
                     
                     targetMatrix.postTranslate(dx, dy)
                     (selectedImage ?: selectedWord)?.invalidateCache()
-                    
                     lastPanX = event.x
                     lastPanY = event.y
                     invalidate()
-                } else if (isPanning && pointerCount >= 2 && !isImageManipulating && !isWordManipulating) {
+                } else if (isPanning && pointerCount >= 2) {
                     if (!scaleDetector.isInProgress) {
                         // Boost panning speed for more responsive feel
                         val dx = (event.x - lastPanX) * 1.8f
@@ -1618,24 +1490,6 @@ class DrawingView @JvmOverloads constructor(
                     isDrawing = false
                     invalidate()
                 }
-                if (isWordManipulating && selectedWord != null) {
-                    freezeWordTransform(selectedWord!!)
-                }
-                if (isTwoFingerManipulating && selectedWord != null) {
-                    freezeWordTransform(selectedWord!!)
-                }
-
-                // Push transform action if anything was manipulated
-                if (isImageManipulating || isWordManipulating || isTwoFingerManipulating) {
-                    val currentSelectedItem = selectedImage ?: selectedWord
-                    if (currentSelectedItem != null && beforeTransformState != null) {
-                        val afterState = captureState(currentSelectedItem)
-                        if (afterState != beforeTransformState) {
-                            pushAction(TransformAction(currentSelectedItem, beforeTransformState!!, afterState), executeNow = false)
-                            onStrokeCompleted?.invoke()
-                        }
-                    }
-                }
 
                 if (isTwoFingerGroupManipulating) {
                     isTwoFingerGroupManipulating = false
@@ -1674,22 +1528,7 @@ class DrawingView @JvmOverloads constructor(
                     }
                     invalidate()
                 }
-                if (isTwoFingerManipulating) {
-                    if (selectedWord != null) {
-                        freezeWordTransform(selectedWord!!)
-                    }
-                    val currentSelectedItem = selectedImage ?: selectedWord
-                    if (currentSelectedItem != null && beforeTransformState != null) {
-                        val afterState = captureState(currentSelectedItem)
-                        if (afterState != beforeTransformState) {
-                            pushAction(TransformAction(currentSelectedItem, beforeTransformState!!, afterState), executeNow = false)
-                            onStrokeCompleted?.invoke()
-                        }
-                    }
-                    isTwoFingerManipulating = false
-                    beforeTransformState = null
-                }
-                if (pointerCount <= 2 && !isImageManipulating && !isWordManipulating) {
+                if (pointerCount <= 2) {
                     isPanning = true
                 }
             }
