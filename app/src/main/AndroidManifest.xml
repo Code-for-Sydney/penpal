@@ -4,6 +4,10 @@
     <!-- Internet for model download -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- Microphone for audio evaluation -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+
     <!-- Storage permissions for saving drawings + model file -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
