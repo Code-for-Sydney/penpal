@@ -551,6 +551,14 @@ class DrawingView @JvmOverloads constructor(
         isAntiAlias = true
     }
 
+    private val slashPaint = Paint().apply {
+        color = Color.RED
+        strokeWidth = 4f
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+        isAntiAlias = true
+    }
+
 
     private val textPaint = Paint().apply {
         color = Color.BLACK
@@ -577,6 +585,21 @@ class DrawingView @JvmOverloads constructor(
         style = Paint.Style.FILL
         isAntiAlias = true
     }
+
+    private val debugTouchPaint = Paint().apply {
+        color = Color.argb(80, 255, 82, 82) // Semi-transparent red
+        style = Paint.Style.FILL
+        isAntiAlias = true
+    }
+
+    private val debugItemHitPaint = Paint().apply {
+        color = Color.argb(40, 76, 175, 80) // Semi-transparent green
+        style = Paint.Style.FILL
+        isAntiAlias = true
+    }
+
+    var showTouchAreas: Boolean = true
+        set(value) { field = value; invalidate() }
 
     private val promptBoxPaint = Paint().apply {
         color = Color.WHITE
@@ -928,6 +951,9 @@ class DrawingView @JvmOverloads constructor(
 
                     if (isSelected) {
                         drawSelectionBox(canvas, item)
+                    } else if (showTouchAreas && activeTool == ActiveTool.SELECT) {
+                        // Visualize hit area for unselected items in SELECT mode
+                        drawItemTouchArea(canvas, item)
                     }
                 }
             }
@@ -1034,16 +1060,56 @@ class DrawingView @JvmOverloads constructor(
         }
     }
 
+    private fun drawItemTouchArea(canvas: Canvas, item: CanvasItem) {
+        when (item) {
+            is StrokeItem -> {
+                // Stroke hit area is a buffer around the path
+                val hitPaint = Paint(debugItemHitPaint).apply { 
+                    style = Paint.Style.STROKE
+                    strokeWidth = 60f // 2 * radius (30f)
+                    strokeCap = Paint.Cap.ROUND
+                    strokeJoin = Paint.Join.ROUND
+                }
+                canvas.drawPath(item.path, hitPaint)
+            }
+            is WordItem -> {
+                val hitRect = RectF(item.textBounds).apply { inset(-20f, -20f) }
+                canvas.save()
+                canvas.concat(item.matrix)
+                canvas.concat(item.textMatrix)
+                canvas.drawRect(hitRect, debugItemHitPaint)
+                canvas.restore()
+            }
+            is ImageItem -> {
+                val hitRect = RectF(0f, 0f, item.bitmap.width.toFloat(), item.bitmap.height.toFloat())
+                canvas.save()
+                canvas.concat(item.matrix)
+                canvas.drawRect(hitRect, debugItemHitPaint)
+                canvas.restore()
+            }
+            is PromptItem -> {
+                val hitRect = RectF(0f, 0f, item.width, item.height)
+                canvas.save()
+                canvas.concat(item.matrix)
+                canvas.drawRect(hitRect, debugItemHitPaint)
+                canvas.restore()
+            }
+        }
+    }
+
     private fun drawSelectionBox(canvas: Canvas, item: CanvasItem) {
+        // 1. Draw item hit area in canvas space (before resetting matrix)
+        if (showTouchAreas) {
+            drawItemTouchArea(canvas, item)
+        }
+
         val globalBounds = RectF(item.bounds).apply { inset(-SELECTION_BUFFER, -SELECTION_BUFFER) }
         
-        // Draw dashed bounding box in canvas space
-        canvas.save()
+        // 2. Draw dashed bounding box in canvas space
         canvas.drawRect(globalBounds, selectionPaint)
-        canvas.restore()
 
-        // --- Draw Fixed-Size Buttons ---
-        val buttonRadius = 24f // Fixed size in pixels
+        // 3. Draw Fixed-Size Buttons in screen space
+        val buttonRadius = 24f 
         
         fun getButtonScreenPos(cx: Float, cy: Float): PointF {
             val pts = floatArrayOf(cx, cy)
@@ -1116,10 +1182,18 @@ class DrawingView @JvmOverloads constructor(
             }
         }
 
-        // Toggle Button
+        // Toggle Button (Top-Left)
         canvas.drawCircle(togPos.x, togPos.y, buttonRadius, Paint().apply { color = Color.WHITE; style = Paint.Style.FILL; setShadowLayer(4f, 0f, 2f, Color.BLACK) })
         val tIconPaint = Paint().apply { color = Color.BLACK; textSize = 28f; textAlign = Paint.Align.CENTER; typeface = Typeface.DEFAULT_BOLD }
         canvas.drawText("T", togPos.x, togPos.y - (tIconPaint.fontMetrics.ascent + tIconPaint.fontMetrics.descent) / 2, tIconPaint)
+
+        // Prompt-specific: Edit Prompt button (Bottom-Left)
+        if (item is PromptItem) {
+            val promptPos = filPos
+            canvas.drawCircle(promptPos.x, promptPos.y, buttonRadius, Paint().apply { color = Color.WHITE; style = Paint.Style.FILL; setShadowLayer(4f, 0f, 2f, Color.BLACK) })
+            val pIconPaint = Paint().apply { color = Color.BLACK; textSize = 28f; textAlign = Paint.Align.CENTER; typeface = Typeface.DEFAULT_BOLD }
+            canvas.drawText("P", promptPos.x, promptPos.y - (pIconPaint.fontMetrics.ascent + pIconPaint.fontMetrics.descent) / 2, pIconPaint)
+        }
 
         // Image-specific: Background removal (Bottom-Left)
         if (item is ImageItem) {
@@ -1129,14 +1203,40 @@ class DrawingView @JvmOverloads constructor(
             canvas.drawText(if (item.removeBackground) "B" else "W", bgTogPos.x, bgTogPos.y - (toggleIconPaint.fontMetrics.ascent + toggleIconPaint.fontMetrics.descent) / 2, toggleIconPaint)
         }
 
+        // --- Visualize Touch Areas (Debug) ---
+        if (showTouchAreas) {
+            val touchRadius = 64f 
+            canvas.drawCircle(delPos.x, delPos.y, touchRadius, debugTouchPaint)
+            canvas.drawCircle(resPos.x, resPos.y, touchRadius, debugTouchPaint)
+            canvas.drawCircle(togPos.x, togPos.y, touchRadius, debugTouchPaint)
+            canvas.drawCircle(rotPos.x, rotPos.y, touchRadius, debugTouchPaint)
+            if (item is WordItem || item is StrokeItem) {
+                canvas.drawCircle(colPos.x, colPos.y, touchRadius, debugTouchPaint)
+            }
+            if (item is WordItem) {
+                canvas.drawCircle(filPos.x, filPos.y, touchRadius, debugTouchPaint)
+            }
+            if (item is ImageItem || item is PromptItem) {
+                canvas.drawCircle(filPos.x, filPos.y, touchRadius, debugTouchPaint)
+            }
+        }
+
         canvas.restore()
     }
 
     private fun drawGroupSelectionBox(canvas: Canvas, items: List<CanvasItem>) {
         if (items.isEmpty()) return
+        
+        // 1. Draw individual item hit areas in canvas space
+        if (showTouchAreas) {
+            for (item in items) {
+                drawItemTouchArea(canvas, item)
+            }
+        }
+
         val groupBounds = RectF(getGroupBounds(items)).apply { inset(-SELECTION_BUFFER, -SELECTION_BUFFER) }
         
-        // Rect is already in canvas space, and canvas has viewMatrix applied
+        // 2. Draw dashed bounding box in canvas space
         canvas.drawRect(groupBounds, selectionPaint)
 
         // Buttons
@@ -1203,8 +1303,18 @@ class DrawingView @JvmOverloads constructor(
             style = Paint.Style.FILL 
         })
         if (bgColor == null) {
-            val slashPaint = Paint().apply { color = Color.RED; strokeWidth = 3f; style = Paint.Style.STROKE }
             canvas.drawLine(filPos.x - buttonRadius * 0.5f, filPos.y + buttonRadius * 0.5f, filPos.x + buttonRadius * 0.5f, filPos.y - buttonRadius * 0.5f, slashPaint)
+        }
+
+        // --- Visualize Touch Areas (Debug) ---
+        if (showTouchAreas) {
+            val touchRadius = 64f
+            canvas.drawCircle(delPos.x, delPos.y, touchRadius, debugTouchPaint)
+            canvas.drawCircle(resPos.x, resPos.y, touchRadius, debugTouchPaint)
+            canvas.drawCircle(togPos.x, togPos.y, touchRadius, debugTouchPaint)
+            canvas.drawCircle(rotPos.x, rotPos.y, touchRadius, debugTouchPaint)
+            canvas.drawCircle(colPos.x, colPos.y, touchRadius, debugTouchPaint)
+            canvas.drawCircle(filPos.x, filPos.y, touchRadius, debugTouchPaint)
         }
 
         canvas.restore()
@@ -1463,19 +1573,25 @@ class DrawingView @JvmOverloads constructor(
                         return true
                     }
 
-                    // Background removal for ImageItem (Bottom-Left)
-                    if (selectedItems.size == 1 && selectedItems[0] is ImageItem && isGroupButtonHit(groupBounds.left, groupBounds.bottom)) {
-                        val image = selectedItems[0] as ImageItem
-                        image.removeBackground = !image.removeBackground
-                        image.invalidateCache()
-                        invalidate()
-                        return true
-                    }
-
-                    // Fill button (bottom-left) - Only for WordItems
-                    if (selectedItems.any { it is WordItem } && isGroupButtonHit(groupBounds.left, groupBounds.bottom)) {
-                        showColorPicker(selectedItems.toList(), isBackground = true)
-                        return true
+                    // Fill button / Background removal / Edit Prompt (bottom-left)
+                    if (isGroupButtonHit(groupBounds.left, groupBounds.bottom)) {
+                        if (selectedItems.any { it is WordItem }) {
+                            showColorPicker(selectedItems.toList(), isBackground = true)
+                            return true
+                        }
+                        if (selectedItems.size == 1) {
+                            val item = selectedItems[0]
+                            if (item is ImageItem) {
+                                item.removeBackground = !item.removeBackground
+                                item.invalidateCache()
+                                invalidate()
+                                return true
+                            }
+                            if (item is PromptItem) {
+                                onPromptEditRequested?.invoke(item)
+                                return true
+                            }
+                        }
                     }
 
                     // Rotate Handle (Top-Center)
@@ -1508,11 +1624,6 @@ class DrawingView @JvmOverloads constructor(
                         
                         // Capture initial states for all selected items
                         beforeGroupTransformStates = selectedItems.map { captureState(it) }
-
-                        // If single PromptItem, also check for tap on text to edit
-                        if (selectedItems.size == 1 && selectedItems[0] is PromptItem) {
-                            onPromptEditRequested?.invoke(selectedItems[0] as PromptItem)
-                        }
                         
                         return true
                     } else {
@@ -1532,10 +1643,6 @@ class DrawingView @JvmOverloads constructor(
                         lastPanX = event.x
                         lastPanY = event.y
                         beforeGroupTransformStates = selectedItems.map { captureState(it) }
-                        
-                        if (hitItem is PromptItem) {
-                            onPromptEditRequested?.invoke(hitItem)
-                        }
                         invalidate()
                         return true
                     } else {

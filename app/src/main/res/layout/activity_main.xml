@@ -358,6 +358,54 @@
             android:ellipsize="end" />
 
     </LinearLayout>
+    
+    <!-- Options Menu (Initially Hidden) -->
+    <LinearLayout
+        android:id="@+id/optionsMenu"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="12dp"
+        android:background="@drawable/toolbar_background"
+        android:visibility="gone"
+        app:layout_constraintBottom_toTopOf="@id/toolbar"
+        app:layout_constraintEnd_toEndOf="parent"
+        android:layout_marginEnd="12dp"
+        android:layout_marginBottom="8dp">
+
+        <!-- Page Background (Moved here) -->
+        <ImageButton
+            android:id="@+id/btnBackground"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:src="@drawable/ic_background"
+            android:background="@drawable/icon_btn_bg"
+            android:contentDescription="Page Background"
+            android:tint="#CCCCCC"
+            android:layout_marginBottom="12dp" />
+
+        <!-- Toggle Hitboxes -->
+        <ImageButton
+            android:id="@+id/btnToggleTouchAreas"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:src="@drawable/ic_select"
+            android:background="@drawable/icon_btn_bg"
+            android:contentDescription="Toggle Hitboxes"
+            android:tint="#7C4DFF"
+            android:layout_marginBottom="12dp" />
+
+        <!-- Toggle Gemma Info Bar -->
+        <ImageButton
+            android:id="@+id/btnToggleGemma"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:src="@drawable/ic_sparkle"
+            android:background="@drawable/icon_btn_bg"
+            android:contentDescription="Toggle Gemma Info Bar"
+            android:tint="#CCCCCC" />
+
+    </LinearLayout>
 
     <!-- Bottom Toolbar -->
     <LinearLayout
@@ -404,14 +452,14 @@
             android:contentDescription="Brush size"
             android:tint="#CCCCCC"
             android:layout_marginStart="8dp" />
-        <!-- Background -->
+        <!-- Settings/Options Gear -->
         <ImageButton
-            android:id="@+id/btnBackground"
+            android:id="@+id/btnOptions"
             android:layout_width="44dp"
             android:layout_height="44dp"
-            android:src="@drawable/ic_background"
+            android:src="@drawable/ic_gear"
             android:background="@drawable/icon_btn_bg"
-            android:contentDescription="Page Background"
+            android:contentDescription="Options"
             android:tint="#CCCCCC"
             android:layout_marginStart="8dp" />
 

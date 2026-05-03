@@ -41,6 +41,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnExport: ImageButton
     private lateinit var btnAddPrompt: ImageButton
     private lateinit var btnSelectMode: ImageButton
+    private lateinit var optionsMenu: LinearLayout
+    private lateinit var btnOptions: ImageButton
+    private lateinit var btnToggleTouchAreas: ImageButton
+    private lateinit var btnToggleGemma: ImageButton
 
     private lateinit var recognitionProgress: ProgressBar
     private lateinit var recognitionIcon: TextView
@@ -211,6 +215,10 @@ class MainActivity : AppCompatActivity() {
         tvPageIndicator     = findViewById(R.id.tvPageIndicator)
         btnExport           = findViewById(R.id.btnExport)
         btnAddPrompt        = findViewById(R.id.btnAddPrompt)
+        optionsMenu         = findViewById(R.id.optionsMenu)
+        btnOptions          = findViewById(R.id.btnOptions)
+        btnToggleTouchAreas = findViewById(R.id.btnToggleTouchAreas)
+        btnToggleGemma      = findViewById(R.id.btnToggleGemma)
 
         searchBarContainer  = findViewById(R.id.searchBarContainer)
         etSearch            = findViewById(R.id.etSearch)
@@ -258,6 +266,7 @@ class MainActivity : AppCompatActivity() {
 
         updateColorSwatch()
         updateToolState()
+        updateOptionsUI()
         setupRecognizer()
         
         if (drawingView.notebookType == NotebookType.WHITEBOARD) {
@@ -735,6 +744,21 @@ class MainActivity : AppCompatActivity() {
         btnSearch.setOnClickListener { showSearchMode(true) }
         btnJumpMarkers.setOnClickListener { jumpToNextMarker() }
         btnExport.setOnClickListener { showExportDialog() }
+        
+        btnOptions.setOnClickListener {
+            optionsMenu.visibility = if (optionsMenu.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+            updateOptionsUI()
+        }
+        btnToggleTouchAreas.setOnClickListener {
+            drawingView.showTouchAreas = !drawingView.showTouchAreas
+            drawingView.invalidate()
+            updateOptionsUI()
+        }
+        btnToggleGemma.setOnClickListener {
+            val panel = findViewById<View>(R.id.recognitionPanel)
+            panel.visibility = if (panel.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+            updateOptionsUI()
+        }
 
         btnCloseSearch.setOnClickListener { showSearchMode(false) }
         btnNextMatch.setOnClickListener {
@@ -847,6 +871,15 @@ class MainActivity : AppCompatActivity() {
             btnToggleTools.alpha = 0.5f
             btnToggleTools.setColorFilter(Color.parseColor("#CCCCCC"))
         }
+    }
+
+    private fun updateOptionsUI() {
+        btnToggleTouchAreas.setColorFilter(if (drawingView.showTouchAreas) Color.parseColor("#7C4DFF") else Color.parseColor("#CCCCCC"))
+        val panel = findViewById<View>(R.id.recognitionPanel)
+        btnToggleGemma.setColorFilter(if (panel.visibility == View.VISIBLE) Color.parseColor("#7C4DFF") else Color.parseColor("#CCCCCC"))
+        
+        btnOptions.setColorFilter(if (optionsMenu.visibility == View.VISIBLE) Color.WHITE else Color.parseColor("#CCCCCC"))
+        btnOptions.alpha = if (optionsMenu.visibility == View.VISIBLE) 1.0f else 0.8f
     }
 
     // ── Color picker ──────────────────────────────────────────────────────
