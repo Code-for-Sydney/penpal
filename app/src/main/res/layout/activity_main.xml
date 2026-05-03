@@ -320,6 +320,7 @@
         android:paddingTop="10dp"
         android:paddingBottom="10dp"
         android:background="#CC0A0A1A"
+        android:visibility="gone"
         app:layout_constraintBottom_toTopOf="@id/toolbar"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent">

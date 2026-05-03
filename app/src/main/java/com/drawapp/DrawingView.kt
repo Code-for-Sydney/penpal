@@ -598,7 +598,7 @@ class DrawingView @JvmOverloads constructor(
         isAntiAlias = true
     }
 
-    var showTouchAreas: Boolean = true
+    var showTouchAreas: Boolean = false
         set(value) { field = value; invalidate() }
 
     private val promptBoxPaint = Paint().apply {
