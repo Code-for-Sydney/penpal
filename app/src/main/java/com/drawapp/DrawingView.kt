@@ -25,7 +25,7 @@ class DrawingView @JvmOverloads constructor(
     enum class BackgroundType { NONE, RULED, GRAPH }
     enum class ActiveTool { BRUSH, ERASER, LASSO, SELECT }
 
-    var activeTool: ActiveTool = ActiveTool.BRUSH
+    var activeTool: ActiveTool = ActiveTool.SELECT
         set(value) {
             field = value
             isEraser = (value == ActiveTool.ERASER)
