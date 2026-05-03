@@ -61,6 +61,16 @@ data class PromptData(
     val isLocked: Boolean = false
 ) : SvgData()
 
+data class TextData(
+    val text: String,
+    val matrix: FloatArray,
+    val color: Int,
+    val fontSize: Float,
+    val width: Float,
+    val height: Float,
+    val isLocked: Boolean = false
+) : SvgData()
+
 data class FloatRect(val left: Float, val top: Float, val right: Float, val bottom: Float)
 
 data class SvgResult(
@@ -171,6 +181,14 @@ object SvgSerializer {
                     sb.append(""" data-showing-result="${item.isShowingResult}"""")
                     if (item.isLocked) sb.append(""" data-locked="true"""")
                     sb.appendLine("/>")
+                }
+                is TextData -> {
+                    val m = item.matrix
+                    val transform = "matrix(${m[0]},${m[3]},${m[1]},${m[4]},${m[2]},${m[5]})"
+                    sb.append("""  <text id="text-$index" transform="$transform" font-size="${item.fontSize}" fill="${colorToHex(item.color)}"""")
+                    sb.append(""" data-type="text-item" data-text="${escapeXml(item.text)}" width="${item.width}" height="${item.height}"""")
+                    if (item.isLocked) sb.append(""" data-locked="true"""")
+                    sb.appendLine(">${escapeXml(item.text)}</text>")
                 }
             }
         }
@@ -313,6 +331,17 @@ object SvgSerializer {
                     val isLocked = parser.getAttributeValue(null, "data-locked") == "true"
                     
                     items.add(PromptData(prompt, result, showingResult, m, width, height, isLocked))
+                } else if (parser.name == "text" && parser.getAttributeValue(null, "data-type") == "text-item") {
+                    val transform = parser.getAttributeValue(null, "transform") ?: ""
+                    val m = parseMatrix(transform)
+                    val fontSize = parser.getAttributeValue(null, "font-size")?.toFloatOrNull() ?: 48f
+                    val color = parseHexColor(parser.getAttributeValue(null, "fill") ?: "#000000")
+                    val text = parser.getAttributeValue(null, "data-text") ?: ""
+                    val width = parser.getAttributeValue(null, "width")?.toFloatOrNull() ?: 400f
+                    val height = parser.getAttributeValue(null, "height")?.toFloatOrNull() ?: 100f
+                    val isLocked = parser.getAttributeValue(null, "data-locked") == "true"
+                    
+                    items.add(TextData(text, m, color, fontSize, width, height, isLocked))
                 }
             }
             eventType = parser.next()

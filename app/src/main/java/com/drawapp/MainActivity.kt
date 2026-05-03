@@ -18,6 +18,10 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import org.json.JSONArray
 import org.json.JSONObject
+import android.view.inputmethod.InputMethodManager
+import android.view.inputmethod.EditorInfo
+import android.content.Context
+import android.graphics.Matrix
 
 
 class MainActivity : AppCompatActivity() {
@@ -41,12 +45,18 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnExport: ImageButton
     private lateinit var btnAddPrompt: ImageButton
     private lateinit var btnSelectMode: ImageButton
+    private lateinit var btnAddText: ImageButton
     private lateinit var optionsMenu: LinearLayout
     private lateinit var btnOptions: ImageButton
     private lateinit var btnToggleTouchAreas: ImageButton
     private lateinit var btnToggleGemma: ImageButton
 
+    private lateinit var etInlineEdit: EditText
+    private lateinit var inlineEditContainer: LinearLayout
+    private lateinit var btnConfirmInlineEdit: ImageButton
     private lateinit var recognitionProgress: ProgressBar
+
+    private var editingTextItem: DrawingView.TextItem? = null
     private lateinit var recognitionIcon: TextView
     private lateinit var recognitionText: TextView
     
@@ -202,6 +212,7 @@ class MainActivity : AppCompatActivity() {
         btnEraser           = findViewById(R.id.btnEraser)
         btnLasso            = findViewById(R.id.btnLasso)
         btnSelectMode       = findViewById(R.id.btnSelectMode)
+        btnAddText          = findViewById(R.id.btnAddText)
         recognitionProgress = findViewById(R.id.recognitionProgress)
         recognitionIcon     = findViewById(R.id.recognitionIcon)
         recognitionText     = findViewById(R.id.recognitionText)
@@ -211,6 +222,9 @@ class MainActivity : AppCompatActivity() {
         btnOverview         = findViewById(R.id.btnOverview)
         btnSearch           = findViewById(R.id.btnSearch)
         btnJumpMarkers      = findViewById(R.id.btnJumpMarkers)
+        etInlineEdit        = findViewById(R.id.etInlineEdit)
+        inlineEditContainer = findViewById(R.id.inlineEditContainer)
+        btnConfirmInlineEdit = findViewById(R.id.btnConfirmInlineEdit)
         btnBackground       = findViewById(R.id.btnBackground)
         tvPageIndicator     = findViewById(R.id.tvPageIndicator)
         btnExport           = findViewById(R.id.btnExport)
@@ -262,6 +276,13 @@ class MainActivity : AppCompatActivity() {
         }
         drawingView.onPromptEditRequested = { promptItem ->
             showPromptEditDialog(promptItem)
+        }
+        drawingView.onTextEditRequested = { textItem ->
+            startInlineTextEdit(textItem)
+        }
+
+        btnConfirmInlineEdit.setOnClickListener {
+            finishInlineTextEdit()
         }
 
         updateColorSwatch()
@@ -512,15 +533,16 @@ class MainActivity : AppCompatActivity() {
     private fun handleLassoRecognition(items: List<DrawingView.CanvasItem>) {
         if (items.isEmpty()) return
 
-        // 1. Check if all items are already "recognized" types (Word or Image)
-        val allAreGrouped = items.all { it is DrawingView.WordItem || it is DrawingView.ImageItem }
+        // 1. Check if all items are already "recognized" types (Word, Image, Text, or Prompt)
+        val allAreGrouped = items.all { it is DrawingView.WordItem || it is DrawingView.ImageItem || it is DrawingView.TextItem || it is DrawingView.PromptItem }
         val hasRawStrokes = items.any { it is DrawingView.StrokeItem }
 
         // 2. Fast path: All items already grouped and no raw strokes -> Toggle mode
         if (allAreGrouped && !hasRawStrokes) {
             val anyShowingStrokes = items.any { 
                 (it is DrawingView.WordItem && !it.isShowingText) || 
-                (it is DrawingView.ImageItem && !it.isShowingText) 
+                (it is DrawingView.ImageItem && !it.isShowingText) ||
+                (it is DrawingView.PromptItem && !it.isShowingResult)
             }
             val target = anyShowingStrokes
             for (item in items) {
@@ -531,7 +553,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         // Partition items into those with text (recognized) and raw strokes
-        val itemsWithText = items.filter { it is DrawingView.WordItem || it is DrawingView.ImageItem }
+        val itemsWithText = items.filter { it is DrawingView.WordItem || it is DrawingView.ImageItem || it is DrawingView.TextItem || it is DrawingView.PromptItem }
         val itemsWithoutText = items.filter { it is DrawingView.StrokeItem }
 
         // 3. Consolidate text from existing recognized items
@@ -540,6 +562,8 @@ class MainActivity : AppCompatActivity() {
             val txt = when(item) {
                 is DrawingView.WordItem -> item.text
                 is DrawingView.ImageItem -> item.text
+                is DrawingView.TextItem -> item.text
+                is DrawingView.PromptItem -> item.result
                 else -> ""
             }
             if (txt.isNotEmpty()) parts.add(item.bounds to txt)
@@ -713,6 +737,10 @@ class MainActivity : AppCompatActivity() {
         btnAddPrompt.setOnClickListener {
             val item = drawingView.addPromptItem()
             showPromptEditDialog(item)
+        }
+        btnAddText.setOnClickListener {
+            val item = drawingView.addTextItem("")
+            startInlineTextEdit(item)
         }
         
         btnPageUp.setOnClickListener {
@@ -936,6 +964,9 @@ class MainActivity : AppCompatActivity() {
             }
             is DrawingView.PromptItem -> {
                 // Not applicable
+            }
+            is DrawingView.TextItem -> {
+                drawingView.setItemStyle(item, "color", color)
             }
         }
         drawingView.invalidate()
@@ -1397,6 +1428,22 @@ class MainActivity : AppCompatActivity() {
                     canvas.drawRect(0f, 0f, item.width, item.height, paint)
                     canvas.restore()
                 }
+                is TextData -> {
+                    val matrix = android.graphics.Matrix()
+                    matrix.setValues(item.matrix)
+                    canvas.save()
+                    canvas.concat(matrix)
+                    
+                    val paint = android.graphics.Paint().apply {
+                        color = item.color
+                        textSize = item.fontSize
+                        isAntiAlias = true
+                    }
+                    
+                    // Simple single line for thumbnail
+                    canvas.drawText(item.text.take(20), 10f, item.fontSize, paint)
+                    canvas.restore()
+                }
             }
         }
         
@@ -1477,6 +1524,7 @@ class MainActivity : AppCompatActivity() {
                                     is WordData -> item.text
                                     is ImageData -> item.text
                                     is PromptData -> item.prompt + " " + item.result
+                                    is TextData -> item.text
                                     is StrokeData -> ""
                                 }.replace("\n", " ").replace("\r", " ").replace(Regex("\\s+"), " ")
                                 
@@ -1961,11 +2009,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showPromptEditDialog(item: DrawingView.PromptItem) {
-        val editText = EditText(this)
-        editText.setText(item.prompt)
-        editText.setSelection(item.prompt.length)
+        val editText = EditText(this).apply {
+            setTextColor(Color.WHITE)
+            setText(item.prompt)
+            setSelection(item.prompt.length)
+        }
         
-        AlertDialog.Builder(this)
+        AlertDialog.Builder(this, R.style.DarkDialogTheme)
             .setTitle("Edit Prompt")
             .setView(editText)
             .setPositiveButton("Ask Gemma") { _, _ ->
@@ -1974,6 +2024,29 @@ class MainActivity : AppCompatActivity() {
                 item.isShowingResult = true
                 triggerPromptGemma(item)
                 drawingView.invalidate()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun showTextEditDialog(item: DrawingView.TextItem) {
+        val et = EditText(this).apply {
+            setText(item.text)
+            hint = "Type here..."
+            setTextColor(Color.WHITE)
+            setSelection(item.text.length)
+        }
+        AlertDialog.Builder(this, R.style.DarkDialogTheme)
+            .setTitle("Edit Text")
+            .setView(et)
+            .setPositiveButton("Save") { _, _ ->
+                val newText = et.text.toString()
+                if (newText != item.text) {
+                    drawingView.pushAction(drawingView.StyleAction(item, "text", item.text, newText))
+                    item.text = newText
+                    drawingView.invalidate()
+                    scheduleAutosave()
+                }
             }
             .setNegativeButton("Cancel", null)
             .show()
@@ -2047,6 +2120,7 @@ class MainActivity : AppCompatActivity() {
                             is DrawingView.WordItem -> item.text
                             is DrawingView.ImageItem -> item.text
                             is DrawingView.PromptItem -> "AI Prompt: ${item.prompt}\nAI Result: ${item.result}"
+                            is DrawingView.TextItem -> item.text
                             is DrawingView.StrokeItem -> ""
                         }
                         if (text.isNotEmpty()) {
@@ -2065,6 +2139,7 @@ class MainActivity : AppCompatActivity() {
                     is DrawingView.WordItem -> item.text
                     is DrawingView.ImageItem -> item.text
                     is DrawingView.PromptItem -> "AI Prompt: ${item.prompt}\nAI Result: ${item.result}"
+                    is DrawingView.TextItem -> item.text
                     is DrawingView.StrokeItem -> ""
                 }
                 if (text.isNotEmpty()) {
@@ -2074,5 +2149,69 @@ class MainActivity : AppCompatActivity() {
         }
         
         return sb.toString()
+    }
+
+    private fun startInlineTextEdit(item: DrawingView.TextItem) {
+        editingTextItem = item
+        drawingView.hiddenItem = item
+        drawingView.invalidate()
+
+        inlineEditContainer.visibility = View.VISIBLE
+        etInlineEdit.setText(item.text)
+        etInlineEdit.setSelection(item.text.length)
+        etInlineEdit.setTextColor(Color.WHITE)
+        
+        // Calculate screen position
+        val fullMatrix = Matrix(drawingView.viewMatrix)
+        fullMatrix.preConcat(item.matrix)
+        
+        val pts = floatArrayOf(10f, 0f)
+        fullMatrix.mapPoints(pts)
+        
+        val rotation = drawingView.getItemRotation(item)
+        val scale = drawingView.scaleFactor
+        
+        // Match font size exactly
+        etInlineEdit.textSize = (item.fontSize * scale) / resources.displayMetrics.scaledDensity
+        
+        inlineEditContainer.translationX = pts[0]
+        inlineEditContainer.translationY = pts[1]
+        inlineEditContainer.rotation = rotation
+        
+        etInlineEdit.requestFocus()
+        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+        imm.showSoftInput(etInlineEdit, InputMethodManager.SHOW_IMPLICIT)
+        
+        etInlineEdit.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_DONE || actionId == EditorInfo.IME_NULL) {
+                finishInlineTextEdit()
+                true
+            } else false
+        }
+        
+        etInlineEdit.setOnFocusChangeListener { _, hasFocus ->
+            if (!hasFocus && editingTextItem != null) {
+                finishInlineTextEdit()
+            }
+        }
+    }
+
+    private fun finishInlineTextEdit() {
+        val item = editingTextItem ?: return
+        val newText = etInlineEdit.text.toString()
+        
+        if (newText != item.text) {
+            drawingView.pushAction(drawingView.UpdateTextAction(item, item.text, newText))
+            item.text = newText
+            scheduleAutosave()
+        }
+        
+        inlineEditContainer.visibility = View.GONE
+        drawingView.hiddenItem = null
+        editingTextItem = null
+        drawingView.invalidate()
+        
+        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+        imm.hideSoftInputFromWindow(etInlineEdit.windowToken, 0)
     }
 }

@@ -42,6 +42,7 @@ class DrawingView @JvmOverloads constructor(
     var backgroundType: BackgroundType = BackgroundType.RULED
     var notebookType: NotebookType = NotebookType.NOTEBOOK
     var numPages: Int = 1
+    var hiddenItem: CanvasItem? = null
 
     // --- Page Constants (for Notebook mode) ---
     val PAGE_WIDTH = 2800f
@@ -247,6 +248,36 @@ class DrawingView @JvmOverloads constructor(
         }
     }
 
+    data class TextItem(
+        var text: String = "",
+        val matrix: Matrix = Matrix(),
+        var color: Int = Color.BLACK,
+        var fontSize: Float = 48f,
+        var width: Float = 400f,
+        var height: Float = 100f
+    ) : CanvasItem() {
+        override val bounds: RectF
+            get() {
+                val r = RectF(0f, 0f, width, height)
+                matrix.mapRect(r)
+                return r
+            }
+
+        override fun toSvgData(): SvgData {
+            val mValues = FloatArray(9)
+            matrix.getValues(mValues)
+            return TextData(
+                text = text,
+                matrix = mValues,
+                color = color,
+                fontSize = fontSize,
+                width = width,
+                height = height,
+                isLocked = isLocked
+            )
+        }
+    }
+
     data class ClusterResult(
         val bitmap: Bitmap,
         val strokes: List<StrokeItem>,
@@ -362,6 +393,7 @@ class DrawingView @JvmOverloads constructor(
             is WordItem -> ItemState(Matrix(item.matrix), Matrix(item.textMatrix), RectF(item.textBounds), item.strokes.map { it.copy() })
             is StrokeItem -> ItemState(Matrix(), Matrix(), RectF(), null, Path(item.path), RectF(item.boundsRect))
             is PromptItem -> ItemState(Matrix(item.matrix), Matrix(), RectF(), null, null, null, item.prompt, item.result, item.isShowingResult)
+            is TextItem -> ItemState(Matrix(item.matrix), Matrix(), RectF(), null, null, null, item.text, null, null)
             else -> ItemState(Matrix(), Matrix(), RectF())
         }
     }
@@ -389,6 +421,10 @@ class DrawingView @JvmOverloads constructor(
                 state.result?.let { item.result = it }
                 state.isShowingResult?.let { item.isShowingResult = it }
             }
+            is TextItem -> {
+                item.matrix.set(state.matrix)
+                state.prompt?.let { item.text = it } // Using prompt field for text
+            }
         }
         item.invalidateCache()
     }
@@ -407,6 +443,13 @@ class DrawingView @JvmOverloads constructor(
             "removeBackground" -> if (item is ImageItem) {
                 item.removeBackground = value as Boolean
                 item.invalidateCache()
+            }
+            "fontSize" -> if (item is TextItem) {
+                item.fontSize = value as Float
+                item.invalidateCache()
+            }
+            "color" -> if (item is TextItem) {
+                item.color = value as Int
             }
         }
     }
@@ -513,6 +556,7 @@ class DrawingView @JvmOverloads constructor(
     var onRecognizeSelectedItems: ((List<CanvasItem>) -> Unit)? = null
     var onPromptTriggered: ((PromptItem) -> Unit)? = null
     var onPromptEditRequested: ((PromptItem) -> Unit)? = null
+    var onTextEditRequested: ((TextItem) -> Unit)? = null
 
     
     private val selectionPaint = Paint().apply {
@@ -644,7 +688,7 @@ class DrawingView @JvmOverloads constructor(
     // ══════════════════════════════════════════════════════════════════════
 
     /** Maps canvas-space → screen-space */
-    private val viewMatrix = Matrix()
+    val viewMatrix = Matrix()
     /** Maps screen-space → canvas-space (inverse of viewMatrix) */
     private val inverseMatrix = Matrix()
 
@@ -923,6 +967,7 @@ class DrawingView @JvmOverloads constructor(
         // 5. Draw all committed items (with culling)
         val hasGroupSelection = selectedItems.size > 1
         for (item in drawItems) {
+            if (item == hiddenItem) continue
             if (RectF.intersects(item.bounds, viewport)) {
                 // Draw search highlight behind the item
                 if (item == searchHighlightedItem) {
@@ -1087,6 +1132,37 @@ class DrawingView @JvmOverloads constructor(
                 
                 canvas.restore()
             }
+            is TextItem -> {
+                canvas.save()
+                canvas.concat(matrix)
+                
+                val paint = TextPaint().apply {
+                    color = this@draw.color
+                    textSize = fontSize
+                    isAntiAlias = true
+                    typeface = Typeface.create(Typeface.DEFAULT, Typeface.NORMAL)
+                }
+                
+                val padding = 10f
+                val layout = StaticLayout.Builder.obtain(text, 0, text.length, paint, (width - padding * 2).toInt().coerceAtLeast(1))
+                    .setAlignment(Layout.Alignment.ALIGN_NORMAL)
+                    .setLineSpacing(0f, 1.2f)
+                    .setIncludePad(false)
+                    .build()
+                
+                canvas.save()
+                canvas.translate(padding, padding)
+                layout.draw(canvas)
+                canvas.restore()
+                
+                // Update height based on text content if it's too small
+                val neededHeight = layout.height + padding * 2
+                if (neededHeight > height) {
+                    height = neededHeight
+                }
+                
+                canvas.restore()
+            }
         }
     }
 
@@ -1118,6 +1194,13 @@ class DrawingView @JvmOverloads constructor(
                 canvas.restore()
             }
             is PromptItem -> {
+                val hitRect = RectF(0f, 0f, item.width, item.height)
+                canvas.save()
+                canvas.concat(item.matrix)
+                canvas.drawRect(hitRect, debugItemHitPaint)
+                canvas.restore()
+            }
+            is TextItem -> {
                 val hitRect = RectF(0f, 0f, item.width, item.height)
                 canvas.save()
                 canvas.concat(item.matrix)
@@ -1178,27 +1261,49 @@ class DrawingView @JvmOverloads constructor(
         canvas.drawLine(resPos.x - 6f, resPos.y + 6f, resPos.x + 6f, resPos.y - 6f, resizeLinePaint)
         canvas.drawLine(resPos.x, resPos.y + 6f, resPos.x + 6f, resPos.y, resizeLinePaint)
 
-        // Delete Button
-        canvas.drawCircle(delPos.x, delPos.y, buttonRadius, deleteBgPaint)
-        val crossSize = 10f
-        val crossPaint = Paint(deleteIconPaint).apply { strokeWidth = 3f }
-        canvas.drawLine(delPos.x - crossSize, delPos.y - crossSize, delPos.x + crossSize, delPos.y + crossSize, crossPaint)
-        canvas.drawLine(delPos.x + crossSize, delPos.y - crossSize, delPos.x - crossSize, delPos.y + crossSize, crossPaint)
+        // Consolidated Button Drawing
+        
+        // 1. Delete Button (Top-Right) - RED
+        canvas.drawCircle(delPos.x, delPos.y, buttonRadius, Paint().apply { color = Color.parseColor("#FF5252"); style = Paint.Style.FILL; setShadowLayer(4f, 0f, 2f, Color.BLACK) })
+        canvas.drawText("×", delPos.x, delPos.y + 10f, Paint().apply { color = Color.WHITE; textSize = 40f; textAlign = Paint.Align.CENTER; typeface = Typeface.DEFAULT_BOLD })
 
-        // Color Button (Moved to Bottom-Center)
-        if (item is WordItem || item is StrokeItem) {
+        // 2. Toggle Button (Top-Left) - WHITE
+        // Used for toggling result in PromptItem, or text mode in WordItem/ImageItem
+        if (item is WordItem || item is ImageItem || item is PromptItem) {
+            canvas.drawCircle(togPos.x, togPos.y, buttonRadius, Paint().apply { color = Color.WHITE; style = Paint.Style.FILL; setShadowLayer(4f, 0f, 2f, Color.BLACK) })
+            val tIconPaint = Paint().apply { color = Color.BLACK; textSize = 28f; textAlign = Paint.Align.CENTER; typeface = Typeface.DEFAULT_BOLD }
+            canvas.drawText("T", togPos.x, togPos.y - (tIconPaint.fontMetrics.ascent + tIconPaint.fontMetrics.descent) / 2, tIconPaint)
+        }
+
+        // 3. Edit / Special Action Button (Bottom-Left) - PURPLE
+        // Used for Edit Text (T), Edit Prompt (P), or Remove Background (B/W)
+        if (item is TextItem || item is PromptItem || item is ImageItem) {
+            canvas.drawCircle(filPos.x, filPos.y, buttonRadius, Paint().apply { color = Color.parseColor("#7C4DFF"); style = Paint.Style.FILL; setShadowLayer(4f, 0f, 2f, Color.BLACK) })
+            val label = when (item) {
+                is TextItem -> "T"
+                is PromptItem -> "P"
+                is ImageItem -> if (item.removeBackground) "B" else "W"
+                else -> ""
+            }
+            canvas.drawText(label, filPos.x, filPos.y + 8f, Paint().apply { color = Color.WHITE; textSize = if (item is ImageItem) 16f else 28f; textAlign = Paint.Align.CENTER; typeface = Typeface.DEFAULT_BOLD })
+        }
+
+        // 4. Color Button (Bottom-Center) - SWATCH
+        if (item is WordItem || item is StrokeItem || item is TextItem) {
             canvas.drawCircle(colPos.x, colPos.y, buttonRadius, Paint().apply { color = Color.WHITE; style = Paint.Style.FILL; setShadowLayer(4f, 0f, 2f, Color.BLACK) })
             canvas.drawCircle(colPos.x, colPos.y, buttonRadius * 0.7f, Paint().apply { 
                 color = when(item) {
                     is WordItem -> item.tintColor ?: item.strokes.firstOrNull()?.paint?.color ?: Color.BLACK
                     is StrokeItem -> item.paint.color
+                    is TextItem -> item.color
                     else -> Color.BLACK
                 }
                 style = Paint.Style.FILL 
             })
         }
 
-        // Fill Button
+        // 5. Fill Button (Bottom-Left? No, let's keep it separate if needed)
+        // Actually WordItem uses Bottom-Left for Fill.
         if (item is WordItem) {
             canvas.drawCircle(filPos.x, filPos.y, buttonRadius, Paint().apply { color = Color.WHITE; style = Paint.Style.FILL; setShadowLayer(4f, 0f, 2f, Color.BLACK) })
             val bgColor = item.backgroundColor
@@ -1210,27 +1315,6 @@ class DrawingView @JvmOverloads constructor(
                 val slashPaint = Paint().apply { color = Color.RED; strokeWidth = 3f; style = Paint.Style.STROKE }
                 canvas.drawLine(filPos.x - buttonRadius * 0.5f, filPos.y + buttonRadius * 0.5f, filPos.x + buttonRadius * 0.5f, filPos.y - buttonRadius * 0.5f, slashPaint)
             }
-        }
-
-        // Toggle Button (Top-Left)
-        canvas.drawCircle(togPos.x, togPos.y, buttonRadius, Paint().apply { color = Color.WHITE; style = Paint.Style.FILL; setShadowLayer(4f, 0f, 2f, Color.BLACK) })
-        val tIconPaint = Paint().apply { color = Color.BLACK; textSize = 28f; textAlign = Paint.Align.CENTER; typeface = Typeface.DEFAULT_BOLD }
-        canvas.drawText("T", togPos.x, togPos.y - (tIconPaint.fontMetrics.ascent + tIconPaint.fontMetrics.descent) / 2, tIconPaint)
-
-        // Prompt-specific: Edit Prompt button (Bottom-Left)
-        if (item is PromptItem) {
-            val promptPos = filPos
-            canvas.drawCircle(promptPos.x, promptPos.y, buttonRadius, Paint().apply { color = Color.WHITE; style = Paint.Style.FILL; setShadowLayer(4f, 0f, 2f, Color.BLACK) })
-            val pIconPaint = Paint().apply { color = Color.BLACK; textSize = 28f; textAlign = Paint.Align.CENTER; typeface = Typeface.DEFAULT_BOLD }
-            canvas.drawText("P", promptPos.x, promptPos.y - (pIconPaint.fontMetrics.ascent + pIconPaint.fontMetrics.descent) / 2, pIconPaint)
-        }
-
-        // Image-specific: Background removal (Bottom-Left)
-        if (item is ImageItem) {
-            val bgTogPos = filPos
-            canvas.drawCircle(bgTogPos.x, bgTogPos.y, buttonRadius, Paint().apply { color = Color.WHITE; style = Paint.Style.FILL; setShadowLayer(4f, 0f, 2f, Color.BLACK) })
-            val toggleIconPaint = Paint().apply { color = Color.BLACK; textSize = 16f; textAlign = Paint.Align.CENTER; typeface = Typeface.DEFAULT_BOLD }
-            canvas.drawText(if (item.removeBackground) "B" else "W", bgTogPos.x, bgTogPos.y - (toggleIconPaint.fontMetrics.ascent + toggleIconPaint.fontMetrics.descent) / 2, toggleIconPaint)
         }
 
         // --- Visualize Touch Areas (Debug) ---
@@ -1621,6 +1705,10 @@ class DrawingView @JvmOverloads constructor(
                                 onPromptEditRequested?.invoke(item)
                                 return true
                             }
+                            if (item is TextItem) {
+                                onTextEditRequested?.invoke(item)
+                                return true
+                            }
                         }
                     }
 
@@ -1743,6 +1831,10 @@ class DrawingView @JvmOverloads constructor(
                                 item.matrix.set(initialState.matrix)
                                 item.matrix.postRotate(rotationDelta, manipulationPivot.x, manipulationPivot.y)
                             }
+                            is TextItem -> {
+                                item.matrix.set(initialState.matrix)
+                                item.matrix.postRotate(rotationDelta, manipulationPivot.x, manipulationPivot.y)
+                            }
                         }
                         item.invalidateCache()
                     }
@@ -1778,6 +1870,10 @@ class DrawingView @JvmOverloads constructor(
                                 item.matrix.set(initialState.matrix)
                                 item.matrix.postScale(scale, scale, manipulationPivot.x, manipulationPivot.y)
                             }
+                            is TextItem -> {
+                                item.matrix.set(initialState.matrix)
+                                item.matrix.postScale(scale, scale, manipulationPivot.x, manipulationPivot.y)
+                            }
                         }
                         item.invalidateCache()
                     }
@@ -1795,6 +1891,7 @@ class DrawingView @JvmOverloads constructor(
                                 item.boundsRect.offset(dx, dy)
                             }
                             is PromptItem -> item.matrix.postTranslate(dx, dy)
+                            is TextItem -> item.matrix.postTranslate(dx, dy)
                         }
                         item.invalidateCache()
                     }
@@ -1819,6 +1916,8 @@ class DrawingView @JvmOverloads constructor(
                     val targetMatrix = when(currentSelectedItem) {
                         is ImageItem -> currentSelectedItem.matrix
                         is WordItem -> currentSelectedItem.matrix
+                        is TextItem -> currentSelectedItem.matrix
+                        is PromptItem -> currentSelectedItem.matrix
                         else -> Matrix()
                     }
                     
@@ -2109,6 +2208,23 @@ class DrawingView @JvmOverloads constructor(
         return imageItem
     }
 
+    fun addTextItem(text: String = "Double tap to edit"): TextItem {
+        val viewW = if (width > 0) width.toFloat() else 800f
+        val viewH = if (height > 0) height.toFloat() else 800f
+        val viewCenter = screenToCanvas(viewW / 2f, viewH / 2f)
+        
+        val matrix = Matrix()
+        matrix.postTranslate(viewCenter[0] - 200f, viewCenter[1] - 50f)
+        
+        val textItem = TextItem(text, matrix)
+        pushAction(AddItemAction(textItem))
+        selectedItems.clear()
+        selectedItems.add(textItem)
+        invalidate()
+        onStrokeCompleted?.invoke()
+        return textItem
+    }
+
     fun deleteSelectedItem(): Boolean {
         if (selectedItems.isNotEmpty()) {
             val itemsToRemove = selectedItems.toList()
@@ -2232,6 +2348,16 @@ class DrawingView @JvmOverloads constructor(
         return wordItem
     }
 
+    inner class UpdateTextAction(val item: TextItem, val oldText: String, val newText: String) : UndoAction {
+        override fun undo() { item.text = oldText; invalidate() }
+        override fun redo() { item.text = newText; invalidate() }
+    }
+
+    inner class UpdatePromptAction(val item: PromptItem, val oldPrompt: String, val newPrompt: String) : UndoAction {
+        override fun undo() { item.prompt = oldPrompt; invalidate() }
+        override fun redo() { item.prompt = newPrompt; invalidate() }
+    }
+
 
     // --- Undo / Redo ---
     fun undo() {
@@ -2293,6 +2419,7 @@ class DrawingView @JvmOverloads constructor(
             is ImageItem -> item.matrix.mapRect(globalRect)
             is WordItem -> item.matrix.mapRect(globalRect)
             is PromptItem -> item.matrix.mapRect(globalRect)
+            is TextItem -> item.matrix.mapRect(globalRect)
             else -> {}
         }
         
@@ -2425,6 +2552,12 @@ class DrawingView @JvmOverloads constructor(
                     matrix.postTranslate(0f, dy)
                     PromptItem(data.prompt, data.result, data.isShowingResult, matrix, data.width, data.height)
                 }
+                is TextData -> {
+                    val matrix = Matrix()
+                    matrix.setValues(data.matrix)
+                    matrix.postTranslate(0f, dy)
+                    TextItem(data.text, matrix, data.color, data.fontSize, data.width, data.height)
+                }
             }
             item?.let { loadedItems.add(it) }
         }
@@ -2478,6 +2611,11 @@ class DrawingView @JvmOverloads constructor(
                     item.copy(matrix = newMatrix)
                 }
                 is PromptItem -> {
+                    val newMatrix = Matrix(item.matrix)
+                    newMatrix.postTranslate(0f, dy)
+                    item.copy(matrix = newMatrix)
+                }
+                is TextItem -> {
                     val newMatrix = Matrix(item.matrix)
                     newMatrix.postTranslate(0f, dy)
                     item.copy(matrix = newMatrix)
@@ -2942,6 +3080,19 @@ class DrawingView @JvmOverloads constructor(
                         isLocked = item.isLocked
                     )
                 }
+                is TextItem -> {
+                    val m = FloatArray(9)
+                    item.matrix.getValues(m)
+                    TextData(
+                        text = item.text,
+                        matrix = m,
+                        width = item.width,
+                        height = item.height,
+                        fontSize = item.fontSize,
+                        color = item.color,
+                        isLocked = item.isLocked
+                    )
+                }
             }
         }
     }
@@ -3011,6 +3162,13 @@ class DrawingView @JvmOverloads constructor(
                     val prompt = PromptItem(data.prompt, data.result, data.isShowingResult, matrix, data.width, data.height)
                     prompt.isLocked = data.isLocked
                     drawItems.add(prompt)
+                }
+                is TextData -> {
+                    val matrix = Matrix()
+                    matrix.setValues(data.matrix)
+                    val textItem = TextItem(data.text, matrix, data.color, data.fontSize, data.width, data.height)
+                    textItem.isLocked = data.isLocked
+                    drawItems.add(textItem)
                 }
             }
         }
@@ -3204,8 +3362,30 @@ class DrawingView @JvmOverloads constructor(
         return PointF(center[0], center[1])
     }
 
-    private fun getItemRotation(item: CanvasItem): Float {
-        return 0f
+    fun getItemScreenBounds(item: CanvasItem): RectF {
+        val r = RectF(item.bounds)
+        viewMatrix.mapRect(r)
+        return r
+    }
+
+    fun getItemRotation(item: CanvasItem): Float {
+        val m = when(item) {
+            is ImageItem -> item.matrix
+            is WordItem -> item.matrix
+            is PromptItem -> item.matrix
+            is TextItem -> item.matrix
+            else -> Matrix()
+        }
+        val pts = floatArrayOf(0f, 1f)
+        m.mapVectors(pts)
+        val angle = Math.toDegrees(Math.atan2(pts[1].toDouble(), pts[0].toDouble())).toFloat() - 90f
+        return angle
+    }
+
+    fun getCanvasPointOnScreen(canvasX: Float, canvasY: Float): PointF {
+        val pts = floatArrayOf(canvasX, canvasY)
+        viewMatrix.mapPoints(pts)
+        return PointF(pts[0], pts[1])
     }
 
     private fun isItemHit(item: CanvasItem, canvasX: Float, canvasY: Float): Boolean {
@@ -3220,6 +3400,7 @@ class DrawingView @JvmOverloads constructor(
                 m
             }
             is PromptItem -> item.matrix
+            is TextItem -> item.matrix
             else -> Matrix()
         }
         matrix.invert(inv)
@@ -3229,6 +3410,7 @@ class DrawingView @JvmOverloads constructor(
             is ImageItem -> RectF(0f, 0f, item.bitmap.width.toFloat(), item.bitmap.height.toFloat())
             is WordItem -> item.textBounds
             is PromptItem -> RectF(0f, 0f, item.width, item.height)
+            is TextItem -> RectF(0f, 0f, item.width, item.height)
             else -> item.bounds
         }
         
@@ -3277,7 +3459,7 @@ class DrawingView @JvmOverloads constructor(
                 if (hitStroke != null) {
                     wordsToModify.add(Pair(item, hitStroke))
                 }
-            } else if (item is ImageItem) {
+            } else if (item is ImageItem || item is TextItem || item is PromptItem) {
                 if (!item.isLocked && isItemHit(item, canvasX, canvasY)) {
                     itemsToRemove.add(item)
                 }
