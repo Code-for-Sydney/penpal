@@ -18,7 +18,8 @@ class RecordingsAdapter(
     private val recordings: MutableList<File>,
     private val audioRecorder: AudioRecorder,
     private val onPlayClicked: (File) -> Unit,
-    private val onDeleteClicked: (File) -> Unit
+    private val onDeleteClicked: (File) -> Unit,
+    private val onTranscribeClicked: ((File) -> Unit)? = null
 ) : RecyclerView.Adapter<RecordingsAdapter.RecordingViewHolder>() {
 
     private var playingFile: File? = null
@@ -68,6 +69,7 @@ class RecordingsAdapter(
         private val tvDuration: TextView = itemView.findViewById(R.id.tvDuration)
         private val tvDate: TextView = itemView.findViewById(R.id.tvDate)
         private val ivPlaying: ImageView = itemView.findViewById(R.id.ivPlaying)
+        private val btnTranscribe: ImageButton = itemView.findViewById(R.id.btnTranscribe)
         private val btnDelete: ImageButton = itemView.findViewById(R.id.btnDelete)
 
         fun bind(file: File) {
@@ -88,8 +90,15 @@ class RecordingsAdapter(
                 else android.R.drawable.ic_media_play
             )
 
+            // Transcribe button visibility
+            btnTranscribe.visibility = if (onTranscribeClicked != null) View.VISIBLE else View.GONE
+
             // Click handlers
             btnPlay.setOnClickListener { onPlayClicked(file) }
+
+            btnTranscribe.setOnClickListener {
+                onTranscribeClicked?.invoke(file)
+            }
 
             btnDelete.setOnClickListener {
                 onDeleteClicked(file)

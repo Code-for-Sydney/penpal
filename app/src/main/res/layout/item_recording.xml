@@ -76,6 +76,17 @@
         android:visibility="gone"
         android:contentDescription="Now playing" />
 
+    <!-- Transcribe button -->
+    <ImageButton
+        android:id="@+id/btnTranscribe"
+        android:layout_width="32dp"
+        android:layout_height="32dp"
+        android:src="@drawable/ic_sparkle"
+        android:background="?android:attr/selectableItemBackgroundBorderless"
+        android:contentDescription="Transcribe"
+        android:tint="#7C4DFF"
+        android:layout_marginStart="4dp" />
+
     <!-- Delete button -->
     <ImageButton
         android:id="@+id/btnDelete"
@@ -85,6 +96,6 @@
         android:background="?android:attr/selectableItemBackgroundBorderless"
         android:contentDescription="Delete"
         android:tint="#FF5252"
-        android:layout_marginStart="8dp" />
+        android:layout_marginStart="4dp" />
 
 </LinearLayout>

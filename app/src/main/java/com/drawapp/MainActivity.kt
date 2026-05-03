@@ -95,6 +95,7 @@ class MainActivity : AppCompatActivity() {
 
     private var audioRecorder: AudioRecorder? = null
     private var audioPlayer: AudioPlayer? = null
+    private var gemmaServer: GemmaServerClient? = null
     private var isRecording = false
     private var recordingStartTime: Long = 0
     private val recordingHandler = Handler(Looper.getMainLooper())
@@ -295,6 +296,7 @@ class MainActivity : AppCompatActivity() {
         // Initialize audio recorder
         audioRecorder = AudioRecorder(this)
         audioPlayer = AudioPlayer(this)
+        gemmaServer = GemmaServerClient(this)
 
         // Set up audio recorder callbacks
         audioRecorder?.onAmplitudeUpdate = { amplitude ->
@@ -2410,15 +2412,30 @@ class MainActivity : AppCompatActivity() {
         val btnForward: ImageButton = dialogView.findViewById(R.id.btnForward)
         val btnDeleteAll: Button = dialogView.findViewById(R.id.btnDeleteAll)
         val btnClose: Button = dialogView.findViewById(R.id.btnClose)
+        val btnTranscribe: Button = dialogView.findViewById(R.id.btnTranscribe)
+        val btnSettings: ImageButton = dialogView.findViewById(R.id.btnSettings)
+        val etPrompt: EditText = dialogView.findViewById(R.id.etPrompt)
+        val tvServerUrl: TextView = dialogView.findViewById(R.id.tvServerUrl)
 
         tvRecordingCount.text = "${recordings.size} files"
+
+        // Show server URL status
+        val currentUrl = gemmaServer?.getBaseUrl() ?: ""
+        if (currentUrl.isNotBlank()) {
+            tvServerUrl.visibility = View.VISIBLE
+            tvServerUrl.text = "Server: ${gemmaServer?.getBaseUrl() ?: "Not configured"}"
+        }
 
         // Setup RecyclerView
         recordingsAdapter = RecordingsAdapter(
             recordings = recordings,
             audioRecorder = audioRecorder!!,
             onPlayClicked = { file -> playRecording(file, playbackControls, tvNowPlaying, tvCurrentTime, tvTotalTime, seekBar, btnPlayPause) },
-            onDeleteClicked = { file -> deleteRecording(file, recordingsAdapter!!) }
+            onDeleteClicked = { file -> deleteRecording(file, recordingsAdapter!!) },
+            onTranscribeClicked = { file ->
+                val customPrompt = etPrompt.text.toString().takeIf { it.isNotBlank() }
+                transcribeRecording(file, btnTranscribe, customPrompt)
+            }
         )
         rvRecordings.layoutManager = LinearLayoutManager(this)
         rvRecordings.adapter = recordingsAdapter
@@ -2452,6 +2469,7 @@ class MainActivity : AppCompatActivity() {
 
         // Delete all button
         btnDeleteAll.visibility = if (recordings.isNotEmpty()) View.VISIBLE else View.GONE
+        btnTranscribe.visibility = if (recordings.isNotEmpty()) View.VISIBLE else View.GONE
         btnDeleteAll.setOnClickListener {
             AlertDialog.Builder(this)
                 .setTitle("Delete All Recordings?")
@@ -2463,6 +2481,11 @@ class MainActivity : AppCompatActivity() {
                 }
                 .setNegativeButton("Cancel", null)
                 .show()
+        }
+
+        // Settings button - show server URL configuration
+        btnSettings.setOnClickListener {
+            showServerSettingsDialog(tvServerUrl)
         }
 
         // Close button
@@ -2593,6 +2616,229 @@ class MainActivity : AppCompatActivity() {
         audioRecorder?.getRecordings()?.forEach { file ->
             audioRecorder?.deleteRecording(file)
         }
+    }
+
+    private fun transcribeRecording(file: File, btnTranscribe: Button, customPrompt: String? = null) {
+        // Stop any playback
+        stopPlayback()
+
+        // Show loading state
+        btnTranscribe.isEnabled = false
+        btnTranscribe.text = "Transcribing..."
+
+        activityScope.launch {
+            try {
+                // Use parallel chunk processing for speed
+                val result = gemmaServer?.transcribeWithAutoChunking(file, customPrompt)
+
+                withContext(Dispatchers.Main) {
+                    btnTranscribe.isEnabled = true
+                    btnTranscribe.text = "Transcribe"
+
+                    if (result?.success == true && result.transcription.isNotBlank()) {
+                        // Show transcription dialog with web search results if available
+                        showTranscriptionResult(
+                            result.transcription,
+                            file.name,
+                            result.webSearchResults
+                        )
+                    } else {
+                        val errorMsg = result?.errorMessage ?: "Transcription failed"
+                        Toast.makeText(this@MainActivity, errorMsg, Toast.LENGTH_LONG).show()
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    btnTranscribe.isEnabled = true
+                    btnTranscribe.text = "Transcribe"
+                    Toast.makeText(this@MainActivity, "Error: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    private fun showServerSettingsDialog(tvServerUrl: TextView) {
+        val currentUrl = gemmaServer?.getBaseUrl() ?: GemmaServerClient.DEFAULT_BASE_URL
+
+        val editText = EditText(this).apply {
+            setText(currentUrl)
+            hint = "http://localhost:8080/transcribe"
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.parseColor("#66FFFFFF"))
+            setSelection(currentUrl.length)
+        }
+
+        AlertDialog.Builder(this, R.style.DarkDialogTheme)
+            .setTitle("Gemma Server URL")
+            .setMessage("Enter the full URL for the Gemma transcription server.\n\nExample:\nhttp://192.168.1.100:8000")
+            .setView(editText)
+            .setPositiveButton("Save") { _, _ ->
+                val url = editText.text.toString().trim()
+                if (url.isNotBlank()) {
+                    gemmaServer?.setServerUrl(url)
+                    tvServerUrl.visibility = View.VISIBLE
+                    tvServerUrl.text = "Server: $url"
+                    Toast.makeText(this, "Server URL saved", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun showTranscriptionResult(
+        transcription: String,
+        fileName: String,
+        webSearchResults: List<GemmaServerClient.SearchResult>? = null
+    ) {
+        // Create scrollable view for content
+        val scrollView = ScrollView(this)
+
+        // Create vertical layout for all content
+        val contentLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(16, 16, 16, 16)
+        }
+
+        // Transcription text
+        val textView = TextView(this).apply {
+            text = transcription
+            setTextColor(Color.WHITE)
+            textSize = 14f
+        }
+        contentLayout.addView(textView)
+
+        // Add web search results section if available
+        if (!webSearchResults.isNullOrEmpty()) {
+            contentLayout.addView(TextView(this).apply {
+                text = "\n--- Web Search Results ---"
+                setTextColor(Color.parseColor("#7C4DFF"))
+                textSize = 16f
+                setPadding(0, 16, 0, 8)
+            })
+
+            webSearchResults.forEachIndexed { index, result ->
+                val resultButton = Button(this).apply {
+                    text = "${index + 1}. ${result.title}"
+                    setBackgroundColor(Color.parseColor("#333333"))
+                    setTextColor(Color.WHITE)
+                    setPadding(12, 8, 12, 8)
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                    ).apply {
+                        setMargins(0, 4, 0, 4)
+                    }
+                    setOnClickListener {
+                        // Open URL in browser
+                        gemmaServer?.openInBrowser(result.url)
+                    }
+                }
+                contentLayout.addView(resultButton)
+
+                // Add snippet
+                val snippetView = TextView(this).apply {
+                    text = result.snippet.take(150) + if (result.snippet.length > 150) "..." else ""
+                    setTextColor(Color.parseColor("#88FFFFFF"))
+                    textSize = 12f
+                    setPadding(8, 0, 8, 8)
+                }
+                contentLayout.addView(snippetView)
+            }
+        }
+
+        scrollView.addView(contentLayout)
+
+        // Build dialog buttons
+        val builder = AlertDialog.Builder(this, R.style.DarkDialogTheme)
+            .setTitle("Transcription: $fileName")
+            .setView(scrollView)
+
+        // Add web search button if results available
+        if (!webSearchResults.isNullOrEmpty()) {
+            builder.setNeutralButton("Open Links") { _, _ ->
+                showWebSearchResults(webSearchResults)
+            }
+        }
+
+        builder
+            .setPositiveButton("Copy") { _, _ ->
+                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                val clip = android.content.ClipData.newPlainText("Transcription", transcription)
+                clipboard.setPrimaryClip(clip)
+                Toast.makeText(this, "Copied to clipboard", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
+    private fun showWebSearchResults(results: List<GemmaServerClient.SearchResult>) {
+        val context = this
+        val scrollView = ScrollView(context)
+        val layout = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(16, 16, 16, 16)
+        }
+
+        results.forEach { result ->
+            val card = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                setBackgroundColor(Color.parseColor("#222222"))
+                setPadding(12, 12, 12, 12)
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    setMargins(0, 8, 0, 8)
+                }
+            }
+
+            val titleView = TextView(context).apply {
+                text = result.title
+                setTextColor(Color.WHITE)
+                textSize = 14f
+                setPadding(0, 0, 0, 4)
+            }
+            card.addView(titleView)
+
+            val sourceView = TextView(context).apply {
+                text = result.source
+                setTextColor(Color.parseColor("#7C4DFF"))
+                textSize = 11f
+            }
+            card.addView(sourceView)
+
+            val snippetView = TextView(context).apply {
+                text = result.snippet
+                setTextColor(Color.parseColor("#AAAAAA"))
+                textSize = 12f
+                setPadding(0, 8, 0, 8)
+            }
+            card.addView(snippetView)
+
+            val openButton = Button(context).apply {
+                text = "Open in Browser"
+                setBackgroundColor(Color.parseColor("#7C4DFF"))
+                setTextColor(Color.WHITE)
+                setOnClickListener {
+                    gemmaServer?.openInBrowser(result.url)
+                }
+            }
+            card.addView(openButton)
+
+            layout.addView(card)
+        }
+
+        scrollView.addView(layout)
+
+        AlertDialog.Builder(context, R.style.DarkDialogTheme)
+            .setTitle("Web Search Results")
+            .setView(scrollView)
+            .setPositiveButton("Open All") { _, _ ->
+                // Open first result
+                results.firstOrNull()?.let { gemmaServer?.openInBrowser(it.url) }
+            }
+            .setNegativeButton("Close", null)
+            .show()
     }
 
     private fun getCurrentPlayingFile(): File? {
