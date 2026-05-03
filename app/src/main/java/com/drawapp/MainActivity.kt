@@ -512,17 +512,16 @@ class MainActivity : AppCompatActivity() {
     private fun handleLassoRecognition(items: List<DrawingView.CanvasItem>) {
         if (items.isEmpty()) return
 
-        // 1. Separate recognized and unrecognized items
-        val itemsWithText = items.filter { item ->
-            (item is DrawingView.WordItem && item.text.isNotEmpty()) ||
-            (item is DrawingView.ImageItem && item.text.isNotEmpty())
-        }
-        val itemsWithoutText = items.filter { !itemsWithText.contains(it) }
+        // 1. Check if all items are already "recognized" types (Word or Image)
+        val allAreGrouped = items.all { it is DrawingView.WordItem || it is DrawingView.ImageItem }
         val hasRawStrokes = items.any { it is DrawingView.StrokeItem }
 
-        // 2. Fast path: All items already recognized and no raw strokes -> Toggle mode
-        if (itemsWithText.size == items.size && !hasRawStrokes) {
-            val anyShowingStrokes = items.any { (it is DrawingView.WordItem && !it.isShowingText) || (it is DrawingView.ImageItem && !it.isShowingText) }
+        // 2. Fast path: All items already grouped and no raw strokes -> Toggle mode
+        if (allAreGrouped && !hasRawStrokes) {
+            val anyShowingStrokes = items.any { 
+                (it is DrawingView.WordItem && !it.isShowingText) || 
+                (it is DrawingView.ImageItem && !it.isShowingText) 
+            }
             val target = anyShowingStrokes
             for (item in items) {
                 drawingView.setItemStyle(item, "isShowingText", target)
@@ -530,6 +529,10 @@ class MainActivity : AppCompatActivity() {
             drawingView.invalidate()
             return
         }
+
+        // Partition items into those with text (recognized) and raw strokes
+        val itemsWithText = items.filter { it is DrawingView.WordItem || it is DrawingView.ImageItem }
+        val itemsWithoutText = items.filter { it is DrawingView.StrokeItem }
 
         // 3. Consolidate text from existing recognized items
         val parts = mutableListOf<Pair<RectF, String>>()

@@ -984,8 +984,18 @@ class DrawingView @JvmOverloads constructor(
             is ImageItem -> {
                 canvas.save()
                 canvas.concat(matrix)
-                if (isShowingText && text.isNotEmpty()) {
-                    drawImageText(canvas, this)
+                if (isShowingText) {
+                    if (text.isNotEmpty()) {
+                        drawImageText(canvas, this)
+                    } else {
+                        // Subtle placeholder for empty text mode
+                        val placeholderPaint = Paint(textPaint).apply { 
+                            color = Color.LTGRAY
+                            alpha = 100
+                            textSize = 40f
+                        }
+                        canvas.drawText("...", bitmap.width / 2f, bitmap.height / 2f, placeholderPaint)
+                    }
                 } else {
                     canvas.drawBitmap(displayBitmap, 0f, 0f, null)
                 }
@@ -1003,11 +1013,26 @@ class DrawingView @JvmOverloads constructor(
                         for (i in 1 until strokes.size) {
                             localRect.union(strokes[i].bounds)
                         }
+                    } else if (!textBounds.isEmpty) {
+                        localRect.set(textBounds)
                     }
                     canvas.drawRect(localRect, tempWordBgPaint)
                 }
-                if (isShowingText && text.isNotEmpty()) {
-                    drawWordText(canvas, this)
+                
+                if (isShowingText) {
+                    if (text.isNotEmpty()) {
+                        drawWordText(canvas, this)
+                    } else {
+                        // Placeholder for empty word
+                        val placeholderPaint = Paint(textPaint).apply { 
+                            color = Color.LTGRAY
+                            alpha = 100
+                            textSize = 30f
+                        }
+                        val centerX = bounds.width() / 2f
+                        val centerY = bounds.height() / 2f
+                        canvas.drawText("...", 0f, 0f, placeholderPaint)
+                    }
                 } else {
                     val wordPaint = if (tintColor != null) {
                         Paint().apply {
@@ -1050,9 +1075,14 @@ class DrawingView @JvmOverloads constructor(
                     canvas.clipRect(0f, 0f, width - padding * 2, height - padding * 2)
                     layout.draw(canvas)
                     canvas.restore()
-                } else if (!isShowingResult) {
-                    canvas.drawText("Tap to enter prompt...", padding, padding + promptTextPaint.textSize, promptTextPaint.apply { alpha = 100 })
-                    promptTextPaint.alpha = 255
+                } else {
+                    if (isShowingResult) {
+                        canvas.drawText("Generating...", padding, padding + resultTextPaint.textSize, resultTextPaint.apply { alpha = 100 })
+                        resultTextPaint.alpha = 255
+                    } else {
+                        canvas.drawText("Tap P to enter prompt...", padding, padding + promptTextPaint.textSize, promptTextPaint.apply { alpha = 100 })
+                        promptTextPaint.alpha = 255
+                    }
                 }
                 
                 canvas.restore()
