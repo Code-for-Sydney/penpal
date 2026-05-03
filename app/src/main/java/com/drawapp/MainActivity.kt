@@ -344,14 +344,8 @@ class MainActivity : AppCompatActivity() {
 
         // Wire stroke callback → debounced recognition & autosave
         drawingView.onStrokeCompleted = {
-            if (recognizer.isReady) {
-                recognitionHandler.removeCallbacks(recognitionRunnable)
-                recognitionHandler.postDelayed(recognitionRunnable, DEBOUNCE_MS)
-                hasPendingRecognition = true
-            }
-            // Always schedule autosave when a stroke is completed
-            recognitionHandler.removeCallbacks(autosaveRunnable)
-            recognitionHandler.postDelayed(autosaveRunnable, AUTOSAVE_DEBOUNCE_MS)
+            scheduleRecognition()
+            scheduleAutosave()
         }
 
 
@@ -2046,6 +2040,7 @@ class MainActivity : AppCompatActivity() {
                     item.text = newText
                     drawingView.invalidate()
                     scheduleAutosave()
+                    scheduleRecognition()
                 }
             }
             .setNegativeButton("Cancel", null)
@@ -2204,6 +2199,7 @@ class MainActivity : AppCompatActivity() {
             drawingView.pushAction(drawingView.UpdateTextAction(item, item.text, newText))
             item.text = newText
             scheduleAutosave()
+            scheduleRecognition()
         }
         
         inlineEditContainer.visibility = View.GONE

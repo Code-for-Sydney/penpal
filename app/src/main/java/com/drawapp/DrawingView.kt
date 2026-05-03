@@ -760,39 +760,8 @@ class DrawingView @JvmOverloads constructor(
                 val oldScale = scaleFactor
                 var detectorScale = detector.scaleFactor
                 
-                // Boost sensitivity for faster zooming
-                detectorScale = 1.0f + (detectorScale - 1.0f) * 3.0f
-
-                // --- Auto-Fit Selection Logic ---
-                val currentSelectedItem = selectedImage ?: selectedWord
-                if (currentSelectedItem != null && detectorScale > 1.0f) {
-                    val screenBounds = RectF()
-                    val localBounds = when (currentSelectedItem) {
-                        is ImageItem -> RectF(0f, 0f, currentSelectedItem.bitmap.width.toFloat(), currentSelectedItem.bitmap.height.toFloat())
-                        is WordItem -> currentSelectedItem.textBounds
-                        else -> RectF()
-                    }
-                    
-                    val combinedMatrix = Matrix(viewMatrix)
-                    when (currentSelectedItem) {
-                        is ImageItem -> combinedMatrix.preConcat(currentSelectedItem.matrix)
-                        is WordItem -> {
-                            combinedMatrix.preConcat(currentSelectedItem.matrix)
-                            combinedMatrix.preConcat(currentSelectedItem.textMatrix)
-                        }
-                        else -> {}
-                    }
-                    
-                    combinedMatrix.mapRect(screenBounds, localBounds)
-                    
-                    val margin = 50f
-                    if (screenBounds.left < margin || screenBounds.right > width - margin || 
-                        screenBounds.top < margin || screenBounds.bottom > height - margin) {
-                        // Item is hitting screen edges and user is zooming in.
-                        // Invert the detector scale to zoom the canvas OUT instead.
-                        detectorScale = 1.0f / (detectorScale * 1.02f) 
-                    }
-                }
+                // Boost sensitivity slightly for more responsive zooming
+                detectorScale = 1.0f + (detectorScale - 1.0f) * 1.5f
 
                 scaleFactor *= detectorScale
                 scaleFactor = scaleFactor.coerceIn(MIN_ZOOM, MAX_ZOOM)
@@ -1963,7 +1932,7 @@ class DrawingView @JvmOverloads constructor(
                     if (statesBefore != null) {
                         val afterStates = selectedItems.map { captureState(it) }
                         pushAction(GroupTransformAction(selectedItems.toList(), statesBefore, afterStates), executeNow = false)
-                        onStrokeCompleted?.invoke()
+                        // Removed onStrokeCompleted trigger for transformations
                     }
                     isResizing = false
                     isRotating = false
@@ -1987,7 +1956,7 @@ class DrawingView @JvmOverloads constructor(
                     if (beforeGroupTransformStates != null) {
                         val afterStates = selectedItems.map { captureState(it) }
                         pushAction(GroupTransformAction(selectedItems.toList(), beforeGroupTransformStates!!, afterStates))
-                        onStrokeCompleted?.invoke()
+                        // Removed onStrokeCompleted trigger for transformations
                     }
                     beforeGroupTransformStates = null
                     
@@ -2232,7 +2201,7 @@ class DrawingView @JvmOverloads constructor(
             pushAction(GroupRemoveAction(itemsToRemove, indices))
             selectedItems.clear()
             invalidate()
-            onStrokeCompleted?.invoke()
+            // Removed onStrokeCompleted trigger for deletion
             return true
         }
 
@@ -2244,7 +2213,7 @@ class DrawingView @JvmOverloads constructor(
                 selectedImage = null
                 isImageManipulating = false
                 invalidate()
-                onStrokeCompleted?.invoke()
+                // Removed onStrokeCompleted trigger for deletion
                 return true
             }
         }
@@ -2256,7 +2225,7 @@ class DrawingView @JvmOverloads constructor(
                 selectedWord = null
                 isWordManipulating = false
                 invalidate()
-                onStrokeCompleted?.invoke()
+                // Removed onStrokeCompleted trigger for deletion
                 return true
             }
         }
@@ -2824,7 +2793,10 @@ class DrawingView @JvmOverloads constructor(
         for (item in items) {
             // Draw only strokes and words (skip images if we just want handwriting)
             // But sometimes handwriting is on images... let's draw images too.
-            item.draw(canvas)
+            // SKIP PromptItems as they should be ignored for Gemma analysis.
+            if (item !is PromptItem) {
+                item.draw(canvas)
+            }
         }
         
         // Restore original stroke widths
