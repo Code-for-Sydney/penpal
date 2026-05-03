@@ -1,5 +1,7 @@
 package com.drawapp
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.RectF
@@ -11,6 +13,7 @@ import android.view.WindowManager
 import android.widget.*
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import java.io.File
 import java.io.FileOutputStream
 import java.util.*
@@ -22,6 +25,9 @@ import android.view.inputmethod.InputMethodManager
 import android.view.inputmethod.EditorInfo
 import android.content.Context
 import android.graphics.Matrix
+import android.util.Log
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 
 
 class MainActivity : AppCompatActivity() {
@@ -77,6 +83,42 @@ class MainActivity : AppCompatActivity() {
     private data class SearchMatch(val pageIndex: Int, val text: String, val itemIndex: Int, val subRect: RectF? = null)
     private var allMatches = mutableListOf<SearchMatch>()
     private var currentMatchIndex = -1
+
+    // ── Audio Recording ─────────────────────────────────────────────────
+    private lateinit var btnRecordAudio: ImageButton
+    private lateinit var btnRecordingsList: ImageButton
+    private lateinit var recordingPanel: LinearLayout
+    private lateinit var recordingIndicator: View
+    private lateinit var tvRecordingDuration: TextView
+    private lateinit var tvRecordingStatus: TextView
+    private lateinit var btnStopRecording: ImageButton
+
+    private var audioRecorder: AudioRecorder? = null
+    private var audioPlayer: AudioPlayer? = null
+    private var isRecording = false
+    private var recordingStartTime: Long = 0
+    private val recordingHandler = Handler(Looper.getMainLooper())
+    private val updateDurationRunnable = object : Runnable {
+        override fun run() {
+            if (isRecording) {
+                val elapsed = System.currentTimeMillis() - recordingStartTime
+                val seconds = (elapsed / 1000) % 60
+                val minutes = (elapsed / 1000) / 60
+                tvRecordingDuration.text = String.format("%d:%02d", minutes, seconds)
+                recordingHandler.postDelayed(this, 1000)
+            }
+        }
+    }
+
+    private val audioPermissionLauncher = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            startRecording()
+        } else {
+            Toast.makeText(this, "Microphone permission required for recording", Toast.LENGTH_LONG).show()
+        }
+    }
 
     // ── State ──────────────────────────────────────────────────────────────
     private var activeColor: Int = Color.BLACK
@@ -241,6 +283,31 @@ class MainActivity : AppCompatActivity() {
         btnPrevMatch        = findViewById(R.id.btnPrevMatch)
         tvSearchCount       = findViewById(R.id.tvSearchCount)
 
+        // Audio Recording
+        btnRecordAudio      = findViewById(R.id.btnRecordAudio)
+        btnRecordingsList   = findViewById(R.id.btnRecordingsList)
+        recordingPanel      = findViewById(R.id.recordingPanel)
+        recordingIndicator  = findViewById(R.id.recordingIndicator)
+        tvRecordingDuration = findViewById(R.id.tvRecordingDuration)
+        tvRecordingStatus   = findViewById(R.id.tvRecordingStatus)
+        btnStopRecording    = findViewById(R.id.btnStopRecording)
+
+        // Initialize audio recorder
+        audioRecorder = AudioRecorder(this)
+        audioPlayer = AudioPlayer(this)
+
+        // Set up audio recorder callbacks
+        audioRecorder?.onAmplitudeUpdate = { amplitude ->
+            Log.d("MainActivity", "Recording amplitude: ${amplitude.toInt()} dB")
+        }
+
+        audioRecorder?.onError = { error ->
+            Log.e("MainActivity", "Audio recording error: $error")
+            runOnUiThread {
+                Toast.makeText(this, error, Toast.LENGTH_SHORT).show()
+            }
+        }
+
 
         // Set notebook title from intent
         notebookId = intent.getStringExtra("NOTEBOOK_ID") ?: ""
@@ -332,6 +399,9 @@ class MainActivity : AppCompatActivity() {
         recognitionHandler.removeCallbacks(recognitionRunnable)
         recognitionHandler.removeCallbacks(autosaveRunnable)
         activityScope.cancel()
+        // Cleanup audio
+        audioPlayer?.cleanup()
+        stopPlayback()
         // No longer closing the recognizer here as it is shared
     }
 
@@ -736,7 +806,27 @@ class MainActivity : AppCompatActivity() {
             val item = drawingView.addTextItem("")
             startInlineTextEdit(item)
         }
-        
+
+        // ── Audio Recording ──────────────────────────────────────────────
+        btnRecordAudio.setOnClickListener {
+            if (isRecording) {
+                stopRecording()
+            } else {
+                requestAudioPermissionAndRecord()
+            }
+        }
+
+        btnStopRecording.setOnClickListener {
+            if (isRecording) {
+                stopRecording()
+            }
+        }
+
+        btnRecordingsList.setOnClickListener {
+            showRecordingsListDialog()
+        }
+        // ─────────────────────────────────────────────────────────────────
+
         btnPageUp.setOnClickListener {
             val isNotebook = currentNotebook?.type == NotebookType.NOTEBOOK
             val currentIdx = if (isNotebook) drawingView.getCurrentPageIndex() else currentPageIndex
@@ -2209,5 +2299,304 @@ class MainActivity : AppCompatActivity() {
         
         val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
         imm.hideSoftInputFromWindow(etInlineEdit.windowToken, 0)
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // Audio Recording Functions
+    // ══════════════════════════════════════════════════════════════════════
+
+    private fun requestAudioPermissionAndRecord() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            == PackageManager.PERMISSION_GRANTED
+        ) {
+            startRecording()
+        } else {
+            audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    private fun startRecording() {
+        Log.d("MainActivity", "startRecording called")
+
+        val fileName = "recording_${System.currentTimeMillis()}"
+        val success = audioRecorder?.startRecording(fileName) ?: false
+
+        if (success) {
+            isRecording = true
+            recordingStartTime = System.currentTimeMillis()
+
+            // Show recording panel
+            recordingPanel.visibility = View.VISIBLE
+
+            // Change button color to indicate recording
+            btnRecordAudio.setColorFilter(Color.parseColor("#FF5252"))
+
+            // Start duration timer
+            recordingHandler.post(updateDurationRunnable)
+
+            Log.d("MainActivity", "Recording started: $fileName")
+        } else {
+            Log.e("MainActivity", "Failed to start recording")
+            Toast.makeText(this, "Failed to start recording", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun stopRecording() {
+        Log.d("MainActivity", "stopRecording called")
+
+        // Stop duration timer
+        recordingHandler.removeCallbacks(updateDurationRunnable)
+
+        val recordedFile = audioRecorder?.stopRecording()
+
+        isRecording = false
+
+        // Hide recording panel
+        recordingPanel.visibility = View.GONE
+
+        // Reset button color
+        btnRecordAudio.clearColorFilter()
+
+        if (recordedFile != null && recordedFile.exists()) {
+            val durationMs = audioRecorder?.getDurationMs(recordedFile) ?: 0
+            val durationSec = durationMs / 1000
+
+            Log.d("MainActivity", "Recording saved: ${recordedFile.absolutePath} (${durationSec}s)")
+
+            // Show confirmation with file info
+            AlertDialog.Builder(this)
+                .setTitle("Recording Saved")
+                .setMessage("Duration: ${durationSec}s\nFile: ${recordedFile.name}")
+                .setPositiveButton("OK", null)
+                .setNeutralButton("View in Logs") { _, _ ->
+                    Log.d("MainActivity", "Recorded file: ${recordedFile.absolutePath}")
+                }
+                .show()
+        } else {
+            Log.e("MainActivity", "Recording file is null or doesn't exist")
+            Toast.makeText(this, "Recording failed", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // Recordings List Dialog
+    // ══════════════════════════════════════════════════════════════════════
+
+    private var recordingsDialog: AlertDialog? = null
+    private var recordingsAdapter: RecordingsAdapter? = null
+    private var updateProgressRunnable: Runnable? = null
+
+    private fun showRecordingsListDialog() {
+        val recordings = audioRecorder?.getRecordings()?.toMutableList() ?: mutableListOf()
+
+        if (recordings.isEmpty()) {
+            Toast.makeText(this, "No recordings yet", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        // Create dialog layout
+        val dialogView = layoutInflater.inflate(R.layout.dialog_recordings_list, null)
+
+        val rvRecordings: RecyclerView = dialogView.findViewById(R.id.rvRecordings)
+        val tvEmptyState: TextView = dialogView.findViewById(R.id.tvEmptyState)
+        val tvRecordingCount: TextView = dialogView.findViewById(R.id.tvRecordingCount)
+        val playbackControls: LinearLayout = dialogView.findViewById(R.id.playbackControls)
+        val tvNowPlaying: TextView = dialogView.findViewById(R.id.tvNowPlaying)
+        val tvCurrentTime: TextView = dialogView.findViewById(R.id.tvCurrentTime)
+        val tvTotalTime: TextView = dialogView.findViewById(R.id.tvTotalTime)
+        val seekBar: SeekBar = dialogView.findViewById(R.id.seekBarPlayback)
+        val btnPlayPause: ImageButton = dialogView.findViewById(R.id.btnPlayPause)
+        val btnRewind: ImageButton = dialogView.findViewById(R.id.btnRewind)
+        val btnForward: ImageButton = dialogView.findViewById(R.id.btnForward)
+        val btnDeleteAll: Button = dialogView.findViewById(R.id.btnDeleteAll)
+        val btnClose: Button = dialogView.findViewById(R.id.btnClose)
+
+        tvRecordingCount.text = "${recordings.size} files"
+
+        // Setup RecyclerView
+        recordingsAdapter = RecordingsAdapter(
+            recordings = recordings,
+            audioRecorder = audioRecorder!!,
+            onPlayClicked = { file -> playRecording(file, playbackControls, tvNowPlaying, tvCurrentTime, tvTotalTime, seekBar, btnPlayPause) },
+            onDeleteClicked = { file -> deleteRecording(file, recordingsAdapter!!) }
+        )
+        rvRecordings.layoutManager = LinearLayoutManager(this)
+        rvRecordings.adapter = recordingsAdapter
+
+        // Setup playback controls
+        btnPlayPause.setOnClickListener {
+            audioPlayer?.togglePlayPause()
+            updatePlayPauseButton(btnPlayPause)
+        }
+
+        btnRewind.setOnClickListener {
+            val current = audioPlayer?.currentPosition ?: 0
+            audioPlayer?.seekTo(maxOf(0, current - 10000))
+        }
+
+        btnForward.setOnClickListener {
+            val current = audioPlayer?.currentPosition ?: 0
+            val total = audioPlayer?.duration ?: 0
+            audioPlayer?.seekTo(minOf(total, current + 10000))
+        }
+
+        seekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                if (fromUser) {
+                    audioPlayer?.seekTo(progress)
+                }
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+        })
+
+        // Delete all button
+        btnDeleteAll.visibility = if (recordings.isNotEmpty()) View.VISIBLE else View.GONE
+        btnDeleteAll.setOnClickListener {
+            AlertDialog.Builder(this)
+                .setTitle("Delete All Recordings?")
+                .setMessage("This will permanently delete all ${recordings.size} recordings.")
+                .setPositiveButton("Delete All") { _, _ ->
+                    deleteAllRecordings()
+                    recordingsAdapter?.notifyDataSetChanged()
+                    recordingsDialog?.dismiss()
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
+        }
+
+        // Close button
+        btnClose.setOnClickListener {
+            stopPlayback()
+            recordingsDialog?.dismiss()
+        }
+
+        // Setup audio player callbacks
+        audioPlayer?.onCompletion = {
+            runOnUiThread {
+                playbackControls.visibility = View.GONE
+                recordingsAdapter?.setPlayingFile(null)
+            }
+        }
+
+        audioPlayer?.onError = { error ->
+            runOnUiThread {
+                Toast.makeText(this, error, Toast.LENGTH_SHORT).show()
+                playbackControls.visibility = View.GONE
+            }
+        }
+
+        // Create and show dialog
+        recordingsDialog = AlertDialog.Builder(this)
+            .setView(dialogView)
+            .setOnDismissListener {
+                stopPlayback()
+            }
+            .create()
+
+        recordingsDialog?.show()
+    }
+
+    private fun playRecording(
+        file: File,
+        playbackControls: LinearLayout,
+        tvNowPlaying: TextView,
+        tvCurrentTime: TextView,
+        tvTotalTime: TextView,
+        seekBar: SeekBar,
+        btnPlayPause: ImageButton
+    ) {
+        // Stop current playback if any
+        stopPlayback()
+
+        // Start new playback
+        val success = audioPlayer?.play(file) ?: false
+        if (success) {
+            recordingsAdapter?.setPlayingFile(file)
+
+            // Show playback controls
+            playbackControls.visibility = View.VISIBLE
+            tvNowPlaying.text = file.name
+
+            val totalMs = audioPlayer?.duration ?: 0
+            tvTotalTime.text = audioPlayer?.formatTime(totalMs) ?: "0:00"
+            tvCurrentTime.text = "0:00"
+            seekBar.max = totalMs
+            seekBar.progress = 0
+
+            updatePlayPauseButton(btnPlayPause)
+
+            // Start progress updates
+            startProgressUpdates(tvCurrentTime, seekBar)
+        }
+    }
+
+    private fun updatePlayPauseButton(btnPlayPause: ImageButton) {
+        val isPlaying = audioPlayer?.isPlaying ?: false
+        btnPlayPause.setImageResource(
+            if (isPlaying) android.R.drawable.ic_media_pause
+            else android.R.drawable.ic_media_play
+        )
+    }
+
+    private fun startProgressUpdates(tvCurrentTime: TextView, seekBar: SeekBar) {
+        updateProgressRunnable?.let { recordingHandler.removeCallbacks(it) }
+
+        updateProgressRunnable = object : Runnable {
+            override fun run() {
+                val player = audioPlayer ?: return
+
+                if (player.isPlaying) {
+                    val (current, total) = player.getProgress()
+                    tvCurrentTime.text = player.formatTime(current)
+                    seekBar.progress = current
+
+                    recordingHandler.postDelayed(this, 200)
+                } else {
+                    val (current, total) = player.getProgress()
+                    tvCurrentTime.text = player.formatTime(current)
+                    seekBar.progress = current
+                }
+            }
+        }
+
+        recordingHandler.post(updateProgressRunnable!!)
+    }
+
+    private fun stopPlayback() {
+        updateProgressRunnable?.let { recordingHandler.removeCallbacks(it) }
+        audioPlayer?.stop()
+        recordingsAdapter?.setPlayingFile(null)
+    }
+
+    private fun deleteRecording(file: File, adapter: RecordingsAdapter) {
+        // Stop playback if this file is playing
+        if (audioPlayer?.isPlaying == true) {
+            val (current, _) = audioPlayer?.getProgress() ?: Pair(0, 0)
+            val playerFile = getCurrentPlayingFile()
+            if (playerFile == file) {
+                stopPlayback()
+            }
+        }
+
+        // Delete file
+        if (audioRecorder?.deleteRecording(file) == true) {
+            adapter.removeItem(file)
+            Toast.makeText(this, "Recording deleted", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(this, "Failed to delete", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun deleteAllRecordings() {
+        audioPlayer?.stop()
+        audioRecorder?.getRecordings()?.forEach { file ->
+            audioRecorder?.deleteRecording(file)
+        }
+    }
+
+    private fun getCurrentPlayingFile(): File? {
+        // This would need to be tracked - for now return null
+        return null
     }
 }

@@ -1,0 +1,172 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="16dp"
+    android:background="@drawable/dialog_background">
+
+    <!-- Header -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginBottom="16dp">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Recordings"
+            android:textColor="#FFFFFF"
+            android:textSize="18sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvRecordingCount"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="0 files"
+            android:textColor="#88FFFFFF"
+            android:textSize="14sp" />
+    </LinearLayout>
+
+    <!-- Playback controls (shown when playing) -->
+    <LinearLayout
+        android:id="@+id/playbackControls"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="12dp"
+        android:background="#22FFFFFF"
+        android:visibility="gone"
+        android:layout_marginBottom="12dp">
+
+        <TextView
+            android:id="@+id/tvNowPlaying"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Now Playing"
+            android:textColor="#7C4DFF"
+            android:textSize="12sp"
+            android:layout_marginBottom="8dp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <TextView
+                android:id="@+id/tvCurrentTime"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="0:00"
+                android:textColor="#FFFFFF"
+                android:textSize="12sp" />
+
+            <SeekBar
+                android:id="@+id/seekBarPlayback"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginStart="8dp"
+                android:layout_marginEnd="8dp"
+                android:progressTint="#7C4DFF"
+                android:thumbTint="#7C4DFF" />
+
+            <TextView
+                android:id="@+id/tvTotalTime"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="0:00"
+                android:textColor="#FFFFFF"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center"
+            android:layout_marginTop="8dp">
+
+            <ImageButton
+                android:id="@+id/btnRewind"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:src="@drawable/ic_media_rewind"
+                android:background="@drawable/icon_btn_bg"
+                android:contentDescription="Rewind"
+                android:tint="#FFFFFF" />
+
+            <ImageButton
+                android:id="@+id/btnPlayPause"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:src="@android:drawable/ic_media_play"
+                android:background="@drawable/icon_btn_bg"
+                android:contentDescription="Play/Pause"
+                android:tint="#7C4DFF"
+                android:layout_marginStart="16dp"
+                android:layout_marginEnd="16dp" />
+
+            <ImageButton
+                android:id="@+id/btnForward"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:src="@drawable/ic_media_ff"
+                android:background="@drawable/icon_btn_bg"
+                android:contentDescription="Forward"
+                android:tint="#FFFFFF" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- Recordings list -->
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/rvRecordings"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:maxHeight="300dp" />
+
+    <!-- Empty state -->
+    <TextView
+        android:id="@+id/tvEmptyState"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:padding="32dp"
+        android:text="No recordings yet.\nTap the mic button to record."
+        android:textColor="#88FFFFFF"
+        android:textSize="14sp"
+        android:visibility="gone" />
+
+    <!-- Action buttons -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="end"
+        android:layout_marginTop="16dp">
+
+        <Button
+            android:id="@+id/btnDeleteAll"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Delete All"
+            android:textColor="#FF5252"
+            style="?android:attr/borderlessButtonStyle"
+            android:visibility="gone" />
+
+        <Button
+            android:id="@+id/btnClose"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Close"
+            android:textColor="#FFFFFF"
+            style="?android:attr/borderlessButtonStyle" />
+    </LinearLayout>
+
+</LinearLayout>

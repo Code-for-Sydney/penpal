@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:gravity="center_vertical"
+    android:padding="12dp"
+    android:background="?android:attr/selectableItemBackground">
+
+    <!-- Play button -->
+    <ImageButton
+        android:id="@+id/btnPlay"
+        android:layout_width="36dp"
+        android:layout_height="36dp"
+        android:src="@drawable/ic_play"
+        android:background="@drawable/icon_btn_bg"
+        android:contentDescription="Play"
+        android:tint="#7C4DFF" />
+
+    <!-- Recording info -->
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:orientation="vertical"
+        android:layout_marginStart="12dp">
+
+        <TextView
+            android:id="@+id/tvFileName"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="recording_xxx.wav"
+            android:textColor="#FFFFFF"
+            android:textSize="14sp"
+            android:maxLines="1"
+            android:ellipsize="middle" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginTop="2dp">
+
+            <TextView
+                android:id="@+id/tvDuration"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="0:00"
+                android:textColor="#88FFFFFF"
+                android:textSize="12sp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text=" • "
+                android:textColor="#88FFFFFF"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/tvDate"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="May 3, 9:30 PM"
+                android:textColor="#88FFFFFF"
+                android:textSize="12sp" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- Playing indicator -->
+    <ImageView
+        android:id="@+id/ivPlaying"
+        android:layout_width="20dp"
+        android:layout_height="20dp"
+        android:src="@drawable/ic_play"
+        android:tint="#7C4DFF"
+        android:visibility="gone"
+        android:contentDescription="Now playing" />
+
+    <!-- Delete button -->
+    <ImageButton
+        android:id="@+id/btnDelete"
+        android:layout_width="32dp"
+        android:layout_height="32dp"
+        android:src="@drawable/ic_delete"
+        android:background="?android:attr/selectableItemBackgroundBorderless"
+        android:contentDescription="Delete"
+        android:tint="#FF5252"
+        android:layout_marginStart="8dp" />
+
+</LinearLayout>
