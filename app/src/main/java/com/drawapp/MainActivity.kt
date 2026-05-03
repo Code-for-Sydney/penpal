@@ -839,7 +839,7 @@ class MainActivity : AppCompatActivity() {
         }
         
         // Ensure Toggle button reflects toolbar visibility
-        btnToggleTools.setImageResource(R.drawable.ic_gear)
+        btnToggleTools.setImageResource(R.drawable.ic_hammer)
         if (toolToolbar.visibility == View.VISIBLE) {
             btnToggleTools.alpha = 1.0f
             btnToggleTools.setColorFilter(Color.WHITE)
