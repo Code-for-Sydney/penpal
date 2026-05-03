@@ -47,7 +47,17 @@ penpal/
 │           │   ├── NotebookSelectionActivity.kt # Home screen
 │           │   ├── NotebookManager.kt        # Notebook persistence
 │           │   ├── Notebook.kt               # Notebook data model
-│           │   ├── HandwritingRecognizer.kt   # Gemma AI wrapper
+│           │   ├── HandwritingRecognizer.kt   # Gemma AI wrapper (local)
+│           │   ├── GemmaServerClient.kt     # Remote Gemma server client
+│           │   ├── GemmaTranscriber.kt      # Transcription via remote Gemma
+│           │   ├── InferenceService.kt      # Background inference service
+│           │   ├── InferenceEngineManager.kt # Multi-engine inference manager
+│           │   ├── LlmInferenceEngine.kt    # Local inference engine
+│           │   ├── ProcessingQueueManager.kt  # Batch processing queue
+│           │   ├── AudioRecorder.kt          # Audio recording with amplitude
+│           │   ├── AudioPlayer.kt            # Audio playback with seek
+│           │   ├── AudioChunker.kt           # Audio chunking for streaming
+│           │   ├── RecordingsAdapter.kt      # Audio recordings list adapter
 │           │   ├── ModelManager.kt            # Model download management
 │           │   ├── ModelDownloadHelper.kt     # Download UI helpers
 │           │   ├── ModelDownloadReceiver.kt  # Download broadcast receiver
@@ -66,6 +76,7 @@ penpal/
 │               ├── values/                     # Strings, colors, themes
 │               └── mipmap/                     # App icons
 │
+├── docs/                              # Documentation files
 ├── build.gradle                     # Root build config
 ├── settings.gradle                  # Project settings
 ├── gradle.properties               # Gradle configuration

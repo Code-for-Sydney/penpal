@@ -7,12 +7,15 @@ A feature-rich Android drawing and notebook application with on-device AI handwr
 Penpal transforms your device into a smart digital notebook with the following capabilities:
 
 - **Handwriting Recognition**: On-device OCR using Gemma 4 E2B model via LiteRT-LM
+- **Local & Remote Inference**: Support for both local Gemma inference and remote server-based inference
 - **Multi-page Notebooks**: Create notebooks with unlimited pages that scroll vertically
 - **Whiteboard Mode**: Infinite canvas for brainstorming and sketching
 - **PDF Import**: Import PDF documents and annotate them
 - **Lasso Selection**: Select and manipulate groups of drawn elements
 - **Search**: Full-text search across all notebook pages including digital text from PDFs
 - **Export**: Export drawings to PDF, SVG, or PNG formats
+- **Text Boxes**: Insert explicit text elements anywhere on the canvas
+- **Audio Processing**: Audio recording and playback for evaluation sessions
 
 ## Screenshots
 
@@ -81,10 +84,11 @@ Alternatively, download from Kaggle with API credentials.
 
 ### Drawing
 
+- **Select**: Single item selection and editing (default tool)
 - **Brush**: Free-form drawing with adjustable size and color
 - **Eraser**: Remove strokes
 - **Lasso**: Select multiple items for manipulation
-- **Select**: Single item selection and editing
+- **Text**: Insert text boxes
 
 ### AI Recognition
 

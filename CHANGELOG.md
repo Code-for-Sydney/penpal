@@ -4,28 +4,45 @@ All notable changes to the Penpal project.
 
 ## [Unreleased]
 
-### Added
-- Audio Evaluation System with speech-to-text transcription
-- Evaluation panel UI with recording controls and score display
-- Question types: SHORT_ANSWER, PRONUNCIATION, READING, LISTENING
-- Session management with JSON/CSV export
-- Audio amplitude visualization during recording
-- Color-coded feedback scores (green ≥70%, orange ≥50%, red <50%)
-
 ### Planned
 - Chat system with context injection
 - Math tools (WebSearchTool, MathTool, ToolSet)
 - Math Lab UI with symbol keyboard
 - C++ Math engine integration
 
-### Components Added
-- `AudioEvaluationManager.kt` - Session orchestration
-- `EvaluationEngine.kt` - Similarity scoring
-- `EvaluationModels.kt` - Data classes
-- `AudioRecorder.kt` - Recording with amplitude monitoring
-- `SpeechToText.kt` - Transcription via Gemma
-
 ## Version History
+
+### v1.1.0 - Audio Processing & Server Infrastructure
+
+#### New Components
+- **GemmaServerClient** - Communication with Gemma server running on secondary device
+- **InferenceService** - Background service for inference operations
+- **InferenceEngineManager** - Manages multiple inference engine types
+- **LlmInferenceEngine** - Local Gemma inference engine
+- **ProcessingQueueManager** - Queue-based batch processing system
+- **AudioPlayer** - Audio playback with seek functionality
+- **AudioRecorder** - Recording with amplitude monitoring
+- **AudioChunker** - Audio chunking for streaming transcription
+- **GemmaTranscriber** - Transcription via remote Gemma server
+- **RecordingsAdapter** - RecyclerView adapter for audio recordings list
+
+#### Audio Evaluation System
+- Session management with question types: SHORT_ANSWER, PRONUNCIATION, READING, LISTENING
+- Evaluation panel UI with recording controls and score display
+- Audio amplitude visualization during recording
+- Color-coded feedback scores (green ≥70%, orange ≥50%, red <50%)
+- Session export to JSON/CSV formats
+
+#### UI Improvements
+- Toolbar visible by default with clear draw/select mode switching
+- Start in selection mode rather than brush mode
+- Added text boxes for explicit text insertion
+- Debug options (hidden by default): touch areas visualization
+- Updated tool icons (hammer, lasso, etc.)
+
+#### Bug Fixes
+- Fixed zooming out issue (zoom constraints)
+- Text button working better for images and PDFs
 
 ### v1.0.0 - Initial Release
 
