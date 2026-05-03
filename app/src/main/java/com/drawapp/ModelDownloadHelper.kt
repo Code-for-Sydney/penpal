@@ -5,8 +5,6 @@ import android.app.Dialog
 import android.content.Intent
 import android.graphics.Color
 import android.net.Uri
-import android.os.Handler
-import android.os.Looper
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
@@ -14,9 +12,12 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
+import kotlinx.coroutines.*
 import java.io.File
 
 object ModelDownloadHelper {
+
+    private val pollScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     fun showDownloadDialog(
         activity: Activity,
@@ -59,42 +60,42 @@ object ModelDownloadHelper {
             .create()
         dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
 
-        val downloadPollHandler = Handler(Looper.getMainLooper())
-        var downloadPollRunnable: Runnable? = null
+        var pollJob: Job? = null
         var currentDownloadId = -1L
 
-        // ── Polling runnable ────────────────────────────────────────────
-        downloadPollRunnable = Runnable {
-            val dlId = if (currentDownloadId != -1L) currentDownloadId else ModelManager.savedDownloadId(activity)
-            if (dlId == -1L) return@Runnable
-            
-            val status = ModelManager.queryDownload(activity, dlId)
+        fun pollDownload() {
+            pollJob = pollScope.launch {
+                val dlId = if (currentDownloadId != -1L) currentDownloadId else ModelManager.savedDownloadId(activity)
+                if (dlId == -1L) return@launch
 
-            when (status.state) {
-                ModelManager.DownloadState.RUNNING,
-                ModelManager.DownloadState.PAUSED -> {
-                    progressBar.progress = status.progressPercent
-                    progressLabel.text   = status.progressDisplay
-                    progressPct.text     = "${status.progressPercent}%"
-                    // Poll again in 1s
-                    downloadPollHandler.postDelayed(downloadPollRunnable!!, 1000)
-                }
-                ModelManager.DownloadState.DONE -> {
-                    val path = ModelManager.modelFile(activity).absolutePath
-                    if (File(path).exists()) {
-                        ModelManager.saveModelPath(activity, path)
-                        dialog.dismiss()
-                        onModelLoaded(path)
+                val status = ModelManager.queryDownload(activity, dlId)
+
+                when (status.state) {
+                    ModelManager.DownloadState.RUNNING,
+                    ModelManager.DownloadState.PAUSED -> {
+                        progressBar.progress = status.progressPercent
+                        progressLabel.text   = status.progressDisplay
+                        progressPct.text     = "${status.progressPercent}%"
+                        delay(1000)
+                        pollDownload()
                     }
+                    ModelManager.DownloadState.DONE -> {
+                        val path = ModelManager.modelFile(activity).absolutePath
+                        if (File(path).exists()) {
+                            ModelManager.saveModelPath(activity, path)
+                            dialog.dismiss()
+                            onModelLoaded(path)
+                        }
+                    }
+                    ModelManager.DownloadState.FAILED -> {
+                        progressArea.visibility = View.GONE
+                        readyArea.visibility    = View.VISIBLE
+                        errorText.visibility    = View.VISIBLE
+                        errorText.text          =
+                            "Download failed (reason ${status.reason}). Check your internet connection and try again."
+                    }
+                    else -> {}
                 }
-                ModelManager.DownloadState.FAILED -> {
-                    progressArea.visibility = View.GONE
-                    readyArea.visibility    = View.VISIBLE
-                    errorText.visibility    = View.VISIBLE
-                    errorText.text          =
-                        "Download failed (reason ${status.reason}). Check your internet connection and try again."
-                }
-                else -> {}
             }
         }
 
@@ -104,7 +105,7 @@ object ModelDownloadHelper {
             progressBar.progress    = 0
             progressLabel.text      = "Connecting…"
             progressPct.text        = "0%"
-            downloadPollHandler.postDelayed(downloadPollRunnable!!, 1000)
+            pollDownload()
         }
 
         // ── If already downloading, jump straight to progress view ──────
@@ -126,7 +127,7 @@ object ModelDownloadHelper {
             errorText.visibility = View.GONE
             btnStart.isEnabled = false
             btnStart.text = "Connecting..."
-            
+
             ModelManager.startDownloadHFAsync(
                 context = activity,
                 hfToken = token,
@@ -147,16 +148,16 @@ object ModelDownloadHelper {
         }
 
         btnSkip.setOnClickListener {
+            pollJob?.cancel()
             dialog.dismiss()
             onDialogDismissed()
             showManualPathDialog(activity, onModelLoaded, onCancel = {
-                // Show download dialog again if manual path cancelled
                 showDownloadDialog(activity, false, onDownloadIdAcquired, onDialogDismissed, onModelLoaded)
             })
         }
 
         dialog.setOnDismissListener {
-            downloadPollRunnable?.let { downloadPollHandler.removeCallbacks(it) }
+            pollJob?.cancel()
         }
 
         dialog.show()

@@ -91,7 +91,7 @@ class NotebookSelectionActivity : AppCompatActivity() {
         val existing = ModelManager.findExistingModel(this)
         if (existing != null) {
             loadingOverlay.visibility = View.VISIBLE
-            recognizer.load(existing)
+            recognizer.load(existing, HandwritingRecognizer.InferenceConfig())
             return
         }
 
@@ -109,7 +109,7 @@ class NotebookSelectionActivity : AppCompatActivity() {
                     if (File(path).exists()) {
                         ModelManager.saveModelPath(this, path)
                         loadingOverlay.visibility = View.VISIBLE
-                        recognizer.load(path)
+                        recognizer.load(path, HandwritingRecognizer.InferenceConfig())
                         return
                     }
                 }
@@ -129,7 +129,7 @@ class NotebookSelectionActivity : AppCompatActivity() {
             onDialogDismissed = { downloadDialog = null },
             onModelLoaded = { path ->
                 loadingOverlay.visibility = View.VISIBLE
-                HandwritingRecognizer.getInstance(this).load(path)
+                HandwritingRecognizer.getInstance(this).load(path, HandwritingRecognizer.InferenceConfig())
             }
         )
     }

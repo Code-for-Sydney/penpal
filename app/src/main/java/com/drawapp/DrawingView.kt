@@ -7,6 +7,7 @@ import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.view.View
 import java.io.ByteArrayOutputStream
+import java.io.File
 import android.util.Base64
 import kotlin.math.abs
 import kotlin.math.atan2
@@ -222,6 +223,8 @@ class DrawingView @JvmOverloads constructor(
         var prompt: String = "",
         var result: String = "",
         var isShowingResult: Boolean = false,
+        var audioFilePath: String? = null,  // Path to attached audio file
+        var audioTranscription: String? = null,  // Cached transcription
         val matrix: Matrix = Matrix(),
         var width: Float = 1200f,
         var height: Float = 600f
@@ -246,6 +249,8 @@ class DrawingView @JvmOverloads constructor(
                 isLocked = isLocked
             )
         }
+
+        fun hasAudio(): Boolean = !audioFilePath.isNullOrEmpty()
     }
 
     data class TextItem(
@@ -2519,7 +2524,7 @@ class DrawingView @JvmOverloads constructor(
                     val matrix = Matrix()
                     matrix.setValues(data.matrix)
                     matrix.postTranslate(0f, dy)
-                    PromptItem(data.prompt, data.result, data.isShowingResult, matrix, data.width, data.height)
+                    PromptItem(data.prompt, data.result, data.isShowingResult, null, null, matrix, data.width, data.height)
                 }
                 is TextData -> {
                     val matrix = Matrix()
@@ -3131,7 +3136,7 @@ class DrawingView @JvmOverloads constructor(
                 is PromptData -> {
                     val matrix = Matrix()
                     matrix.setValues(data.matrix)
-                    val prompt = PromptItem(data.prompt, data.result, data.isShowingResult, matrix, data.width, data.height)
+                    val prompt = PromptItem(data.prompt, data.result, data.isShowingResult, null, null, matrix, data.width, data.height)
                     prompt.isLocked = data.isLocked
                     drawItems.add(prompt)
                 }

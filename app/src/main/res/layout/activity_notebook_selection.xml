@@ -59,10 +59,8 @@
         android:id="@+id/loadingOverlay"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:background="#1C1C1E"
+        android:background="#CC1C1C1E"
         android:visibility="gone"
-        android:clickable="true"
-        android:focusable="true"
         android:elevation="10dp">
 
         <LinearLayout

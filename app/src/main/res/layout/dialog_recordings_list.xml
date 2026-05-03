@@ -66,6 +66,101 @@
         android:layout_marginBottom="8dp"
         android:visibility="gone" />
 
+    <!-- Model Status Section -->
+    <LinearLayout
+        android:id="@+id/modelStatusArea"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="12dp"
+        android:background="#11FFFFFF"
+        android:layout_marginBottom="8dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Local Model"
+                android:textColor="#FFFFFF"
+                android:textSize="14sp" />
+
+            <TextView
+                android:id="@+id/tvModelStatus"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Not downloaded"
+                android:textColor="#88FFFFFF"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <ProgressBar
+            android:id="@+id/modelProgressBar"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:progressTint="#7C4DFF"
+            android:max="100"
+            android:layout_marginTop="8dp"
+            android:visibility="gone" />
+
+        <Button
+            android:id="@+id/btnDownloadModel"
+            android:layout_width="match_parent"
+            android:layout_height="40dp"
+            android:layout_marginTop="8dp"
+            android:text="Download Model (~1.5 GB)"
+            android:textColor="#FFFFFF"
+            android:textSize="13sp"
+            android:background="@drawable/btn_download"
+            android:visibility="gone" />
+    </LinearLayout>
+
+    <!-- Processing Queue Status -->
+    <LinearLayout
+        android:id="@+id/processingQueueStatus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="#22FF5252"
+        android:padding="8dp"
+        android:layout_marginBottom="8dp"
+        android:visibility="gone">
+
+        <ProgressBar
+            android:id="@+id/progressQueue"
+            android:layout_width="20dp"
+            android:layout_height="20dp"
+            android:indeterminate="true"
+            android:layout_marginEnd="8dp" />
+
+        <TextView
+            android:id="@+id/tvQueueStatus"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Processing..."
+            android:textColor="#FFFFFF"
+            android:textSize="12sp" />
+
+        <Button
+            android:id="@+id/btnQueueForLater"
+            android:layout_width="wrap_content"
+            android:layout_height="28dp"
+            android:text="Queue"
+            android:textSize="11sp"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:background="@drawable/icon_btn_bg"
+            android:textColor="#FFFFFF" />
+    </LinearLayout>
+
     <!-- Prompt Input -->
     <EditText
         android:id="@+id/etPrompt"
@@ -79,7 +174,49 @@
         android:padding="10dp"
         android:maxLines="2"
         android:inputType="textMultiLine"
-        android:layout_marginBottom="12dp" />
+        android:layout_marginBottom="8dp" />
+
+    <!-- Processing Mode Toggle -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginBottom="12dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Process:"
+            android:textColor="#88FFFFFF"
+            android:textSize="12sp" />
+
+        <RadioGroup
+            android:id="@+id/rgProcessingMode"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginStart="8dp">
+
+            <RadioButton
+                android:id="@+id/rbNow"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Now"
+                android:textColor="#FFFFFF"
+                android:textSize="12sp"
+                android:checked="true" />
+
+            <RadioButton
+                android:id="@+id/rbQueue"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Queue (Later)"
+                android:textColor="#FFFFFF"
+                android:textSize="12sp"
+                android:layout_marginStart="12dp" />
+        </RadioGroup>
+    </LinearLayout>
 
     <!-- Playback controls (shown when playing) -->
     <LinearLayout

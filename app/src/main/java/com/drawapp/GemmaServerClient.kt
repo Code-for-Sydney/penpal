@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import android.util.Log
 import com.google.gson.Gson
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Semaphore
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -375,42 +376,67 @@ class GemmaServerClient(private val context: Context) {
             )
         }
 
-        // Process chunks in parallel using async
-        val deferredResults = chunks.mapIndexed { index, chunk ->
-            async(Dispatchers.IO) {
-                try {
-                    Log.d(TAG, "Processing chunk $index in parallel")
-                    val audioData = chunk.file.readBytes()
-                    val result = sendTranscribeRequest(
-                        audioData,
-                        customPrompt,
-                        promptStyle,
-                        sourceLang,
-                        targetLang
-                    )
-                    ChunkTranscription(
-                        chunkIndex = index,
-                        startTimeMs = chunk.startTimeMs,
-                        endTimeMs = chunk.endTimeMs,
-                        transcription = result.transcription,
-                        success = result.success
-                    )
-                } catch (e: Exception) {
-                    Log.e(TAG, "Chunk $index failed: ${e.message}")
-                    ChunkTranscription(
-                        chunkIndex = index,
-                        startTimeMs = chunk.startTimeMs,
-                        endTimeMs = chunk.endTimeMs,
-                        transcription = "[Error: ${e.message}]",
-                        success = false
-                    )
-                }
-            }
-        }
+        // Use semaphore to limit concurrency
+        val semaphore = Semaphore(maxConcurrency)
+        val lock = kotlinx.coroutines.sync.Mutex()
 
-        // Wait for all to complete
-        val results: List<ChunkTranscription> = runBlocking {
-            deferredResults.awaitAll()
+        // Process chunks with semaphore-limited concurrency
+        val results = mutableListOf<ChunkTranscription>()
+
+        chunks.forEachIndexed { index, chunk ->
+            semaphore.acquire()
+            try {
+                val result = async(Dispatchers.IO) {
+                    try {
+                        Log.d(TAG, "Processing chunk $index in parallel")
+                        val audioData = chunk.file.readBytes()
+                        val result = sendTranscribeRequest(
+                            audioData,
+                            customPrompt,
+                            promptStyle,
+                            sourceLang,
+                            targetLang
+                        )
+                        ChunkTranscription(
+                            chunkIndex = index,
+                            startTimeMs = chunk.startTimeMs,
+                            endTimeMs = chunk.endTimeMs,
+                            transcription = result.transcription,
+                            success = result.success
+                        )
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Chunk $index failed: ${e.message}")
+                        ChunkTranscription(
+                            chunkIndex = index,
+                            startTimeMs = chunk.startTimeMs,
+                            endTimeMs = chunk.endTimeMs,
+                            transcription = "[Error: ${e.message}]",
+                            success = false
+                        )
+                    } finally {
+                        semaphore.release()
+                    }
+                }.await()
+
+                lock.lock()
+                results.add(result)
+                lock.unlock()
+            } catch (e: CancellationException) {
+                semaphore.release()
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to process chunk $index: ${e.message}")
+                semaphore.release()
+                lock.lock()
+                results.add(ChunkTranscription(
+                    chunkIndex = index,
+                    startTimeMs = chunk.startTimeMs,
+                    endTimeMs = chunk.endTimeMs,
+                    transcription = "[Error: ${e.message}]",
+                    success = false
+                ))
+                lock.unlock()
+            }
         }
 
         val hasError = results.any { r -> !r.success }

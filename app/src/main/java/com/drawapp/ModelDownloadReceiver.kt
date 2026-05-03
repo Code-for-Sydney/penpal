@@ -25,7 +25,7 @@ class ModelDownloadReceiver : BroadcastReceiver() {
             ModelManager.saveModelPath(context, modelPath)
             
             // Trigger global engine initialization
-            HandwritingRecognizer.getInstance(context).load(modelPath)
+            HandwritingRecognizer.getInstance(context).load(modelPath, HandwritingRecognizer.InferenceConfig())
 
             // Notify any running activity via a local broadcast
             val notify = Intent(ACTION_MODEL_READY).putExtra(EXTRA_MODEL_PATH, modelPath)

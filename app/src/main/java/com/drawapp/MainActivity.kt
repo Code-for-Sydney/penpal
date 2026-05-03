@@ -14,6 +14,7 @@ import android.widget.*
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.activity.result.contract.ActivityResultContracts
 import java.io.File
 import java.io.FileOutputStream
 import java.util.*
@@ -24,6 +25,8 @@ import org.json.JSONObject
 import android.view.inputmethod.InputMethodManager
 import android.view.inputmethod.EditorInfo
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.graphics.Matrix
 import android.util.Log
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -96,6 +99,8 @@ class MainActivity : AppCompatActivity() {
     private var audioRecorder: AudioRecorder? = null
     private var audioPlayer: AudioPlayer? = null
     private var gemmaServer: GemmaServerClient? = null
+    private var gemmaTranscriber: GemmaTranscriber? = null
+    private var processingQueue: ProcessingQueueManager? = null
     private var isRecording = false
     private var recordingStartTime: Long = 0
     private val recordingHandler = Handler(Looper.getMainLooper())
@@ -293,10 +298,15 @@ class MainActivity : AppCompatActivity() {
         tvRecordingStatus   = findViewById(R.id.tvRecordingStatus)
         btnStopRecording    = findViewById(R.id.btnStopRecording)
 
-        // Initialize audio recorder
+        // Initialize audio recorder and use shared Gemma server from application
         audioRecorder = AudioRecorder(this)
         audioPlayer = AudioPlayer(this)
-        gemmaServer = GemmaServerClient(this)
+        gemmaServer = (application as PenpalApplication).gemmaServer
+        gemmaTranscriber = GemmaTranscriber.getInstance(this)
+        processingQueue = ProcessingQueueManager.getInstance(this)
+
+        // Start processing queue when app starts
+        processingQueue?.startProcessing()
 
         // Set up audio recorder callbacks
         audioRecorder?.onAmplitudeUpdate = { amplitude ->
@@ -462,6 +472,7 @@ class MainActivity : AppCompatActivity() {
         setRecognitionState(RecognitionState.LOADING)
         recognizer.load(
             modelPath = path,
+            config = HandwritingRecognizer.InferenceConfig(),
             onReady = {
                 setRecognitionState(RecognitionState.IDLE)
             },
@@ -507,7 +518,7 @@ class MainActivity : AppCompatActivity() {
         var accumulated = ""
         recognizer.recognize(
             bitmap = bitmap,
-            prompt = prompt,
+            config = HandwritingRecognizer.InferenceConfig(prompt = prompt),
             onPartialResult = { partial ->
                 accumulated += partial
             },
@@ -583,14 +594,14 @@ class MainActivity : AppCompatActivity() {
         
         recognizer.recognize(
             bitmap = bitmap,
-            onPartialResult = { partial ->
+            onPartialResult = { partial: String ->
                 word.text += partial
                 drawingView.invalidate()
             },
             onDone = {
                 scheduleAutosave()
             },
-            onError = {
+            onError = { _: String ->
                 // Ignore errors on background update
             }
         )
@@ -1915,7 +1926,7 @@ class MainActivity : AppCompatActivity() {
 
         recognizer.recognize(
             bitmap = bitmap,
-            prompt = prompt,
+            config = HandwritingRecognizer.InferenceConfig(prompt = prompt),
             isBackground = true,
             onPartialResult = { partial ->
                 if (imageItem.text.contains(partial.trim())) return@recognize
@@ -2095,15 +2106,49 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showPromptEditDialog(item: DrawingView.PromptItem) {
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(40, 20, 40, 20)
+        }
+        
         val editText = EditText(this).apply {
             setTextColor(Color.WHITE)
             setText(item.prompt)
             setSelection(item.prompt.length)
+            hint = "Ask a question or describe what you want..."
         }
+        
+        val audioButton = Button(this).apply {
+            text = if (item.hasAudio()) "Attached: ${File(item.audioFilePath!!).name}\nTap to change" else "Attach Recording"
+            setOnClickListener {
+                showRecordingsListForAttachment(item) { selectedFile ->
+                    item.audioFilePath = selectedFile.absolutePath
+                    item.audioTranscription = null  // Clear cached transcription
+                    text = "Attached: ${selectedFile.name}\nTap to change"
+                }
+            }
+        }
+        
+        var clearButton: Button? = null
+        if (item.hasAudio()) {
+            clearButton = Button(this).apply {
+                text = "Remove Audio"
+                setOnClickListener {
+                    item.audioFilePath = null
+                    item.audioTranscription = null
+                    audioButton.text = "Attach Recording"
+                    clearButton?.let { layout.removeView(it) }
+                }
+            }
+            layout.addView(clearButton)
+        }
+        
+        layout.addView(editText)
+        layout.addView(audioButton)
         
         AlertDialog.Builder(this, R.style.DarkDialogTheme)
             .setTitle("Edit Prompt")
-            .setView(editText)
+            .setView(layout)
             .setPositiveButton("Ask Gemma") { _, _ ->
                 item.prompt = editText.text.toString()
                 item.result = ""
@@ -2140,7 +2185,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun triggerPromptGemma(item: DrawingView.PromptItem) {
+        Log.d("MainActivity", "═══════════════════════════════════════════")
+        Log.d("MainActivity", "triggerPromptGemma() called")
+        Log.d("MainActivity", "  item.prompt: '${item.prompt}'")
+        Log.d("MainActivity", "  item.hasAudio(): ${item.hasAudio()}")
+        Log.d("MainActivity", "  item.audioFilePath: ${item.audioFilePath}")
+        Log.d("MainActivity", "  recognizer.isReady: ${recognizer.isReady}")
+        
         if (!recognizer.isReady) {
+            Log.e("MainActivity", "  ERROR: Gemma is not ready")
             Toast.makeText(this, "Gemma is not ready", Toast.LENGTH_SHORT).show()
             return
         }
@@ -2148,18 +2201,77 @@ class MainActivity : AppCompatActivity() {
         val contextText = collectAllNotebookText(excludeItem = item)
         val userPrompt = item.prompt
         
-        val fullPrompt = """
+        // If item has audio, transcribe it first
+        var fullPrompt = ""
+        
+        if (item.hasAudio()) {
+            Log.d("MainActivity", "  Processing audio file: ${item.audioFilePath}")
+            val audioFile: File? = item.audioFilePath?.let { File(it) }
+            if (audioFile != null && audioFile.exists()) {
+                Log.d("MainActivity", "  Audio file exists, size: ${audioFile.length()} bytes")
+                // Use GemmaTranscriber to process audio
+                runBlocking {
+                    try {
+                        val transcriber = GemmaTranscriber.getInstance(this@MainActivity)
+                        Log.d("MainActivity", "  Using GemmaTranscriber for audio transcription")
+                        
+                        // Check if we can use local engine or need server
+                        if (transcriber.isLocalEngineReady()) {
+                            Log.d("MainActivity", "  Using local inference engine")
+                            val audioResult = transcriber.transcribe(audioFile, useLocalInference = true)
+                            Log.d("MainActivity", "  Audio transcription result: success=${audioResult.success}")
+                            Log.d("MainActivity", "  Transcription: '${audioResult.transcription}'")
+                            if (audioResult.success) {
+                                item.audioTranscription = audioResult.transcription
+                            } else {
+                                Log.e("MainActivity", "  Audio transcription failed: ${audioResult.errorMessage}")
+                            }
+                        } else if (transcriber.isConfigured()) {
+                            Log.d("MainActivity", "  Using remote server: ${transcriber.getServerUrl()}")
+                            val audioResult = transcriber.transcribe(audioFile, useLocalInference = false)
+                            Log.d("MainActivity", "  Server transcription result: success=${audioResult.success}")
+                            if (audioResult.success) {
+                                item.audioTranscription = audioResult.transcription
+                            } else {
+                                Log.e("MainActivity", "  Server transcription failed: ${audioResult.errorMessage}")
+                            }
+                        } else {
+                            Log.e("MainActivity", "  No inference backend available (neither local engine ready nor server configured)")
+                            item.result = "Error: No inference backend available.\nPlease configure Gemma server in settings or download a local model."
+                            drawingView.invalidate()
+                            return@runBlocking
+                        }
+                    } catch (e: Exception) {
+                        Log.e("MainActivity", "  Exception during audio processing: ${e.message}", e)
+                        item.result = "Error processing audio: ${e.message}"
+                        drawingView.invalidate()
+                        return@runBlocking
+                    }
+                }
+            } else {
+                Log.e("MainActivity", "  Audio file does not exist!")
+            }
+        }
+        
+        // Build the full prompt with audio transcription if available
+        val audioContext = if (item.audioTranscription != null) {
+            "\n\nThe user also provided audio which was transcribed as:\n\"${item.audioTranscription}\""
+        } else ""
+        
+        fullPrompt = """
             You are a helpful AI assistant called Gemma. 
             The user is working on a notebook. Below is the text from their notebook:
             ---
             $contextText
-            ---
+            ---$audioContext
             The user's question or prompt is: $userPrompt
             
             Provide a helpful, concise response that fits in a small text box. 
             Keep it to 3-5 sentences maximum.
         """.trimIndent()
 
+        Log.d("MainActivity", "  Full prompt length: ${fullPrompt.length} chars")
+        
         item.result = "Gemma is thinking..."
         drawingView.invalidate()
         
@@ -2172,7 +2284,7 @@ class MainActivity : AppCompatActivity() {
 
         recognizer.recognize(
             bitmap = bitmap,
-            prompt = fullPrompt,
+            config = HandwritingRecognizer.InferenceConfig(prompt = fullPrompt),
             onPartialResult = { partial ->
                 accumulated += partial
                 item.result = accumulated
@@ -2416,14 +2528,44 @@ class MainActivity : AppCompatActivity() {
         val btnSettings: ImageButton = dialogView.findViewById(R.id.btnSettings)
         val etPrompt: EditText = dialogView.findViewById(R.id.etPrompt)
         val tvServerUrl: TextView = dialogView.findViewById(R.id.tvServerUrl)
+        val processingQueueStatus: LinearLayout = dialogView.findViewById(R.id.processingQueueStatus)
+        val tvQueueStatus: TextView = dialogView.findViewById(R.id.tvQueueStatus)
+        val progressQueue: ProgressBar = dialogView.findViewById(R.id.progressQueue)
+        val btnQueueForLater: Button = dialogView.findViewById(R.id.btnQueueForLater)
+        val rbNow: RadioButton = dialogView.findViewById(R.id.rbNow)
+        val rbQueue: RadioButton = dialogView.findViewById(R.id.rbQueue)
+        val rgProcessingMode: RadioGroup = dialogView.findViewById(R.id.rgProcessingMode)
 
         tvRecordingCount.text = "${recordings.size} files"
 
-        // Show server URL status
+        // Show server URL and inference mode status
         val currentUrl = gemmaServer?.getBaseUrl() ?: ""
+        val engineMode = if (gemmaTranscriber?.isUsingLocalEngine() == true) "Local" else "Server"
         if (currentUrl.isNotBlank()) {
             tvServerUrl.visibility = View.VISIBLE
-            tvServerUrl.text = "Server: ${gemmaServer?.getBaseUrl() ?: "Not configured"}"
+            tvServerUrl.text = "$engineMode | $currentUrl"
+        } else {
+            tvServerUrl.text = "$engineMode inference"
+tvServerUrl.visibility = View.VISIBLE
+        }
+
+        // Setup model status
+        val modelStatusArea: LinearLayout = dialogView.findViewById(R.id.modelStatusArea)
+        val tvModelStatus: TextView = dialogView.findViewById(R.id.tvModelStatus)
+        val modelProgressBar: ProgressBar = dialogView.findViewById(R.id.modelProgressBar)
+        val btnDownloadModel: Button = dialogView.findViewById(R.id.btnDownloadModel)
+        setupModelStatus(modelStatusArea, tvModelStatus, modelProgressBar, btnDownloadModel)
+
+        // Setup processing queue status
+        updateQueueStatus(processingQueueStatus, tvQueueStatus, progressQueue, btnQueueForLater)
+
+        // Watch queue changes
+        processingQueue?.queueItemsFlow?.let { flow ->
+            activityScope.launch {
+                flow.collect { items ->
+                    updateQueueStatus(processingQueueStatus, tvQueueStatus, progressQueue, btnQueueForLater)
+                }
+            }
         }
 
         // Setup RecyclerView
@@ -2434,7 +2576,7 @@ class MainActivity : AppCompatActivity() {
             onDeleteClicked = { file -> deleteRecording(file, recordingsAdapter!!) },
             onTranscribeClicked = { file ->
                 val customPrompt = etPrompt.text.toString().takeIf { it.isNotBlank() }
-                transcribeRecording(file, btnTranscribe, customPrompt)
+                transcribeRecording(file, btnTranscribe, customPrompt, rbQueue)
             }
         )
         rvRecordings.layoutManager = LinearLayoutManager(this)
@@ -2518,6 +2660,27 @@ class MainActivity : AppCompatActivity() {
             .create()
 
         recordingsDialog?.show()
+    }
+
+    private fun showRecordingsListForAttachment(
+        item: DrawingView.PromptItem,
+        onSelected: (File) -> Unit
+    ) {
+        val recordings = audioRecorder?.getRecordings()?.toMutableList() ?: mutableListOf()
+
+        if (recordings.isEmpty()) {
+            Toast.makeText(this, "No recordings yet. Record audio first.", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val items = recordings.map { it.name }.toTypedArray()
+        AlertDialog.Builder(this, R.style.DarkDialogTheme)
+            .setTitle("Select Recording")
+            .setItems(items) { _, which ->
+                onSelected(recordings[which])
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun playRecording(
@@ -2618,7 +2781,14 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun transcribeRecording(file: File, btnTranscribe: Button, customPrompt: String? = null) {
+    private fun transcribeRecording(file: File, btnTranscribe: Button, customPrompt: String? = null, rbQueue: RadioButton? = null) {
+        // Check if user wants to queue instead of transcribe now
+        if (rbQueue?.isChecked == true) {
+            enqueueForLaterProcessing(file, customPrompt)
+            Toast.makeText(this, "Added to processing queue", Toast.LENGTH_SHORT).show()
+            return
+        }
+
         // Stop any playback
         stopPlayback()
 
@@ -2628,15 +2798,46 @@ class MainActivity : AppCompatActivity() {
 
         activityScope.launch {
             try {
-                // Use parallel chunk processing for speed
-                val result = gemmaServer?.transcribeWithAutoChunking(file, customPrompt)
+                // Priority: Local model if ready, otherwise server if configured
+                val recognizer = HandwritingRecognizer.getInstance(this@MainActivity)
+                val useLocal = recognizer.isReady
+                
+                val result = if (useLocal) {
+                    // Use local model for transcription
+                    try {
+                        val audioData = file.readBytes()
+                        val transcript = withContext(Dispatchers.IO) {
+                            recognizer.transcribeAudio(audioData, customPrompt)
+                        }
+                        GemmaServerClient.TranscriptionResult(
+                            success = true,
+                            transcription = transcript,
+                            errorMessage = null
+                        )
+                    } catch (e: Exception) {
+                        GemmaServerClient.TranscriptionResult(
+                            success = false,
+                            transcription = "",
+                            errorMessage = "Local transcription failed: ${e.message}"
+                        )
+                    }
+                } else if (gemmaServer?.isConfigured() == true) {
+                    // Fallback to server
+                    gemmaServer?.transcribeWithAutoChunking(file, customPrompt)
+                } else {
+                    // No inference available
+                    GemmaServerClient.TranscriptionResult(
+                        success = false,
+                        transcription = "",
+                        errorMessage = "No inference available. Download the local model or configure a server."
+                    )
+                }
 
                 withContext(Dispatchers.Main) {
                     btnTranscribe.isEnabled = true
                     btnTranscribe.text = "Transcribe"
 
                     if (result?.success == true && result.transcription.isNotBlank()) {
-                        // Show transcription dialog with web search results if available
                         showTranscriptionResult(
                             result.transcription,
                             file.name,
@@ -2660,6 +2861,12 @@ class MainActivity : AppCompatActivity() {
     private fun showServerSettingsDialog(tvServerUrl: TextView) {
         val currentUrl = gemmaServer?.getBaseUrl() ?: GemmaServerClient.DEFAULT_BASE_URL
 
+        val scrollView = ScrollView(this)
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(32, 16, 32, 16)
+        }
+
         val editText = EditText(this).apply {
             setText(currentUrl)
             hint = "http://localhost:8080/transcribe"
@@ -2667,19 +2874,47 @@ class MainActivity : AppCompatActivity() {
             setHintTextColor(Color.parseColor("#66FFFFFF"))
             setSelection(currentUrl.length)
         }
+        container.addView(TextView(this).apply {
+            text = "Gemma Server URL"
+            setTextColor(Color.WHITE)
+            textSize = 18f
+        })
+        container.addView(editText)
+
+        container.addView(TextView(this).apply {
+            text = "\nInference Mode"
+            setTextColor(Color.WHITE)
+            textSize = 18f
+            setPadding(0, 16, 0, 8)
+        })
+
+        val swLocalInference = Switch(this).apply {
+            text = "Use Local Inference (on-device)"
+            isChecked = gemmaTranscriber?.isUsingLocalEngine() ?: false
+        }
+        container.addView(swLocalInference)
+
+        container.addView(TextView(this).apply {
+            text = if (gemmaTranscriber?.isLocalEngineReady() == true) "Local engine: Ready" else "Local engine: Not initialized"
+            setTextColor(Color.parseColor("#88FFFFFF"))
+            textSize = 12f
+        })
+
+        scrollView.addView(container)
 
         AlertDialog.Builder(this, R.style.DarkDialogTheme)
-            .setTitle("Gemma Server URL")
-            .setMessage("Enter the full URL for the Gemma transcription server.\n\nExample:\nhttp://192.168.1.100:8000")
-            .setView(editText)
+            .setTitle("Inference Settings")
+            .setView(scrollView)
             .setPositiveButton("Save") { _, _ ->
                 val url = editText.text.toString().trim()
                 if (url.isNotBlank()) {
                     gemmaServer?.setServerUrl(url)
                     tvServerUrl.visibility = View.VISIBLE
                     tvServerUrl.text = "Server: $url"
-                    Toast.makeText(this, "Server URL saved", Toast.LENGTH_SHORT).show()
                 }
+                gemmaTranscriber?.setUseLocalEngine(swLocalInference.isChecked)
+                val mode = if (swLocalInference.isChecked) "local" else "server"
+                Toast.makeText(this, "Using $mode inference", Toast.LENGTH_SHORT).show()
             }
             .setNegativeButton("Cancel", null)
             .show()
@@ -2844,5 +3079,379 @@ class MainActivity : AppCompatActivity() {
     private fun getCurrentPlayingFile(): File? {
         // This would need to be tracked - for now return null
         return null
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Processing Queue Functions
+    // ═══════════════════════════════════════════════════════════════════
+
+    private fun updateQueueStatus(
+        queueStatus: LinearLayout,
+        tvQueueStatus: TextView,
+        progressQueue: ProgressBar,
+        btnQueueForLater: Button
+    ) {
+        val stats = processingQueue?.getStats()
+        if (stats == null || stats.totalQueued == 0 && stats.inProgress == 0) {
+            queueStatus.visibility = View.GONE
+            return
+        }
+
+        queueStatus.visibility = View.VISIBLE
+
+        when {
+            stats.inProgress > 0 -> {
+                progressQueue.visibility = View.VISIBLE
+                tvQueueStatus.text = "Processing ${stats.inProgress} item(s)..."
+            }
+            stats.totalQueued > 0 -> {
+                progressQueue.visibility = View.GONE
+                tvQueueStatus.text = "${stats.totalQueued} queued for processing"
+            }
+            stats.completed > 0 -> {
+                progressQueue.visibility = View.GONE
+                tvQueueStatus.text = "${stats.completed} completed"
+            }
+        }
+
+        btnQueueForLater.setOnClickListener {
+            // Toggle queue for later processing
+            Toast.makeText(this, "Add to queue", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun enqueueForLaterProcessing(file: File, customPrompt: String?) {
+        processingQueue?.enqueue(file, customPrompt, ProcessingQueueManager.PRIORITY_NORMAL)
+        Toast.makeText(this, "Added to processing queue", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun setupModelStatus(
+        modelStatusArea: LinearLayout,
+        tvModelStatus: TextView,
+        modelProgressBar: ProgressBar,
+        btnDownloadModel: Button
+    ) {
+        val recognizer = HandwritingRecognizer.getInstance(this)
+
+        fun updateStatus() {
+            when {
+                recognizer.isReady -> {
+                    tvModelStatus.text = "Ready"
+                    tvModelStatus.setTextColor(Color.parseColor("#64FFDA"))
+                    btnDownloadModel.visibility = View.GONE
+                    modelProgressBar.visibility = View.GONE
+                }
+                recognizer.errorMessageFlow.value != null -> {
+                    tvModelStatus.text = "Error: ${recognizer.errorMessageFlow.value}"
+                    tvModelStatus.setTextColor(Color.parseColor("#FF5252"))
+                    btnDownloadModel.visibility = View.VISIBLE
+                    btnDownloadModel.text = "Retry Download"
+                }
+                else -> {
+                    tvModelStatus.text = "Not downloaded"
+                    tvModelStatus.setTextColor(Color.parseColor("#88FFFFFF"))
+                    btnDownloadModel.visibility = View.VISIBLE
+                    btnDownloadModel.text = "Download Model (~1.5 GB)"
+                    modelProgressBar.visibility = View.GONE
+                }
+            }
+        }
+
+        updateStatus()
+
+        recognizer.isReadyFlow.let { flow ->
+            activityScope.launch {
+                flow.collect {
+                    runOnUiThread { updateStatus() }
+                }
+            }
+        }
+
+        recognizer.errorMessageFlow.let { flow ->
+            activityScope.launch {
+                flow.collect {
+                    if (it != null) {
+                        runOnUiThread { updateStatus() }
+                    }
+                }
+            }
+        }
+
+        btnDownloadModel.setOnClickListener {
+            showModelDownloadDialog()
+        }
+    }
+
+    private fun showModelDownloadDialog() {
+        val dialogView = layoutInflater.inflate(R.layout.dialog_model_download, null)
+        val dialog = AlertDialog.Builder(this, R.style.DarkDialogTheme)
+            .setView(dialogView)
+            .setCancelable(true)
+            .create()
+
+        val etHfToken: EditText = dialogView.findViewById(R.id.etHfToken)
+        val etHfToken2: EditText? = null
+        val btnStartDownload: Button = dialogView.findViewById(R.id.btnStartDownload)
+        val btnSkipDownload: Button = dialogView.findViewById(R.id.btnSkipDownload)
+        val btnAcceptLicense: TextView = dialogView.findViewById(R.id.btnAcceptLicense)
+        val btnGetToken: TextView = dialogView.findViewById(R.id.btnGetToken)
+        val dlProgressArea: LinearLayout = dialogView.findViewById(R.id.dlProgressArea)
+        val dlReadyArea: LinearLayout = dialogView.findViewById(R.id.dlReadyArea)
+        val dlProgressBar: ProgressBar = dialogView.findViewById(R.id.dlProgressBar)
+        val dlProgressLabel: TextView = dialogView.findViewById(R.id.dlProgressLabel)
+        val dlProgressPercent: TextView = dialogView.findViewById(R.id.dlProgressPercent)
+        val dlErrorText: TextView = dialogView.findViewById(R.id.dlErrorText)
+        val dlSubtitle: TextView = dialogView.findViewById(R.id.dlSubtitle)
+
+        etHfToken.setText(ModelManager.savedHfToken(this))
+
+        btnAcceptLicense.setOnClickListener {
+            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW,
+                android.net.Uri.parse("https://ai.google.dev/gemma/terms"))
+            startActivity(intent)
+        }
+
+        btnGetToken.setOnClickListener {
+            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW,
+                android.net.Uri.parse("https://huggingface.co/settings/tokens"))
+            startActivity(intent)
+        }
+
+        var pendingDownloadId: Long = -1L
+
+        btnStartDownload.setOnClickListener {
+            val token = etHfToken.text.toString().trim()
+            if (token.isEmpty()) {
+                dlErrorText.text = "Please enter your HuggingFace token"
+                dlErrorText.visibility = View.VISIBLE
+                return@setOnClickListener
+            }
+
+            dlErrorText.visibility = View.GONE
+            dlReadyArea.visibility = View.GONE
+            dlProgressArea.visibility = View.VISIBLE
+            dlSubtitle.text = "Downloading Gemma model..."
+
+            ModelManager.startDownloadHFAsync(this, token,
+                onSuccess = { downloadId ->
+                    pendingDownloadId = downloadId
+                    dlProgressLabel.text = "Starting download..."
+                },
+                onError = { error ->
+                    dlErrorText.text = error
+                    dlErrorText.visibility = View.VISIBLE
+                    dlReadyArea.visibility = View.VISIBLE
+                    dlProgressArea.visibility = View.GONE
+                }
+            )
+        }
+
+        btnSkipDownload.setOnClickListener {
+            val intent = android.content.Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "*/*"
+                putExtra(Intent.EXTRA_TITLE, "Select Gemma model file")
+            }
+            modelFilePickerLauncher.launch(intent)
+        }
+
+        // Poll download progress
+        val progressHandler = android.os.Handler(Looper.getMainLooper())
+        val progressRunnable = object : Runnable {
+            override fun run() {
+                if (pendingDownloadId > 0) {
+                    val status = ModelManager.queryDownload(this@MainActivity, pendingDownloadId)
+                    when (status.state) {
+                        ModelManager.DownloadState.RUNNING, ModelManager.DownloadState.PAUSED -> {
+                            dlProgressBar.visibility = View.VISIBLE
+                            dlProgressBar.progress = status.progressPercent
+                            dlProgressLabel.text = status.progressDisplay
+                            dlProgressPercent.text = "${status.progressPercent}%"
+                            progressHandler.postDelayed(this, 500)
+                        }
+                        ModelManager.DownloadState.DONE -> {
+                            dlProgressBar.visibility = View.GONE
+                            dlProgressLabel.text = "Download complete!"
+                            dlProgressPercent.text = "100%"
+                            val modelPath = ModelManager.modelFile(this@MainActivity).absolutePath
+                            loadModelAndClose(modelPath, dialog)
+                        }
+                        ModelManager.DownloadState.FAILED -> {
+                            dlErrorText.text = "Download failed (reason: ${status.reason}). Check storage space."
+                            dlErrorText.visibility = View.VISIBLE
+                            dlReadyArea.visibility = View.VISIBLE
+                            dlProgressArea.visibility = View.GONE
+                        }
+                        else -> {}
+                    }
+                } else {
+                    progressHandler.postDelayed(this, 500)
+                }
+            }
+        }
+        progressHandler.post(progressRunnable)
+
+        dialog.setOnDismissListener {
+            progressHandler.removeCallbacks(progressRunnable)
+        }
+
+        dialog.show()
+    }
+
+    private val modelFilePickerLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK) {
+            result.data?.data?.let { uri ->
+                contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                val inputStream = contentResolver.openInputStream(uri)
+                val modelFile = ModelManager.modelFile(this)
+                inputStream?.use { input ->
+                    FileOutputStream(modelFile).use { output ->
+                        input.copyTo(output)
+                    }
+                }
+                loadModelAndClose(modelFile.absolutePath, null)
+            }
+        }
+    }
+
+    private fun loadModelAndClose(modelPath: String, dialog: AlertDialog?) {
+        Toast.makeText(this, "Loading model...", Toast.LENGTH_SHORT).show()
+        val recognizer = HandwritingRecognizer.getInstance(this)
+        recognizer.load(modelPath, HandwritingRecognizer.InferenceConfig(),
+            onReady = {
+                runOnUiThread {
+                    Toast.makeText(this, "Model ready!", Toast.LENGTH_SHORT).show()
+                    dialog?.dismiss()
+                }
+            },
+            onError = { error ->
+                runOnUiThread {
+                    Toast.makeText(this, "Model load failed: $error", Toast.LENGTH_LONG).show()
+                }
+            }
+        )
+    }
+
+    private fun showQueueDialog() {
+        val ctx = this
+        val queueItems = processingQueue?.queueItemsFlow?.value ?: emptyList()
+
+        val scrollView = ScrollView(ctx)
+        val layout = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(16, 16, 16, 16)
+        }
+
+        if (queueItems.isEmpty()) {
+            val emptyText = TextView(ctx).apply {
+                text = "Queue is empty"
+                setTextColor(Color.parseColor("#88FFFFFF"))
+                textSize = 14f
+                gravity = android.view.Gravity.CENTER
+            }
+            layout.addView(emptyText)
+        } else {
+            queueItems.forEach { item ->
+                val card = LinearLayout(ctx).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setBackgroundColor(Color.parseColor("#333333"))
+                    setPadding(12, 12, 12, 12)
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                    ).apply {
+                        setMargins(0, 8, 0, 8)
+                    }
+                }
+
+                val titleView = TextView(ctx).apply {
+                    text = item.audioFile.name
+                    setTextColor(Color.WHITE)
+                    textSize = 14f
+                }
+                card.addView(titleView)
+
+                val statusView = TextView(ctx).apply {
+                    text = "Status: ${item.status.name} (${(item.progress * 100).toInt()}%)"
+                    setTextColor(Color.parseColor("#88FFFFFF"))
+                    textSize = 12f
+                }
+                card.addView(statusView)
+
+                // Progress bar
+                val progressBar = ProgressBar(ctx, null, android.R.attr.progressBarStyleHorizontal).apply {
+                    progress = (item.progress * 100).toInt()
+                    max = 100
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                    ).apply {
+                        setMargins(0, 8, 0, 0)
+                    }
+                }
+                card.addView(progressBar)
+
+                // Result if completed
+                item.result?.let { result ->
+                    val resultView = TextView(ctx).apply {
+                        text = result.take(100) + if (result.length > 100) "..." else ""
+                        setTextColor(Color.parseColor("#7C4DFF"))
+                        textSize = 12f
+                        setPadding(0, 8, 0, 0)
+                    }
+                    card.addView(resultView)
+                }
+
+                // Action buttons
+                val buttonLayout = LinearLayout(ctx).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                }
+
+                if (item.status == ProcessingQueueManager.ProcessingStatus.QUEUED) {
+                    val boostBtn = Button(ctx).apply {
+                        text = "Process Now"
+                        setOnClickListener {
+                            processingQueue?.boostPriority(item.id)
+                            Toast.makeText(ctx, "Moved to front of queue", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                    buttonLayout.addView(boostBtn)
+                }
+
+                if (item.status == ProcessingQueueManager.ProcessingStatus.FAILED) {
+                    val retryBtn = Button(ctx).apply {
+                        text = "Retry"
+                        setOnClickListener {
+                            processingQueue?.retry(item.id)
+                        }
+                    }
+                    buttonLayout.addView(retryBtn)
+                }
+
+                val removeBtn = Button(ctx).apply {
+                    text = "Remove"
+                    setOnClickListener {
+                        processingQueue?.remove(item.id)
+                    }
+                }
+                buttonLayout.addView(removeBtn)
+
+                card.addView(buttonLayout)
+                layout.addView(card)
+            }
+        }
+
+        scrollView.addView(layout)
+
+        AlertDialog.Builder(ctx, R.style.DarkDialogTheme)
+            .setTitle("Processing Queue (${queueItems.size})")
+            .setView(scrollView)
+            .setPositiveButton("Close", null)
+            .setNeutralButton("Clear Completed") { _, _ ->
+                processingQueue?.clearCompleted()
+            }
+            .show()
     }
 }

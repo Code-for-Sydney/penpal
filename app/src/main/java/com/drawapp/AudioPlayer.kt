@@ -35,7 +35,7 @@ class AudioPlayer(private val context: Context) {
      * Play a WAV file
      */
     fun play(file: File): Boolean {
-        Log.d(TAG, "Playing: ${file.absolutePath}")
+        Log.d(TAG, "Playing: ${file.absolutePath}, size: ${file.length()} bytes")
 
         if (!file.exists()) {
             Log.e(TAG, "File does not exist: ${file.absolutePath}")
@@ -43,31 +43,92 @@ class AudioPlayer(private val context: Context) {
             return false
         }
 
-        // Stop any existing playback
-        stop()
+        if (file.length() < 44) {
+            Log.e(TAG, "File too small to be valid WAV: ${file.length()} bytes")
+            onError?.invoke("Invalid audio file")
+            return false
+        }
+
+        // Validate WAV header
+        if (!isValidWavFile(file)) {
+            Log.e(TAG, "Invalid WAV file format")
+            onError?.invoke("Invalid audio format")
+            return false
+        }
+
+        // Stop and release any existing MediaPlayer
+        mediaPlayer?.let {
+            try {
+                it.stop()
+                it.release()
+            } catch (e: Exception) {
+                Log.e(TAG, "Error releasing player: ${e.message}")
+            }
+        }
+        mediaPlayer = null
 
         try {
-            mediaPlayer = MediaPlayer().apply {
-                setDataSource(file.absolutePath)
+            mediaPlayer = MediaPlayer()
+
+            mediaPlayer?.apply {
+                setOnPreparedListener { mp ->
+                    Log.d(TAG, "MediaPlayer prepared, duration: ${mp.duration}ms")
+                    try {
+                        start()
+                        Log.d(TAG, "Playback started")
+                    } catch (e: IllegalStateException) {
+                        Log.e(TAG, "Failed to start: ${e.message}")
+                        onError?.invoke("Playback failed: ${e.message}")
+                    }
+                }
                 setOnCompletionListener {
                     Log.d(TAG, "Playback completed")
                     onCompletion?.invoke()
                 }
                 setOnErrorListener { _, what, extra ->
-                    Log.e(TAG, "Playback error: what=$what, extra=$extra")
+                    Log.e(TAG, "Playback error: what=$what ($extra)")
                     onError?.invoke("Playback error: $what")
                     true
                 }
-                prepare()
-                start()
+                setDataSource(file.absolutePath)
+                prepareAsync()
             }
             currentFile = file
-            Log.d(TAG, "Playback started, duration: ${mediaPlayer?.duration}ms")
+            Log.d(TAG, "prepareAsync called for playback")
             return true
         } catch (e: Exception) {
-            Log.e(TAG, "Error starting playback: ${e.message}")
+            Log.e(TAG, "Error creating MediaPlayer: ${e.message}", e)
+            mediaPlayer?.release()
+            mediaPlayer = null
             onError?.invoke("Cannot play file: ${e.message}")
             return false
+        }
+    }
+
+    /**
+     * Validate WAV file format by checking header
+     */
+    private fun isValidWavFile(file: File): Boolean {
+        return try {
+            val header = ByteArray(12)
+            java.io.RandomAccessFile(file, "r").use { raf ->
+                raf.readFully(header)
+            }
+
+            // Check RIFF header
+            val riff = String(header, 0, 4)
+            val wave = String(header, 8, 4)
+
+            if (riff != "RIFF" || wave != "WAVE") {
+                Log.e(TAG, "Invalid WAV header: riff=$riff, wave=$wave")
+                return false
+            }
+
+            Log.d(TAG, "WAV header validated: RIFF/WAVE found")
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Error validating WAV header: ${e.message}")
+            false
         }
     }
 
@@ -154,6 +215,17 @@ class AudioPlayer(private val context: Context) {
     }
 
     fun cleanup() {
-        stop()
+        mediaPlayer?.let {
+            try {
+                if (it.isPlaying) {
+                    it.stop()
+                }
+                it.release()
+            } catch (e: Exception) {
+                Log.e(TAG, "Error cleaning up: ${e.message}")
+            }
+        }
+        mediaPlayer = null
+        currentFile = null
     }
 }

@@ -2,6 +2,7 @@ package com.drawapp
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.graphics.Bitmap
 import android.util.Log
 import com.google.gson.Gson
 import kotlinx.coroutines.*
@@ -12,63 +13,66 @@ import java.net.URL
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
 
-/**
- * Service for processing audio through Gemma model for transcription.
- *
- * Usage:
- * 1. Record audio with AudioRecorder
- * 2. Chunk with AudioChunker (optional)
- * 3. Transcribe with GemmaTranscriber
- */
 class GemmaTranscriber(private val context: Context) {
 
     companion object {
         const val TAG = "GemmaTranscriber"
-
-        // Default URL for Gemma transcription server
         const val DEFAULT_URL = "http://localhost:8080/transcribe"
-        const val TIMEOUT_MS = 300000  // 5 minutes for large model warmup/inference
-        const val CONNECT_TIMEOUT_MS = 10000  // 10 seconds to connect
-
-        // Default prompt for transcription
+        const val TIMEOUT_MS = 300000
+        const val CONNECT_TIMEOUT_MS = 10000
         const val DEFAULT_PROMPT = """You are a speech-to-text transcription service. Transcribe the following audio content accurately. If you cannot hear clearly, say "Inaudible". Only output the transcription, nothing else."""
+
+        @Volatile
+        private var instance: GemmaTranscriber? = null
+
+        fun getInstance(context: Context): GemmaTranscriber {
+            return instance ?: synchronized(this) {
+                instance ?: GemmaTranscriber(context.applicationContext).also { instance = it }
+            }
+        }
     }
 
     private val gson = Gson()
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val inferenceService = InferenceService.getInstance(context)
 
-    // Server URL configuration
     private var _serverUrl: String = DEFAULT_URL
+    private var useLocalEngine: Boolean = false
 
     init {
         val prefs = getPrefs()
         _serverUrl = prefs.getString("gemma_server_url", DEFAULT_URL) ?: DEFAULT_URL
     }
 
-    /**
-     * Get current server URL
-     */
     fun getServerUrl(): String = _serverUrl
 
-    /**
-     * Update the server URL
-     */
     fun setServerUrl(url: String) {
         _serverUrl = url.trim().trimEnd('/')
         savePrefs()
     }
 
-    /**
-     * Check if server URL is configured
-     */
     fun isConfigured(): Boolean = _serverUrl.isNotBlank() && _serverUrl.startsWith("http")
 
-    /**
-     * Check if server is reachable
-     */
+    fun setUseLocalEngine(enabled: Boolean) {
+        useLocalEngine = enabled
+    }
+
+    fun isUsingLocalEngine(): Boolean = useLocalEngine
+
+    fun isLocalEngineReady(): Boolean = inferenceService.isReady()
+
+    fun initializeLocalEngine(modelPath: String, callback: (Boolean, String) -> Unit) {
+        inferenceService.initialize(modelPath, InferenceService.Config(), callback)
+    }
+
+    fun setLocalModelPath(path: String) {
+        // InferenceService handles model path internally
+    }
+
+    fun getLocalModelPath(): String? = null
+
     suspend fun isServerAvailable(): Boolean = withContext(Dispatchers.IO) {
         if (!isConfigured()) return@withContext false
-
         try {
             val url = URL(_serverUrl)
             val conn = url.openConnection() as HttpURLConnection
@@ -76,25 +80,17 @@ class GemmaTranscriber(private val context: Context) {
             conn.connectTimeout = CONNECT_TIMEOUT_MS
             conn.readTimeout = 5000
             conn.doOutput = true
-            // Send minimal body to check connectivity
             conn.outputStream.use { it.write(ByteArray(0)) }
             val response = conn.responseCode
             conn.disconnect()
-            // Accept 200 or any response (server is up)
             response >= 200
         } catch (e: Exception) {
             Log.e(TAG, "Server check failed: ${e.message}")
-            // Even if we can't connect, try anyway - might be server warming up
             true
         }
     }
 
-    /**
-     * Transcribe a complete audio file with automatic chunking for speed
-     * @param audioFile The audio file to transcribe
-     * @param customPrompt Optional custom instruction for processing
-     */
-    suspend fun transcribe(audioFile: File, customPrompt: String? = null): TranscriptionResult =
+    suspend fun transcribe(audioFile: File, customPrompt: String? = null, useLocalInference: Boolean = false): TranscriptionResult =
         withContext(Dispatchers.IO) {
             Log.d(TAG, "Transcribing file: ${audioFile.absolutePath}")
 
@@ -106,88 +102,92 @@ class GemmaTranscriber(private val context: Context) {
                 )
             }
 
-            if (!isConfigured()) {
-                return@withContext TranscriptionResult(
-                    success = false,
-                    transcription = "",
-                    errorMessage = "Server URL not configured. Tap the gear icon to set it up."
-                )
+            val useLocal = useLocalInference || useLocalEngine
+
+            if (useLocal) {
+                return@withContext transcribeWithLocalEngine(audioFile, customPrompt)
             }
 
-            // Use AudioChunker to split into parallel-processable chunks
             val chunker = AudioChunker()
             val chunkingResult = chunker.chunkAudioFile(audioFile)
 
             if (chunkingResult.chunks.isEmpty()) {
-                // No speech detected, return empty
-                return@withContext TranscriptionResult(
-                    success = true,
-                    transcription = "",
-                    errorMessage = null
-                )
+                return@withContext TranscriptionResult(success = true, transcription = "", errorMessage = null)
             }
 
             Log.d(TAG, "Created ${chunkingResult.chunks.size} chunks, processing in parallel...")
-
-            // Process chunks in parallel
             return@withContext transcribeChunks(chunkingResult.chunks, customPrompt)
         }
 
-    /**
-     * Transcribe audio chunks in PARALLEL for speedup
-     */
-    suspend fun transcribeChunks(
-        chunks: List<AudioChunker.ChunkResult>,
-        customPrompt: String? = null
-    ): TranscriptionResult = withContext(Dispatchers.IO) {
-        Log.d(TAG, "Transcribing ${chunks.size} chunks in PARALLEL")
-
-        if (chunks.isEmpty()) {
-            return@withContext TranscriptionResult(
+    private suspend fun transcribeWithLocalEngine(audioFile: File, customPrompt: String?): TranscriptionResult {
+        if (!inferenceService.isReady()) {
+            return TranscriptionResult(
                 success = false,
                 transcription = "",
-                errorMessage = "No chunks to transcribe"
+                errorMessage = "Local inference engine not ready. Please initialize first."
             )
         }
 
-        // Process all chunks in parallel using async
-        val deferredResults = chunks.mapIndexed { index, chunk ->
-            async {
-                try {
-                    Log.d(TAG, "Processing chunk $index/${chunks.size} in parallel")
-                    val result = sendTranscriptionRequest(chunk.file.readBytes(), customPrompt)
-                    ChunkTranscription(
-                        chunkIndex = index,
-                        startTimeMs = chunk.startTimeMs,
-                        endTimeMs = chunk.endTimeMs,
-                        transcription = result.transcription,
-                        success = result.success
-                    )
-                } catch (e: Exception) {
-                    Log.e(TAG, "Chunk $index failed: ${e.message}")
-                    ChunkTranscription(
-                        chunkIndex = index,
-                        startTimeMs = chunk.startTimeMs,
-                        endTimeMs = chunk.endTimeMs,
-                        transcription = "[Error: ${e.message}]",
-                        success = false
-                    )
-                }
+        return try {
+            val audioData = audioFile.readBytes()
+            val text = inferenceService.transcribeAudio(audioData, customPrompt ?: DEFAULT_PROMPT)
+            TranscriptionResult(success = true, transcription = text.trim(), errorMessage = null)
+        } catch (e: Exception) {
+            Log.e(TAG, "Local inference failed: ${e.message}")
+            TranscriptionResult(success = false, transcription = "", errorMessage = "Local inference failed: ${e.message}")
+        }
+    }
+
+    suspend fun transcribeChunks(
+        chunks: List<AudioChunker.ChunkResult>,
+        customPrompt: String? = null,
+        maxConcurrency: Int = 4
+    ): TranscriptionResult = withContext(Dispatchers.IO) {
+        Log.d(TAG, "Transcribing ${chunks.size} chunks with max concurrency: $maxConcurrency")
+
+        if (chunks.isEmpty()) {
+            return@withContext TranscriptionResult(success = false, transcription = "", errorMessage = "No chunks to transcribe")
+        }
+
+        val semaphore = Semaphore(maxConcurrency)
+        val lock = kotlinx.coroutines.sync.Mutex()
+        val results = mutableListOf<ChunkTranscription>()
+
+        chunks.forEachIndexed { index, chunk ->
+            semaphore.acquire()
+            try {
+                val result = async {
+                    try {
+                        Log.d(TAG, "Processing chunk $index/${chunks.size} in parallel")
+                        val res = sendTranscriptionRequest(chunk.file.readBytes(), customPrompt)
+                        ChunkTranscription(chunkIndex = index, startTimeMs = chunk.startTimeMs, endTimeMs = chunk.endTimeMs, transcription = res.transcription, success = res.success)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Chunk $index failed: ${e.message}")
+                        ChunkTranscription(chunkIndex = index, startTimeMs = chunk.startTimeMs, endTimeMs = chunk.endTimeMs, transcription = "[Error: ${e.message}]", success = false)
+                    } finally {
+                        semaphore.release()
+                    }
+                }.await()
+
+                lock.lock()
+                results.add(result)
+                lock.unlock()
+            } catch (e: CancellationException) {
+                semaphore.release()
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to process chunk $index: ${e.message}")
+                semaphore.release()
+                lock.lock()
+                results.add(ChunkTranscription(chunkIndex = index, startTimeMs = chunk.startTimeMs, endTimeMs = chunk.endTimeMs, transcription = "[Error: ${e.message}]", success = false))
+                lock.unlock()
             }
         }
 
-        // Wait for all to complete
-        val results = deferredResults.awaitAll()
-
-        // Check for errors
         val hasError = results.any { !it.success }
-        val errorMessage = if (hasError) "Some chunks failed" else null
-
-        // Build full transcript in order
         val fullTranscript = buildString {
             for (result in results.sortedBy { it.chunkIndex }) {
-                if (result.transcription.isNotBlank() &&
-                    !result.transcription.startsWith("[Error")) {
+                if (result.transcription.isNotBlank() && !result.transcription.startsWith("[Error")) {
                     append(result.transcription)
                     append(" ")
                 }
@@ -195,42 +195,23 @@ class GemmaTranscriber(private val context: Context) {
         }.trim()
 
         Log.d(TAG, "Parallel transcription complete: ${results.size} chunks")
-
-        return@withContext TranscriptionResult(
-            success = !hasError,
-            transcription = fullTranscript,
-            errorMessage = errorMessage,
-            chunkResults = results
-        )
+        return@withContext TranscriptionResult(success = !hasError, transcription = fullTranscript, errorMessage = if (hasError) "Some chunks failed" else null, chunkResults = results)
     }
 
-    /**
-     * Send audio data to Gemma server for transcription
-     */
-    private suspend fun sendTranscriptionRequest(
-        audioData: ByteArray,
-        customPrompt: String?
-    ): TranscriptionResult {
+    private suspend fun sendTranscriptionRequest(audioData: ByteArray, customPrompt: String?): TranscriptionResult {
         return suspendCoroutine { continuation ->
             scope.launch {
                 try {
                     val result = doSendRequest(audioData, customPrompt)
                     continuation.resume(result)
                 } catch (e: Exception) {
-                    continuation.resume(TranscriptionResult(
-                        success = false,
-                        transcription = "",
-                        errorMessage = e.message
-                    ))
+                    continuation.resume(TranscriptionResult(success = false, transcription = "", errorMessage = e.message))
                 }
             }
         }
     }
 
-    private suspend fun doSendRequest(
-        audioData: ByteArray,
-        customPrompt: String?
-    ): TranscriptionResult {
+    private suspend fun doSendRequest(audioData: ByteArray, customPrompt: String?): TranscriptionResult {
         val url = URL(_serverUrl)
         val conn = url.openConnection() as HttpURLConnection
 
@@ -239,20 +220,11 @@ class GemmaTranscriber(private val context: Context) {
             conn.doOutput = true
             conn.connectTimeout = CONNECT_TIMEOUT_MS
             conn.readTimeout = TIMEOUT_MS
-
-            // Send as multipart form data (form field name "audio", filename "audio.wav")
             val boundary = "----FormBoundary" + System.currentTimeMillis()
             conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
-
             val prompt = customPrompt?.trim() ?: DEFAULT_PROMPT
-
-            // Build multipart body
             val body = buildMultipartBody(boundary, audioData, prompt)
-
-            // Send request
-            conn.outputStream.use { output ->
-                output.write(body)
-            }
+            conn.outputStream.use { output -> output.write(body) }
 
             val responseCode = conn.responseCode
             Log.d(TAG, "Response code: $responseCode")
@@ -261,63 +233,125 @@ class GemmaTranscriber(private val context: Context) {
                 val response = conn.inputStream.bufferedReader().readText()
                 Log.d(TAG, "Raw response: $response")
 
-                // Parse JSON response - server returns "result" field
                 try {
                     val jsonResponse = gson.fromJson(response, GemmaResponse::class.java)
                     Log.d(TAG, "Parsed response: result=${jsonResponse.result}, text=${jsonResponse.text}")
-
-                    val transcription = jsonResponse.result
-                        ?: jsonResponse.text
-                        ?: jsonResponse.transcription
-                        ?: ""
+                    val transcription = jsonResponse.result ?: jsonResponse.text ?: jsonResponse.transcription ?: ""
                     Log.d(TAG, "Final transcription: $transcription")
-
-                    return TranscriptionResult(
-                        success = true,
-                        transcription = transcription,
-                        errorMessage = null
-                    )
+                    return TranscriptionResult(success = true, transcription = transcription, errorMessage = null)
                 } catch (e: Exception) {
                     Log.e(TAG, "Parse error: ${e.message}")
-                    // Response might be plain text
-                    return TranscriptionResult(
-                        success = true,
-                        transcription = response
-                    )
+                    return TranscriptionResult(success = true, transcription = response)
                 }
             } else {
                 val error = conn.errorStream?.bufferedReader()?.readText() ?: "HTTP $responseCode"
-                return TranscriptionResult(
-                    success = false,
-                    transcription = "",
-                    errorMessage = error
-                )
+                return TranscriptionResult(success = false, transcription = "", errorMessage = error)
             }
         } finally {
             conn.disconnect()
         }
     }
 
-    /**
-     * Build multipart form data body for file upload
-     */
     private fun buildMultipartBody(boundary: String, audioData: ByteArray, prompt: String): ByteArray {
         val builder = StringBuilder()
-
-        // Add prompt form field
         builder.append("--$boundary\r\n")
         builder.append("Content-Disposition: form-data; name=\"text\"\r\n\r\n")
         builder.append("$prompt\r\n")
-
-        // Add audio file
         builder.append("--$boundary\r\n")
         builder.append("Content-Disposition: form-data; name=\"audio\"; filename=\"audio.wav\"\r\n")
         builder.append("Content-Type: audio/wav\r\n\r\n")
-
         val bodyBytes = builder.toString().toByteArray(Charsets.UTF_8)
         val footer = "\r\n--$boundary--\r\n".toByteArray(Charsets.UTF_8)
-
         return bodyBytes + audioData + footer
+    }
+
+    suspend fun recognizeHandwriting(bitmap: Bitmap, prompt: String? = null): TranscriptionResult {
+        if (!inferenceService.isReady()) {
+            return TranscriptionResult(success = false, transcription = "", errorMessage = "Local inference engine not ready")
+        }
+
+        return try {
+            val text = inferenceService.recognizeHandwriting(bitmap, prompt)
+            TranscriptionResult(success = true, transcription = text.trim(), errorMessage = null)
+        } catch (e: Exception) {
+            TranscriptionResult(success = false, transcription = "", errorMessage = "Handwriting recognition failed: ${e.message}")
+        }
+    }
+
+    suspend fun understandImage(bitmap: Bitmap, question: String): TranscriptionResult {
+        if (!inferenceService.isReady()) {
+            return TranscriptionResult(success = false, transcription = "", errorMessage = "Local inference engine not ready")
+        }
+
+        return try {
+            val text = inferenceService.understandImage(bitmap, question)
+            TranscriptionResult(success = true, transcription = text.trim(), errorMessage = null)
+        } catch (e: Exception) {
+            TranscriptionResult(success = false, transcription = "", errorMessage = "Image understanding failed: ${e.message}")
+        }
+    }
+
+    suspend fun processYouTube(url: String, callback: (Float) -> Unit = {}): TranscriptionResult {
+        if (!inferenceService.isReady()) {
+            return TranscriptionResult(success = false, transcription = "", errorMessage = "Local inference engine not ready")
+        }
+
+        return try {
+            val result = inferenceService.processYouTube(url) { progress ->
+                callback(progress)
+            }
+            result
+        } catch (e: Exception) {
+            TranscriptionResult(success = false, transcription = "", errorMessage = "YouTube processing failed: ${e.message}")
+        }
+    }
+
+    suspend fun transcribeBatch(files: List<File>, customPrompt: String? = null, maxConcurrency: Int = 4): TranscriptionResult =
+        withContext(Dispatchers.IO) {
+            Log.d(TAG, "Batch transcribing ${files.size} files")
+
+            if (files.isEmpty()) {
+                return@withContext TranscriptionResult(success = false, transcription = "", errorMessage = "No files provided")
+            }
+
+            val useLocal = useLocalEngine && inferenceService.isReady()
+
+            if (useLocal) {
+                return@withContext inferenceService.batchTranscribeAudio(files, customPrompt)
+            }
+
+            val client = GemmaServerClient(context)
+            val serverResult = client.transcribeBatch(
+                audioFiles = files,
+                customPrompt = customPrompt
+            )
+
+            val texts = serverResult.results.joinToString("\n\n") { "${it.index + 1}. ${it.result}" }
+            TranscriptionResult(success = serverResult.success, transcription = texts, errorMessage = serverResult.errorMessage)
+        }
+
+    suspend fun askAudio(audioFile: File, question: String, customPrompt: String? = null): TranscriptionResult {
+        if (!inferenceService.isReady()) {
+            return TranscriptionResult(success = false, transcription = "", errorMessage = "Local inference engine not ready")
+        }
+
+        return try {
+            val audioData = audioFile.readBytes()
+            val transcription = inferenceService.transcribeAudio(audioData, customPrompt ?: DEFAULT_PROMPT)
+
+            val finalPrompt = """
+                Audio transcription: "$transcription"
+                
+                Question: $question
+                
+                Please answer based on the audio content above.
+            """.trimIndent()
+
+            val answer = inferenceService.runInference(finalPrompt)
+            TranscriptionResult(success = true, transcription = answer.trim(), errorMessage = null)
+        } catch (e: Exception) {
+            TranscriptionResult(success = false, transcription = "", errorMessage = "Audio prompt processing failed: ${e.message}")
+        }
     }
 
     /**
