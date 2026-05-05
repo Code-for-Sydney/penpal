@@ -31,7 +31,9 @@ data class SettingsUiState(
     val showDownloadDialog: Boolean = false,
     val appVersion: String = "1.0.0",
     val error: String? = null,
-    val message: String? = null
+    val message: String? = null,
+    val availableModels: List<ModelManager.ModelInfo> = emptyList(),
+    val isLoadingModels: Boolean = false
 )
 
 enum class InferenceMode {
@@ -108,6 +110,9 @@ class SettingsViewModel(
             is SettingsEvent.HideDownloadDialog -> hideDownloadDialog()
             is SettingsEvent.StartHfDownload -> startHfDownload(event.token)
             is SettingsEvent.StartKaggleDownload -> startKaggleDownload(event.username, event.apiKey)
+            is SettingsEvent.RefreshModelList -> refreshModelList()
+            is SettingsEvent.SelectModel -> selectModel(event.modelPath)
+            is SettingsEvent.DeleteSpecificModel -> deleteSpecificModel(event.modelPath)
         }
     }
 
@@ -326,6 +331,50 @@ when (status.state) {
     private fun dismissError() {
         _uiState.update { it.copy(error = null) }
     }
+
+    private fun refreshModelList() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoadingModels = true) }
+            try {
+                val models = inferenceBridge.listAvailableModels(application)
+                _uiState.update { it.copy(availableModels = models, isLoadingModels = false) }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(isLoadingModels = false, error = "Failed to list models: ${e.message}") }
+            }
+        }
+    }
+
+    private fun selectModel(modelPath: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, message = "Loading model...") }
+            inferenceBridge.loadModel(
+                context = application,
+                modelPath = modelPath,
+                onDone = { message ->
+                    val success = message.startsWith("Model loaded")
+                    _uiState.update {
+                        it.copy(
+                            isLoading = false,
+                            modelStatus = if (success) ModelStatus.DOWNLOADED else ModelStatus.ERROR,
+                            message = message,
+                            error = if (success) null else message
+                        )
+                    }
+                    if (success) refreshModelList()
+                }
+            )
+        }
+    }
+
+    private fun deleteSpecificModel(modelPath: String) {
+        viewModelScope.launch {
+            inferenceBridge.deleteModel(modelPath)
+            refreshModelList()
+            _uiState.update {
+                it.copy(message = "Model deleted")
+            }
+        }
+    }
 }
 
 /**
@@ -344,4 +393,7 @@ sealed class SettingsEvent {
     data object HideDownloadDialog : SettingsEvent()
     data class StartHfDownload(val token: String) : SettingsEvent()
     data class StartKaggleDownload(val username: String, val apiKey: String) : SettingsEvent()
+    data object RefreshModelList : SettingsEvent()
+    data class SelectModel(val modelPath: String) : SettingsEvent()
+    data class DeleteSpecificModel(val modelPath: String) : SettingsEvent()
 }

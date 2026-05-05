@@ -1,17 +1,23 @@
 package com.penpal.feature.inference
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.penpal.core.ai.ModelManager
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -50,6 +56,18 @@ fun InferenceScreen(
         )
 
         Spacer(modifier = Modifier.height(24.dp))
+
+        // Available Models Section
+        AvailableModelsSection(
+            models = uiState.availableModels,
+            isLoading = uiState.isLoadingModels,
+            currentModelPath = if (uiState.isReady) null else null, // We'll track this differently
+            onSelect = { path -> onEvent(InferenceEvent.SelectModel(path)) },
+            onDelete = { path -> onEvent(InferenceEvent.DeleteModel(path)) },
+            onRefresh = { onEvent(InferenceEvent.RefreshModelList) }
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
 
         ModelInfoCard()
 
@@ -302,6 +320,131 @@ private fun InfoRow(label: String, value: String) {
             text = value,
             style = MaterialTheme.typography.bodyMedium
         )
+    }
+}
+
+@Composable
+private fun AvailableModelsSection(
+    models: List<ModelManager.ModelInfo>,
+    isLoading: Boolean,
+    currentModelPath: String?,
+    onSelect: (String) -> Unit,
+    onDelete: (String) -> Unit,
+    onRefresh: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Available Models",
+                    style = MaterialTheme.typography.titleMedium
+                )
+                IconButton(onClick = onRefresh, enabled = !isLoading) {
+                    if (isLoading) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = "Refresh"
+                        )
+                    }
+                }
+            }
+
+            if (models.isEmpty()) {
+                Text(
+                    text = "No models found. Download a model or place .litertlm files in your Downloads folder.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+            } else {
+                LazyColumn(
+                    modifier = Modifier.heightIn(max = 300.dp)
+                ) {
+                    items(models) { model ->
+                        ModelListItem(
+                            model = model,
+                            isActive = model.path == currentModelPath,
+                            onSelect = { onSelect(model.path) },
+                            onDelete = { onDelete(model.path) }
+                        )
+                        if (model != models.last()) {
+                            HorizontalDivider(modifier = Modifier.padding(horizontal = 8.dp))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ModelListItem(
+    model: ModelManager.ModelInfo,
+    isActive: Boolean,
+    onSelect: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val sizeMB = model.sizeBytes / (1024 * 1024)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp, horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = Icons.Default.Storage,
+            contentDescription = null,
+            modifier = Modifier.size(24.dp),
+            tint = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(
+            modifier = Modifier.weight(1f)
+        ) {
+            Text(
+                text = model.name,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = "${sizeMB} MB · ${if (model.lastUsed > 0) "Used" else "Available"}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Row {
+            TextButton(
+                onClick = onSelect,
+                enabled = !isActive
+            ) {
+                Text(if (isActive) "Active" else "Load")
+            }
+            IconButton(onClick = onDelete) {
+                Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = "Delete",
+                    tint = MaterialTheme.colorScheme.error
+                )
+            }
+        }
     }
 }
 

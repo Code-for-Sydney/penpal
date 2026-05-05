@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.penpal.core.ai.DownloadProgress
 import com.penpal.core.ai.InferenceBridge
+import com.penpal.core.ai.ModelManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -25,7 +26,9 @@ data class InferenceUiState(
     val serverUrl: String = "http://localhost:8000",
     val isServerConnected: Boolean = false,
     val error: String? = null,
-    val statusMessage: String? = null
+    val statusMessage: String? = null,
+    val availableModels: List<ModelManager.ModelInfo> = emptyList(),
+    val isLoadingModels: Boolean = false
 )
 
 enum class ModelStatus {
@@ -42,6 +45,9 @@ sealed class InferenceEvent {
     data object DismissError : InferenceEvent()
     data object DismissStatus : InferenceEvent()
     data object CheckModelStatus : InferenceEvent()
+    data object RefreshModelList : InferenceEvent()
+    data class SelectModel(val modelPath: String) : InferenceEvent()
+    data class DeleteModel(val modelPath: String) : InferenceEvent()
 }
 
 class InferenceViewModel(
@@ -96,8 +102,9 @@ class InferenceViewModel(
             }
         }
 
-        // Check initial model status
+        // Check initial model status and list available models
         checkModelStatus()
+        refreshModelList()
     }
 
     fun onEvent(event: InferenceEvent) {
@@ -107,6 +114,9 @@ class InferenceViewModel(
             is InferenceEvent.DismissError -> _uiState.update { it.copy(error = null) }
             is InferenceEvent.DismissStatus -> _uiState.update { it.copy(statusMessage = null) }
             is InferenceEvent.CheckModelStatus -> checkModelStatus()
+            is InferenceEvent.RefreshModelList -> refreshModelList()
+            is InferenceEvent.SelectModel -> selectModel(event.modelPath)
+            is InferenceEvent.DeleteModel -> deleteModel(event.modelPath)
         }
     }
 
@@ -170,6 +180,60 @@ class InferenceViewModel(
                 isDownloading = false,
                 downloadProgress = 0
             )
+        }
+    }
+
+    private fun refreshModelList() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoadingModels = true) }
+            try {
+                val models = inferenceBridge.listAvailableModels(getApplication())
+                _uiState.update { it.copy(availableModels = models, isLoadingModels = false) }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(isLoadingModels = false, error = "Failed to list models: ${e.message}") }
+            }
+        }
+    }
+
+    private fun selectModel(modelPath: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(modelStatus = ModelStatus.LOADING, statusMessage = "Loading model...") }
+            inferenceBridge.loadModel(
+                context = getApplication(),
+                modelPath = modelPath,
+                onDone = { message ->
+                    val success = message.startsWith("Model loaded")
+                    _uiState.update {
+                        it.copy(
+                            modelStatus = if (success) ModelStatus.READY else ModelStatus.ERROR,
+                            isReady = success,
+                            statusMessage = message,
+                            error = if (success) null else message
+                        )
+                    }
+                    if (success) refreshModelList()
+                }
+            )
+        }
+    }
+
+    private fun deleteModel(modelPath: String) {
+        viewModelScope.launch {
+            inferenceBridge.deleteModel(modelPath)
+            refreshModelList()
+            // If we deleted the current model, update status
+            if (_uiState.value.isReady) {
+                val stillAvailable = _uiState.value.availableModels.any { it.path == modelPath }
+                if (!stillAvailable) {
+                    _uiState.update {
+                        it.copy(
+                            isReady = false,
+                            modelStatus = ModelStatus.NOT_LOADED,
+                            statusMessage = "Model deleted"
+                        )
+                    }
+                }
+            }
         }
     }
 }

@@ -1,6 +1,8 @@
 package com.penpal.feature.settings
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -11,6 +13,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.penpal.core.ai.ModelManager
 import com.penpal.core.ai.ModelStatus
 
 /**
@@ -164,6 +167,17 @@ fun SettingsScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Available Models List
+                AvailableModelsSection(
+                    models = uiState.availableModels,
+                    isLoading = uiState.isLoadingModels,
+                    onSelect = { path -> onEvent(SettingsEvent.SelectModel(path)) },
+                    onDelete = { path -> onEvent(SettingsEvent.DeleteSpecificModel(path)) },
+                    onRefresh = { onEvent(SettingsEvent.RefreshModelList) }
+                )
             }
 
             // ──────────────────────────────────────────────────────────────
@@ -365,6 +379,119 @@ fun SettingsScreen(
 // ─────────────────────────────────────────────────────────────────────
 // Helper Components
 // ─────────────────────────────────────────────────────────────────────
+
+@Composable
+private fun AvailableModelsSection(
+    models: List<ModelManager.ModelInfo>,
+    isLoading: Boolean,
+    onSelect: (String) -> Unit,
+    onDelete: (String) -> Unit,
+    onRefresh: () -> Unit
+) {
+    Column {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Available Models",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold
+            )
+            IconButton(onClick = onRefresh, enabled = !isLoading) {
+                if (isLoading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = "Refresh"
+                    )
+                }
+            }
+        }
+
+        if (models.isEmpty()) {
+            Text(
+                text = "No models found. Download a model or place .litertlm files in your Downloads folder.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(vertical = 8.dp)
+            )
+        } else {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                )
+            ) {
+                Column(modifier = Modifier.padding(8.dp)) {
+                    models.forEach { model ->
+                        ModelListItem(
+                            model = model,
+                            onSelect = { onSelect(model.path) },
+                            onDelete = { onDelete(model.path) }
+                        )
+                        if (model != models.last()) {
+                            HorizontalDivider(modifier = Modifier.padding(horizontal = 8.dp))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ModelListItem(
+    model: ModelManager.ModelInfo,
+    onSelect: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val sizeMB = model.sizeBytes / (1024 * 1024)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp, horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = Icons.Default.Storage,
+            contentDescription = null,
+            modifier = Modifier.size(24.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(
+            modifier = Modifier.weight(1f)
+        ) {
+            Text(
+                text = model.name,
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Text(
+                text = "${sizeMB} MB",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Row {
+            TextButton(onClick = onSelect) {
+                Text("Load")
+            }
+            IconButton(onClick = onDelete) {
+                Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = "Delete",
+                    tint = MaterialTheme.colorScheme.error
+                )
+            }
+        }
+    }
+}
 
 @Composable
 fun SettingsSection(
