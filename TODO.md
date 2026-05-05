@@ -1,6 +1,13 @@
+- [x] In the Chat Tab, conversations aren't persistent. There needs to be a history similar to 
+- [x] In the Chat Tab, conversations should be able to load notebooks into memory. 
+- [x] In the Chat Tab, adding a file to the chat would append the file to a new notebook or add it to an existing notebook if it is already loaded to the chat. Any files added to the chat should be pinned to the chat conversation.
+- [x] In the Chat Tab, files should be able to be dragged and dropped into the conversation to load their content into the memory.
 - In the Think Tab, when Notebooks when opened have a home button this should go back to the list of notebooks.
 - In the Think Tab, Notebooks when opened have an "x" button - this closes the notebook.
-- In the Chat Tab, conversations aren't persistent. There needs to be a history similar to 
-- In the Chat Tab, conversations should be able to load notebooks into memory. 
-- In the Chat Tab, adding a file to the chat would append the file to a new notebook or add it to an existing notebook if it is already loaded to the chat. Any files added to the chat should be pinned to the chat conversation.
-- In the Chat Tab, files should be able to be dragged and dropped into the conversation to load their content into the memory.
+- [x] In the Think Tab, notebook should be processed and the information should be presented per parser present in the notebook. If there is a list of images it should process each one of those in logical order unless specified by the user to make it parse in higher priority. Each result should be a separate block.
+- In the Think Tab, a toggle should be present that switches between the original content and the parsed content. 
+- In a NEW TAB for Model process visualizer, breaks down how the model would process 
+- Future: NNAPI NPU Support
+- Future: More Models
+- Future: More Parsers
+- In the Settings Tab, there should be a way to visualize the inputs and outputs of the model. 

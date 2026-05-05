@@ -4,6 +4,104 @@ All notable changes to the Penpal project.
 
 ## [Unreleased]
 
+### Document Parsers, Vector Persistence & Chat Enhancements (May 2026)
+
+#### Real Document Parsers ✅
+
+**PdfDocumentParser**
+- Uses PdfBox for text extraction and chunking with smart overlap for RAG
+
+**ImageParser**
+- Uses ML Kit Text Recognition for OCR with coroutine suspension support
+
+**AudioParser**
+- Reads metadata (placeholder for future transcription model integration)
+
+**UrlParser**
+- Uses Jsoup for proper HTML parsing and content extraction
+
+**CodeParser**
+- Language-aware parsing for Kotlin, Java, Python, JS/TS, Go, Rust
+- Syntax-aware chunking
+
+**Smart Text Chunking**
+- All parsers implement overlapping chunk strategy for RAG context preservation
+- `ParserFactory` creates appropriate parser by MIME type
+
+#### Processing Pipeline Wiring ✅
+
+- `ExtractionWorker` now uses real parsers and persists chunks to vector store
+- `VectorStoreProvider` singleton for cross-module access
+- `NotebookEditorViewModel` auto-enqueues `ProcessBlocks` and observes job status
+- `MainScreen` passes `WorkerLauncher` to notebook editor
+
+#### Vector Store Persistence ✅
+
+- Extracted chunks auto-embedded and stored via `VectorStoreRepository`
+- Chat RAG retrieves real document chunks instead of mock data
+- End-to-end flow: Document → Parser → Chunks → Embed → Store → RAG Search
+
+#### ONNX Runtime Embedder ✅
+
+- `OnnxMiniLmEmbedder` with mean pooling and L2 normalization
+- Falls back to mock embedder with log warning if ONNX model missing
+- Added to `PenpalApplication` DI
+
+#### Native Library Compatibility ✅
+
+- Added `ndk.abiFilters` for `arm64-v8a`, `armeabi-v7a`, `x86_64`
+- Added packaging options for clean APK builds
+- APK size optimized: 160MB → 83MB for arm64-only builds
+
+#### GPU Acceleration ✅
+
+- GPU-first inference with CPU fallback in `LiteRtInferenceBridge` and `LmEngineManager`
+
+#### Chat Enhancements ✅
+
+**Persistent Conversations**
+- Room database schema v3 with `ChatConversationEntity` and `ChatConversationDao`
+- Navigation drawer for conversation history
+- Conversation list with metadata persistence
+
+**Notebook Attachment**
+- Chips panel for selecting and attaching notebooks to conversations
+- RAG context merging from attached notebook chunks
+- Linked notebook content automatically injected into chat context
+
+**File Attachment**
+- File picker integration for attaching documents to chat
+- Creates `ProcessBlock` in linked notebook for tracked processing
+- Pinned files display in conversation UI
+
+**Drag-and-Drop**
+- Infrastructure for dragging files directly into chat conversations
+
+#### Dependencies Added ✅
+
+| Dependency | Purpose |
+|------------|---------|
+| `org.jsoup:jsoup` | HTML parsing for URL content extraction |
+| `com.google.mlkit:text-recognition` | OCR for image document parsing |
+| `com.microsoft.onnxruntime:onnxruntime-android` | ONNX Runtime for text embeddings |
+
+#### Updated Module Status
+
+| Module | Status | Description |
+|--------|--------|-------------|
+| app | ✅ Complete | Shell app, MainScreen, BottomNavigation, WorkerLauncher passing |
+| core:ai | ✅ Complete | InferenceBridge, ModelStatus, VectorStore, OnnxMiniLmEmbedder |
+| core:data | ✅ Complete | Room database (v3), entities, DAOs, ChatConversationEntity |
+| core:processing | ✅ Complete | Real parsers (PDF, Image, Audio, URL, Code), ExtractionWorker, WorkerLauncher |
+| core:ui | ✅ Complete | Material 3 Theme |
+| feature:chat | ✅ Complete | RAG chat with persistent conversations, notebook/file attachment |
+| feature:process | ✅ Complete | Document extraction UI |
+| feature:inference | ✅ Complete | Model management UI |
+| feature:notebooks | ✅ Complete | Think tab with auto-processing, block-based editor |
+| feature:settings | ✅ Complete | App settings and configuration |
+
+---
+
 ### LiteRT-LM Real Engine API Integration (May 2026) ✅
 
 **Commits:** `fbd4b86` `8879691` `e370556` `c37743e`

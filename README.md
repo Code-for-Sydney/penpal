@@ -59,6 +59,10 @@ Penpal's inference layer is built around **Gemma 4 E2B-IT** and uses the **LiteR
 │ • HuggingFace/Kaggle downloads           │
 │ • DownloadManager integration            │
 ├────────────────────────────────────────┤
+│ OnnxMiniLmEmbedder                      │
+│ • ONNX Runtime text embeddings           │
+│ • Mean pooling + L2 normalization        │
+├────────────────────────────────────────┤
 │      Gemma 4 E2B-IT Model (.litertlm)   │
 └────────────────────────────────────────┘
 ```
@@ -75,11 +79,13 @@ Penpal's inference layer is built around **Gemma 4 E2B-IT** and uses the **LiteR
 
 ### Core Capabilities
 
-- **Document Extraction**: Queue files and URLs for background parsing (WorkManager)
-- **Vector Store**: Semantic similarity search across extracted content
-- **RAG Chat**: Retrieve relevant chunks and generate contextual responses
+- **Document Extraction**: Real parsers for PDF (PdfBox), Images (ML Kit OCR), Audio (metadata), URLs (Jsoup), and Code (language-aware chunking)
+- **Vector Store**: Semantic similarity search with ONNX Runtime embeddings (MiniLM with mean pooling + L2 normalization)
+- **RAG Chat**: Retrieve real document chunks and generate contextual responses via LiteRT-LM
+- **Persistent Chat**: Room database conversations with history drawer, notebook attachment, and file pinning
 - **Model Management**: Download and load Gemma 4 E2B-IT for on-device inference
 - **Offline Mode**: Network monitoring with graceful degradation
+- **GPU Acceleration**: GPU-first inference with automatic CPU fallback
 
 ## Build Configuration
 
@@ -104,17 +110,21 @@ app/                    # Shell app, MainScreen, BottomNavigation
 
 core/
 ├── ai/                 # InferenceBridge, LmEngineManager, LiteRtInferenceBridge,
-│                       # ModelManager, Gemma 4, TextEmbedder, VectorStoreRepository, ModelStatus
-├── data/               # Room database (PenpalDatabase v2), entities, DAOs
-├── processing/         # DocumentParser, ExtractionWorker, WorkerLauncher
+│                       # ModelManager, Gemma 4, TextEmbedder, OnnxMiniLmEmbedder,
+│                       # VectorStoreRepository, ModelStatus
+├── data/               # Room database (PenpalDatabase v3), entities, DAOs
+├── processing/         # Real DocumentParsers (PDF, Image, Audio, URL, Code),
+│                       # ExtractionWorker, WorkerLauncher, ParserFactory
 ├── media/              # Media processing utilities
 └── ui/                 # Material 3 Theme
 
 feature/
-├── chat/               # ChatScreen, ChatViewModel (RAG flow with real inference)
+├── chat/               # ChatScreen, ChatViewModel (RAG flow, persistent conversations,
+│                       # notebook/file attachment, drag-and-drop)
 ├── process/            # ProcessScreen, ProcessViewModel (job queue)
 ├── inference/          # InferenceScreen, InferenceViewModel (model management)
-├── notebooks/          # NotebookScreen, NotebookEditorViewModel (block-based editor)
+├── notebooks/          # NotebookScreen, NotebookEditorViewModel (block-based editor,
+│                       # auto-processing, image picker)
 └── settings/           # SettingsScreen, SettingsViewModel (model download UI)
 ```
 

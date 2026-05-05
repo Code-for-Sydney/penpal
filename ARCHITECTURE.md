@@ -54,6 +54,7 @@ This document provides an in-depth look at the system architecture, component re
 | Phase 4: Polish | ✅ Complete | WorkManager notifications, offline mode, network monitoring |
 | Phase 4.5: Notebooks | ✅ Complete | Think tab with block-based editor, GraphNodeCanvas, DrawingCanvas |
 | Phase 4.6: Notebooks Enhanced | ✅ Complete | Image picker, Coil integration, home navigation |
+| Phase 5: Real Parsers & Chat Persistence | ✅ Complete | Document parsing, vector persistence, chat enhancements |
 
 ### Key Inference Components
 
@@ -65,6 +66,7 @@ This document provides an in-depth look at the system architecture, component re
 | **API** | LiteRT-LM | Direct on-device inference via Engine class |
 | **Streaming** | MessageCallback | Callback-based streaming responses |
 | **Model Manager** | `ModelManager` | HuggingFace/Kaggle download management |
+| **Text Embedder** | `OnnxMiniLmEmbedder` | ONNX Runtime with mean pooling + L2 normalization (fallback to mock) |
 | **Model Source** | HuggingFace | `litert-community/gemma-4-E2B-it-litert-lm` (~2.6 GB) |
 
 ### AI Inference Architecture (LiteRT-LM Engine API)
@@ -172,8 +174,10 @@ UI updates as response streams in
 ```
 PenpalApplication (Singleton)
 ├── lazy vectorStore: VectorStoreRepository
+├── lazy vectorStoreProvider: VectorStoreProvider  # Cross-module singleton access
 ├── lazy workerLauncher: WorkerLauncher
 ├── lazy inferenceBridge: InferenceBridge
+├── lazy embedder: TextEmbedder  # OnnxMiniLmEmbedder with fallback
 └── lazy gson: Gson
 
 PenpalDatabase (Singleton via getInstance())
@@ -213,7 +217,8 @@ penpal/
 │   │   ├── LiteRtInferenceBridge.kt # ML Kit GenAI implementation (AI Edge Gallery pattern)
 │   │   ├── InferenceModule.kt     # Hilt inference bindings
 │   │   ├── TextEmbedder.kt        # Text embedding interface
-│   │   ├── MiniLmEmbedder.kt      # Mock embedder (384-dim)
+│   │   ├── MiniLmEmbedder.kt      # Mock embedder (384-dim, fallback)
+│   │   ├── OnnxMiniLmEmbedder.kt  # ONNX Runtime embedder with mean pooling + L2 norm
 │   │   └── VectorStoreRepository.kt # LRU cache + similarity
 │   ├── data/                      # ✅ Implemented
 │   │   ├── PenpalDatabase.kt      # Room database
@@ -225,8 +230,8 @@ penpal/
 │   ├── media/                     # ✅ Stub (empty shell)
 │   ├── processing/                # ✅ Implemented
 │   │   ├── DocumentParser.kt      # Parser interface
-│   │   ├── Parsers.kt             # 5 parser stubs
-│   │   ├── ExtractionWorker.kt     # WorkManager worker
+│   │   ├── Parsers.kt             # Real parsers: PDF, Image OCR, Audio, URL, Code
+│   │   ├── ExtractionWorker.kt    # WorkManager worker with real parsing
 │   │   ├── WorkerLauncher.kt      # Job queue
 │   │   └── ProcessingModule.kt    # Hilt DI
 │   └── ui/                        # ✅ Partial
@@ -274,7 +279,8 @@ core:ai/
 ├── InferenceModule.kt       # Hilt bindings for inference
 ├── ModelManager.kt          # HuggingFace/Kaggle download management
 ├── TextEmbedder.kt          # Text embedding interface
-├── MiniLmEmbedder.kt        # Mock: 384-dim embeddings
+├── MiniLmEmbedder.kt        # Mock: 384-dim embeddings (fallback)
+├── OnnxMiniLmEmbedder.kt    # ONNX Runtime: mean pooling, L2 normalization
 ├── VectorStoreRepository.kt # LRU cache + cosine similarity search
 └── ModelStatus.kt           # Model download/load status enum
 ```
@@ -477,7 +483,7 @@ class ExtractionWorker(
         GraphNodeEntity::class,
         GraphEdgeEntity::class,
     ],
-    version = 1,
+    version = 3,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -486,6 +492,7 @@ abstract class PenpalDatabase : RoomDatabase() {
     abstract fun chunkDao(): ChunkDao
     abstract fun jobDao(): ExtractionJobDao
     abstract fun graphDao(): GraphDao
+    abstract fun chatConversationDao(): ChatConversationDao
 }
 ```
 
@@ -511,8 +518,14 @@ Handles document parsing and background extraction.
 ```
 core:processing/
 ├── DocumentParser.kt      # Interface: parse(uri, rule) -> List<RawChunk>
-├── Parsers.kt            # PDF, Audio, Image, URL, Code (stubs)
-├── ExtractionWorker.kt   # WorkManager worker with Hilt
+├── Parsers.kt            # Real implementations:
+│                         #   • PdfDocumentParser (PdfBox text extraction)
+│                         #   • ImageParser (ML Kit Text Recognition OCR)
+│                         #   • AudioParser (metadata, placeholder for transcription)
+│                         #   • UrlParser (Jsoup HTML parsing)
+│                         #   • CodeParser (language-aware: Kotlin, Java, Python, JS/TS, Go, Rust)
+│                         #   • ParserFactory (MIME type routing)
+├── ExtractionWorker.kt   # WorkManager worker with real parsing + vector persistence
 ├── WorkerLauncher.kt     # Job queue management
 └── ProcessingModule.kt   # Hilt DI
 ```
@@ -532,12 +545,13 @@ data class RawChunk(
     val position: Int  // page number or timestamp ms
 )
 
-// Implementations (stubs):
-// - PdfDocumentParser (iText / PDFBox)
-// - AudioParser (Whisper via JNI)
-// - ImageParser (ML Kit Text Recognition)
-// - UrlParser (Jsoup HTML → text)
-// - CodeParser (syntax-aware chunking)
+// Implementations:
+// - PdfDocumentParser (PdfBox: text extraction + overlapping chunking)
+// - AudioParser (metadata reading, transcription placeholder)
+// - ImageParser (ML Kit Text Recognition with coroutine suspension)
+// - UrlParser (Jsoup: HTML → clean text extraction)
+// - CodeParser (language-aware parsing for Kotlin, Java, Python, JS/TS, Go, Rust)
+// - ParserFactory (creates parser by MIME type)
 ```
 
 #### ExtractionWorker
@@ -848,16 +862,16 @@ Main Thread (UI) ──suspend/StateFlow──> IO Dispatcher (Room, files, netw
            │
            ▼
 5. ExtractionWorker.doWork():
-    parser.parse(uri)                ← IO dispatcher (file read)
+    ParserFactory.create(mimeType).parse(uri)  ← IO dispatcher (real parsing)
            │
            ▼
-    chunks = [RawChunk, ...]
+    chunks = [RawChunk, ...]        ← smart overlap for RAG context
            │
            ▼
-    vectorStore.embed(chunks)        ← Default dispatcher (embedding)
+    vectorStore.embed(chunks)        ← Default dispatcher (ONNX embedding)
            │
            ▼
-    Room.insert(chunks)             ← IO dispatcher
+    Room.insert(chunks)             ← IO dispatcher (persistent storage)
            │
            ▼
     Result.success()
@@ -998,9 +1012,9 @@ class ProcessViewModel @Inject constructor(
 
 | Tab | ViewModel | UI Status | Backend Status |
 |-----|-----------|-----------|----------------|
-| Chat | ChatViewModel | ✅ Functional | ✅ RAG via InferenceBridge |
-| Think | NotebookEditorViewModel | ✅ Functional | ✅ Room persistence |
-| Process | ProcessViewModel | ✅ Functional | ✅ Connected to VectorStore |
+| Chat | ChatViewModel | ✅ Functional | ✅ RAG via InferenceBridge, persistent conversations |
+| Think | NotebookEditorViewModel | ✅ Functional | ✅ Room persistence + auto-processing |
+| Process | ProcessViewModel | ✅ Functional | ✅ Real parsers + VectorStore persistence |
 | Inference | InferenceViewModel | ✅ Functional | ✅ ML Kit GenAI / Gemma 4 |
 | Settings | SettingsViewModel | ✅ Functional | ✅ SharedPreferences / DataStore |
 
@@ -1066,7 +1080,7 @@ feature:settings ──> core:data, core:ui
 
 ---
 
-*Last updated: LiteRT-LM Real Engine API Integration - Gemma 4 E2B-IT via Engine class (May 2026)*
+*Last updated: Document Parsers, Vector Persistence & Chat Enhancements - Real parsing, ONNX embeddings, persistent chat (May 2026)*
 
 ---
 
