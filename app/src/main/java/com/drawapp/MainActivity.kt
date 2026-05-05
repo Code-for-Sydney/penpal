@@ -17,7 +17,6 @@ import androidx.core.content.ContextCompat
 import androidx.activity.result.contract.ActivityResultContracts
 import java.io.File
 import java.io.FileOutputStream
-import java.util.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import org.json.JSONArray
@@ -149,8 +148,6 @@ class MainActivity : AppCompatActivity() {
 
     private var currentPageIndex: Int = 0
     private var fullRecognizedText: String = ""
-    private var pendingClusterBitmap: Bitmap? = null
-    private val busyStrokes = mutableSetOf<DrawingView.StrokeItem>()
     private val lastPageDetectionResults = mutableMapOf<Int, List<DrawingView.DetectedBox>>()
     private val recognizedSessionItems = mutableSetOf<Int>()
 
@@ -1161,12 +1158,10 @@ class MainActivity : AppCompatActivity() {
                 drawingView.clearDebugBox()
                 recognitionHandler.removeCallbacks(recognitionRunnable)
                 hasPendingRecognition = false
-                pendingClusterBitmap = null
                 fullRecognizedText = ""
                 recognitionText.text = "Draw something to recognize…"
                 recognitionText.setTextColor(Color.parseColor("#88FFFFFF"))
                 setRecognitionState(RecognitionState.IDLE)
-                 busyStrokes.clear()
                 // Trigger autosave to preserve background type even if canvas is cleared
                 performAutosave()
             }
@@ -1330,11 +1325,9 @@ class MainActivity : AppCompatActivity() {
         drawingView.clear()
         drawingView.clearDebugBox()
         hasPendingRecognition = false
-        pendingClusterBitmap = null
         fullRecognizedText = ""
         recognitionText.text = "Draw something to recognize…"
         recognitionText.setTextColor(Color.parseColor("#88FFFFFF"))
-        busyStrokes.clear()
         
         val file = getNotebookSvgFile(pageIndex)
         
@@ -1703,10 +1696,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    @Deprecated("Use showSearchMode instead")
-    private fun showSearchDialog() {
-        // ... kept for compatibility if needed, but not used
-    }
+    
 
     // ── Overview Dialog ───────────────────────────────────────────────────
 
@@ -2526,6 +2516,7 @@ class MainActivity : AppCompatActivity() {
         val btnClose: Button = dialogView.findViewById(R.id.btnClose)
         val btnTranscribe: Button = dialogView.findViewById(R.id.btnTranscribe)
         val btnSettings: ImageButton = dialogView.findViewById(R.id.btnSettings)
+        val btnYouTube: ImageButton = dialogView.findViewById(R.id.btnYouTube)
         val etPrompt: EditText = dialogView.findViewById(R.id.etPrompt)
         val tvServerUrl: TextView = dialogView.findViewById(R.id.tvServerUrl)
         val processingQueueStatus: LinearLayout = dialogView.findViewById(R.id.processingQueueStatus)
@@ -2628,6 +2619,11 @@ tvServerUrl.visibility = View.VISIBLE
         // Settings button - show server URL configuration
         btnSettings.setOnClickListener {
             showServerSettingsDialog(tvServerUrl)
+        }
+
+        // YouTube button - show YouTube transcription dialog
+        btnYouTube.setOnClickListener {
+            showYouTubeTranscriptionDialog()
         }
 
         // Close button
@@ -2965,7 +2961,7 @@ tvServerUrl.visibility = View.VISIBLE
                     }
                     setOnClickListener {
                         // Open URL in browser
-                        gemmaServer?.openInBrowser(result.url)
+                        openUrlInBrowser(result.url)
                     }
                 }
                 contentLayout.addView(resultButton)
@@ -2990,8 +2986,16 @@ tvServerUrl.visibility = View.VISIBLE
 
         // Add web search button if results available
         if (!webSearchResults.isNullOrEmpty()) {
-            builder.setNeutralButton("Open Links") { _, _ ->
-                showWebSearchResults(webSearchResults)
+            builder.setNeutralButton("Capture Results") { _, _ ->
+                val captured = WebSearchCapture.captureSearch(
+                    context = this,
+                    query = "Transcription context",
+                    transcriptionContext = transcription.take(500),
+                    results = webSearchResults,
+                    sourceFile = fileName
+                )
+                Toast.makeText(this, "Captured ${webSearchResults.size} results", Toast.LENGTH_SHORT).show()
+                showCapturedSearchesDialog()
             }
         }
 
@@ -3055,7 +3059,7 @@ tvServerUrl.visibility = View.VISIBLE
                 setBackgroundColor(Color.parseColor("#7C4DFF"))
                 setTextColor(Color.WHITE)
                 setOnClickListener {
-                    gemmaServer?.openInBrowser(result.url)
+                    openUrlInBrowser(result.url)
                 }
             }
             card.addView(openButton)
@@ -3065,15 +3069,352 @@ tvServerUrl.visibility = View.VISIBLE
 
         scrollView.addView(layout)
 
-        AlertDialog.Builder(context, R.style.DarkDialogTheme)
+AlertDialog.Builder(context, R.style.DarkDialogTheme)
             .setTitle("Web Search Results")
             .setView(scrollView)
             .setPositiveButton("Open All") { _, _ ->
-                // Open first result
-                results.firstOrNull()?.let { gemmaServer?.openInBrowser(it.url) }
+                results.firstOrNull()?.let { openUrlInBrowser(it.url) }
             }
             .setNegativeButton("Close", null)
             .show()
+    }
+
+    private fun showCapturedSearchesDialog() {
+        val captures = WebSearchCapture.getCaptures(this)
+        if (captures.isEmpty()) {
+            Toast.makeText(this, "No captured searches", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val scrollView = ScrollView(this)
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(16, 16, 16, 16)
+        }
+
+        captures.take(20).forEach { capture ->
+            val card = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setBackgroundColor(Color.parseColor("#222222"))
+                setPadding(12, 12, 12, 12)
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    setMargins(0, 8, 0, 8)
+                }
+            }
+
+            card.addView(TextView(this).apply {
+                text = capture.query
+                setTextColor(Color.WHITE)
+                textSize = 14f
+                setTypeface(null, android.graphics.Typeface.BOLD)
+            })
+
+            card.addView(TextView(this).apply {
+                text = "${capture.results.size} results - ${formatTimestamp(capture.timestamp)}"
+                setTextColor(Color.parseColor("#888888"))
+                textSize = 11f
+            })
+
+            val buttonRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+            }
+
+            val shareBtn = Button(this).apply {
+                text = "Share"
+                setBackgroundColor(Color.parseColor("#444444"))
+                setTextColor(Color.WHITE)
+                setOnClickListener {
+                    startActivity(WebSearchCapture.shareAsMarkdown(capture))
+                }
+            }
+
+            val exportBtn = Button(this).apply {
+                text = "Export"
+                setBackgroundColor(Color.parseColor("#444444"))
+                setTextColor(Color.WHITE)
+                setOnClickListener {
+                    val file = WebSearchCapture.exportToJson(this@MainActivity, capture)
+                    Toast.makeText(this@MainActivity, "Saved to ${file.name}", Toast.LENGTH_SHORT).show()
+                }
+            }
+
+            val deleteBtn = Button(this).apply {
+                text = "Delete"
+                setBackgroundColor(Color.parseColor("#FF4444"))
+                setTextColor(Color.WHITE)
+                setOnClickListener {
+                    WebSearchCapture.deleteCapture(this@MainActivity, capture.id)
+                    showCapturedSearchesDialog()
+                }
+            }
+
+            buttonRow.addView(shareBtn)
+            buttonRow.addView(exportBtn)
+            buttonRow.addView(deleteBtn)
+            card.addView(buttonRow)
+
+            layout.addView(card)
+        }
+
+        scrollView.addView(layout)
+
+        AlertDialog.Builder(this, R.style.DarkDialogTheme)
+            .setTitle("Captured Searches (${captures.size})")
+            .setView(scrollView)
+            .setPositiveButton("Close", null)
+            .setNeutralButton("Clear All") { _, _ ->
+                WebSearchCapture.clearAllCaptures(this)
+                Toast.makeText(this, "Cleared all captures", Toast.LENGTH_SHORT).show()
+            }
+            .show()
+    }
+
+    private fun formatTimestamp(timestamp: Long): String {
+        val sdf = java.text.SimpleDateFormat("MMM dd, h:mm a", java.util.Locale.getDefault())
+        return sdf.format(java.util.Date(timestamp))
+    }
+
+    private fun showYouTubeTranscriptionDialog() {
+        val editText = EditText(this).apply {
+            hint = "Paste YouTube URL here"
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.parseColor("#66FFFFFF"))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(0, 16, 0, 8)
+            }
+        }
+
+        val progressBar = ProgressBar(this).apply {
+            visibility = View.GONE
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(0, 16, 0, 0)
+            }
+        }
+
+        val statusText = TextView(this).apply {
+            text = ""
+            setTextColor(Color.parseColor("#88FFFFFF"))
+            textSize = 12f
+            visibility = View.GONE
+        }
+
+        AlertDialog.Builder(this, R.style.DarkDialogTheme)
+            .setTitle("YouTube Transcription")
+            .setView(editText)
+            .setPositiveButton("Transcribe") { _, _ ->
+                val url = editText.text.toString().trim()
+                if (url.isNotBlank()) {
+                    processYouTubeUrl(url)
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun processYouTubeUrl(url: String) {
+        val videoId = extractYouTubeVideoId(url)
+        if (videoId == null) {
+            Toast.makeText(this, "Invalid YouTube URL", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        Toast.makeText(this, "Starting YouTube transcription for: $videoId", Toast.LENGTH_LONG).show()
+
+        activityScope.launch {
+            try {
+                val audioFile = downloadYouTubeAudio(videoId)
+                if (audioFile != null) {
+                    transcribeAudioFile(audioFile)
+                } else {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(this@MainActivity, "Failed to download audio", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    private fun extractYouTubeVideoId(url: String): String? {
+        val patterns = listOf(
+            Regex("youtube\\.com/watch\\?v=([^&]+)"),
+            Regex("youtu\\.be/([^?]+)"),
+            Regex("youtube\\.com/embed/([^?]+)")
+        )
+        for (pattern in patterns) {
+            val match = pattern.find(url)
+            if (match != null) return match.groupValues[1]
+        }
+        return null
+    }
+
+    private suspend fun downloadYouTubeAudio(videoId: String): File? {
+        return withContext(Dispatchers.IO) {
+            try {
+                val outputDir = File(cacheDir, "youtube")
+                if (!outputDir.exists()) outputDir.mkdirs()
+
+                val outputFile = File(outputDir, "${videoId}.m4a")
+
+                val audioUrl = fetchYouTubeAudioUrl(videoId)
+                if (audioUrl == null) {
+                    android.util.Log.e("YouTube", "Could not get audio URL")
+                    return@withContext null
+                }
+
+                android.util.Log.d("YouTube", "Downloading audio from: ${audioUrl.take(80)}")
+                downloadFile(audioUrl, outputFile)
+            } catch (e: Exception) {
+                e.printStackTrace()
+                android.util.Log.e("YouTube", "Failed: ${e.message}")
+                null
+            }
+        }
+    }
+
+    private fun fetchYouTubeAudioUrl(videoId: String): String? {
+        val instances = listOf(
+            "https://inv.nopsled.me" to "/api/v1/videos/$videoId",
+            "https://invidious.fdn.fr" to "/api/v1/videos/$videoId",
+            "https://invidious.moomoo.me" to "/api/v1/videos/$videoId",
+            "https://invidious.poopy.ml" to "/api/v1/videos/$videoId",
+            "https://vid.incogdews.net" to "/api/v1/videos/$videoId"
+        )
+
+        for ((base, path) in instances) {
+            try {
+                val apiUrl = base + path
+                android.util.Log.d("YouTube", "Trying: $apiUrl")
+
+                val connection = java.net.URL(apiUrl).openConnection() as java.net.HttpURLConnection
+                connection.requestMethod = "GET"
+                connection.setRequestProperty("User-Agent", "Mozilla/5.0")
+                connection.connectTimeout = 20000
+                connection.readTimeout = 25000
+
+                val responseCode = connection.responseCode
+                android.util.Log.d("YouTube", "Response: $responseCode")
+
+                if (responseCode == 200) {
+                    val response = connection.inputStream.bufferedReader().readText()
+                    if (response.trim().startsWith("{")) {
+                        val json = org.json.JSONObject(response)
+
+                        if (json.has("adaptiveFormats")) {
+                            val adaptiveFormats = json.getJSONArray("adaptiveFormats")
+                            for (i in 0 until adaptiveFormats.length()) {
+                                val format = adaptiveFormats.getJSONObject(i)
+                                val type = format.optString("type", "")
+                                val bitrate = format.optInt("bitrate", 0)
+                                val url = format.optString("url", "")
+
+                                if (url.isNotEmpty() && type.contains("audio")) {
+                                    android.util.Log.d("YouTube", "Found audio: $type @ ${bitrate}kbps")
+                                    return url
+                                }
+                            }
+                        }
+
+                        if (json.has("hlsManifestUrl")) {
+                            val hlsUrl = json.getString("hlsManifestUrl")
+                            android.util.Log.d("YouTube", "Found HLS: $hlsUrl")
+                            return hlsUrl
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("YouTube", "Failed $base: ${e.message}")
+            }
+        }
+
+        android.util.Log.e("YouTube", "All instances failed - try VPN or different network")
+        return null
+    }
+
+    private fun downloadFile(url: String, outputFile: File): File? {
+        try {
+            android.util.Log.d("YouTube", "Downloading: ${url.take(80)}")
+
+            val connection = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+            connection.setRequestProperty("User-Agent", "Mozilla/5.0")
+            connection.connectTimeout = 60000
+            connection.readTimeout = 120000
+
+            val inputStream = connection.inputStream
+            val outStream = java.io.FileOutputStream(outputFile)
+            val buffer = ByteArray(8192)
+            var totalBytes = 0L
+            var bytesRead: Int
+
+            while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                outStream.write(buffer, 0, bytesRead)
+                totalBytes += bytesRead
+            }
+
+            outStream.close()
+            inputStream.close()
+
+            android.util.Log.d("YouTube", "Downloaded $totalBytes bytes")
+
+if (outputFile.exists() && outputFile.length() > 1024) {
+                return outputFile
+            } else {
+                android.util.Log.e("YouTube", "File too small")
+                return null
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("YouTube", "Download error: ${e.message}")
+            return null
+        }
+    }
+
+    private fun transcribeAudioFile(audioFile: File) {
+        activityScope.launch {
+            try {
+                val result = gemmaServer?.transcribe(audioFile)
+                    ?: GemmaServerClient.TranscriptionResult(false, "", "No server inference available")
+
+                withContext(Dispatchers.Main) {
+                    if (result.success && result.transcription.isNotBlank()) {
+                        showTranscriptionResult(
+                            result.transcription,
+                            audioFile.name,
+                            result.webSearchResults
+                        )
+                    } else {
+                        Toast.makeText(this@MainActivity, result.errorMessage ?: "Transcription failed", Toast.LENGTH_LONG).show()
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    private fun openUrlInBrowser(url: String): Boolean {
+        return try {
+            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
+            intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(intent)
+            true
+        } catch (e: Exception) {
+            Toast.makeText(this, "Failed to open browser", Toast.LENGTH_SHORT).show()
+            false
+        }
     }
 
     private fun getCurrentPlayingFile(): File? {

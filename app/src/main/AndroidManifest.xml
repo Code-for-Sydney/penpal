@@ -29,14 +29,20 @@
         android:usesCleartextTraffic="true">
 
         <activity
-            android:name=".NotebookSelectionActivity"
+            android:name=".MainComposeActivity"
             android:exported="true"
-            android:theme="@style/AppTheme">
+            android:configChanges="orientation|screenSize"
+            android:theme="@style/Theme.Penpal">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".NotebookSelectionActivity"
+            android:exported="false"
+            android:theme="@style/AppTheme" />
 
         <activity
             android:name=".MainActivity"

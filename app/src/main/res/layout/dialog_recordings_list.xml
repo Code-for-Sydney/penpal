@@ -24,6 +24,16 @@
             android:textStyle="bold" />
 
         <ImageButton
+            android:id="@+id/btnYouTube"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:src="@drawable/ic_play_circle"
+            android:background="@drawable/icon_btn_bg"
+            android:contentDescription="YouTube"
+            android:tint="#FF0000"
+            android:layout_marginEnd="8dp" />
+
+        <ImageButton
             android:id="@+id/btnSettings"
             android:layout_width="36dp"
             android:layout_height="36dp"
