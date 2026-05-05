@@ -8,17 +8,19 @@ import androidx.room.RoomDatabase
         ChunkEntity::class,
         ExtractionJobEntity::class,
         ChatMessageEntity::class,
+        ChatConversationEntity::class,
         GraphNodeEntity::class,
         GraphEdgeEntity::class,
         NotebookEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = true
 )
 abstract class PenpalDatabase : RoomDatabase() {
     abstract fun chunkDao(): ChunkDao
     abstract fun extractionJobDao(): ExtractionJobDao
     abstract fun chatMessageDao(): ChatMessageDao
+    abstract fun chatConversationDao(): ChatConversationDao
     abstract fun graphDao(): GraphDao
     abstract fun notebookDao(): NotebookDao
 

@@ -21,6 +21,7 @@ android {
 dependencies {
     api(project(":core:ai"))
     api(project(":core:data"))
+    api(project(":core:processing"))
     api(project(":core:ui"))
 
     api("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.4")

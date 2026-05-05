@@ -28,10 +28,20 @@ data class ExtractionJobEntity(
 @Entity(tableName = "chat_messages")
 data class ChatMessageEntity(
     @PrimaryKey val id: String,
+    val conversationId: String,
     val role: String,
     val content: String,
     val sourcesJson: String,
     val createdAt: Long
+)
+
+@Entity(tableName = "chat_conversations")
+data class ChatConversationEntity(
+    @PrimaryKey val id: String,
+    val title: String,
+    val notebookIdsJson: String = "[]",
+    val createdAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = System.currentTimeMillis()
 )
 
 @Entity(tableName = "graph_nodes")
