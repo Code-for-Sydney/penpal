@@ -1,7 +1,6 @@
 package com.penpal.core.ai
 
 import android.content.Context
-import androidx.lifecycle.asFlow
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkInfo
@@ -30,16 +29,14 @@ class ModelDownloadManager(context: Context) {
     }
 
     fun getDownloadProgress(modelName: String): Flow<Int?> {
-        return workManager.getWorkInfosForUniqueWorkLiveData("download_$modelName")
-            .asFlow()
+        return workManager
+            .getWorkInfosForUniqueWorkFlow("download_$modelName")
             .map { workInfos ->
                 val workInfo = workInfos.firstOrNull()
-                if (workInfo?.state == WorkInfo.State.RUNNING) {
-                    workInfo.progress.getInt(ModelDownloadWorker.KEY_PROGRESS, 0)
-                } else if (workInfo?.state == WorkInfo.State.SUCCEEDED) {
-                    100
-                } else {
-                    null
+                when (workInfo?.state) {
+                    WorkInfo.State.RUNNING -> workInfo.progress.getInt(ModelDownloadWorker.KEY_PROGRESS, 0)
+                    WorkInfo.State.SUCCEEDED -> 100
+                    else -> null
                 }
             }
     }
