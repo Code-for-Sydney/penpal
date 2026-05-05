@@ -1,13 +1,13 @@
 package com.drawapp
 
 import android.content.Context
-import android.graphics.*
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.RectF
 import android.util.AttributeSet
 import android.view.MotionEvent
-import android.view.ScaleGestureDetector
 import android.view.View
-import kotlin.math.max
-import kotlin.math.min
 
 class SelectionFrameView @JvmOverloads constructor(
     context: Context,
@@ -15,193 +15,109 @@ class SelectionFrameView @JvmOverloads constructor(
     defStyleAttr: Int = 0
 ) : View(context, attrs, defStyleAttr) {
 
-    private var pdfBitmap: Bitmap? = null
-    var selectionRect = RectF(100f, 100f, 400f, 400f)
-    
-    private val viewMatrix = Matrix()
-    private val inverseMatrix = Matrix()
-    private var scaleFactor = 1.0f
-    private var translateX = 0f
-    private var translateY = 0f
+    private var bitmap: android.graphics.Bitmap? = null
+    private val selectionRect = RectF()
+    private var isSelecting = false
+    private var startX = 0f
+    private var startY = 0f
 
-    private val borderPaint = Paint().apply {
+    private val selectionPaint = Paint().apply {
         color = Color.parseColor("#7C4DFF")
         style = Paint.Style.STROKE
-        strokeWidth = 6f
-        pathEffect = DashPathEffect(floatArrayOf(20f, 10f), 0f)
-        isAntiAlias = true
+        strokeWidth = 4f
+    }
+
+    private val fillPaint = Paint().apply {
+        color = Color.parseColor("#337C4DFF")
+        style = Paint.Style.FILL
     }
 
     private val handlePaint = Paint().apply {
         color = Color.parseColor("#7C4DFF")
         style = Paint.Style.FILL
-        isAntiAlias = true
     }
 
-    private val fillPaint = Paint().apply {
-        color = Color.argb(40, 124, 77, 255)
-        style = Paint.Style.FILL
+    fun setBitmap(bmp: android.graphics.Bitmap) {
+        bitmap = bmp
+        selectionRect.set(0f, 0f, 0f, 0f)
+        isSelecting = false
+        invalidate()
     }
 
-    private val HANDLE_RADIUS = 30f
-    private var lastX = 0f
-    private var lastY = 0f
-    private var isResizing = false
-    private var isMovingBox = false
-    private var isPanning = false
-
-    private val scaleDetector = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
-        override fun onScale(detector: ScaleGestureDetector): Boolean {
-            val oldScale = scaleFactor
-            scaleFactor *= detector.scaleFactor
-            scaleFactor = scaleFactor.coerceIn(0.2f, 5.0f)
-
-            val focusX = detector.focusX
-            val focusY = detector.focusY
-            val scaleChange = scaleFactor / oldScale
-
-            translateX = focusX - scaleChange * (focusX - translateX)
-            translateY = focusY - scaleChange * (focusY - translateY)
-
-            updateMatrix()
-            invalidate()
-            return true
-        }
-    })
-
-    init {
-        updateMatrix()
-    }
-
-    fun setBitmap(bitmap: Bitmap) {
-        pdfBitmap = bitmap
-        // Center the bitmap initially
-        post {
-            if (width > 0 && height > 0) {
-                val scaleW = width.toFloat() / bitmap.width
-                val scaleH = height.toFloat() / bitmap.height
-                scaleFactor = min(scaleW, scaleH) * 0.9f
-                translateX = (width - bitmap.width * scaleFactor) / 2f
-                translateY = (height - bitmap.height * scaleFactor) / 2f
-                
-                // Initial selection box
-                val bw = bitmap.width.toFloat()
-                val bh = bitmap.height.toFloat()
-                selectionRect.set(bw * 0.1f, bh * 0.1f, bw * 0.9f, bh * 0.3f)
-                
-                updateMatrix()
-                invalidate()
-            }
-        }
-    }
-
-    private fun updateMatrix() {
-        viewMatrix.reset()
-        viewMatrix.postScale(scaleFactor, scaleFactor)
-        viewMatrix.postTranslate(translateX, translateY)
-        viewMatrix.invert(inverseMatrix)
-    }
-
-    private fun screenToCanvas(x: Float, y: Float): FloatArray {
-        val pts = floatArrayOf(x, y)
-        inverseMatrix.mapPoints(pts)
-        return pts
+    fun getCropRect(): android.graphics.Rect {
+        val left = selectionRect.left.toInt().coerceIn(0, (bitmap?.width ?: 0) - 1)
+        val top = selectionRect.top.toInt().coerceIn(0, (bitmap?.height ?: 0) - 1)
+        val right = selectionRect.right.toInt().coerceIn(left + 1, bitmap?.width ?: 0)
+        val bottom = selectionRect.bottom.toInt().coerceIn(top + 1, bitmap?.height ?: 0)
+        return android.graphics.Rect(left, top, right, bottom)
     }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        
-        canvas.save()
-        canvas.concat(viewMatrix)
-        
-        pdfBitmap?.let {
-            canvas.drawBitmap(it, 0f, 0f, null)
-        }
 
-        canvas.drawRect(selectionRect, fillPaint)
-        canvas.drawRect(selectionRect, borderPaint)
-        
-        // Draw resize handle at bottom-right of selection box
-        val handleRadiusInCanvas = HANDLE_RADIUS / scaleFactor
-        canvas.drawCircle(selectionRect.right, selectionRect.bottom, handleRadiusInCanvas, handlePaint)
-        
-        canvas.restore()
+        bitmap?.let { bmp ->
+            val scaleX = width.toFloat() / bmp.width
+            val scaleY = height.toFloat() / bmp.height
+            val scale = minOf(scaleX, scaleY)
+
+            val scaledWidth = bmp.width * scale
+            val scaledHeight = bmp.height * scale
+            val offsetX = (width - scaledWidth) / 2
+            val offsetY = (height - scaledHeight) / 2
+
+            canvas.save()
+            canvas.translate(offsetX, offsetY)
+            canvas.scale(scale, scale)
+
+            canvas.drawBitmap(bmp, 0f, 0f, null)
+
+            if (selectionRect.width() > 0 && selectionRect.height() > 0) {
+                canvas.drawRect(selectionRect, fillPaint)
+                canvas.drawRect(selectionRect, selectionPaint)
+
+                val cornerSize = 12f
+                val corners = arrayOf(
+                    selectionRect.left to selectionRect.top,
+                    selectionRect.right to selectionRect.top,
+                    selectionRect.left to selectionRect.bottom,
+                    selectionRect.right to selectionRect.bottom
+                )
+                corners.forEach { (x, y) ->
+                    canvas.drawCircle(x, y, cornerSize, handlePaint)
+                }
+            }
+
+            canvas.restore()
+        }
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        scaleDetector.onTouchEvent(event)
-        
-        val pointerCount = event.pointerCount
-        val canvasCoords = screenToCanvas(event.x, event.y)
-        val cx = canvasCoords[0]
-        val cy = canvasCoords[1]
-
-        when (event.actionMasked) {
+        when (event.action) {
             MotionEvent.ACTION_DOWN -> {
-                lastX = event.x
-                lastY = event.y
-                
-                // Check handle hit (in canvas space)
-                val handleRadiusInCanvas = HANDLE_RADIUS / scaleFactor
-                val dx = cx - selectionRect.right
-                val dy = cy - selectionRect.bottom
-                if (dx * dx + dy * dy <= (handleRadiusInCanvas * 2) * (handleRadiusInCanvas * 2)) {
-                    isResizing = true
-                    isMovingBox = false
-                    isPanning = false
-                } else if (selectionRect.contains(cx, cy)) {
-                    isMovingBox = true
-                    isResizing = false
-                    isPanning = false
-                } else {
-                    isPanning = false // Wait for second pointer or movement
-                }
-            }
-            MotionEvent.ACTION_POINTER_DOWN -> {
-                isPanning = true
-                isMovingBox = false
-                isResizing = false
-                lastX = event.x
-                lastY = event.y
+                startX = event.x
+                startY = event.y
+                selectionRect.set(startX, startY, startX, startY)
+                isSelecting = true
+                return true
             }
             MotionEvent.ACTION_MOVE -> {
-                if (isPanning || pointerCount > 1) {
-                    val dx = event.x - lastX
-                    val dy = event.y - lastY
-                    translateX += dx
-                    translateY += dy
-                    updateMatrix()
-                    invalidate()
-                } else if (isResizing) {
-                    selectionRect.right = max(selectionRect.left + 20f, cx)
-                    selectionRect.bottom = max(selectionRect.top + 20f, cy)
-                    invalidate()
-                } else if (isMovingBox) {
-                    val lastCanvas = screenToCanvas(lastX, lastY)
-                    val dx = cx - lastCanvas[0]
-                    val dy = cy - lastCanvas[1]
-                    selectionRect.offset(dx, dy)
+                if (isSelecting) {
+                    selectionRect.set(
+                        minOf(startX, event.x),
+                        minOf(startY, event.y),
+                        maxOf(startX, event.x),
+                        maxOf(startY, event.y)
+                    )
                     invalidate()
                 }
-                
-                lastX = event.x
-                lastY = event.y
+                return true
             }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                isResizing = false
-                isMovingBox = false
-                isPanning = false
+            MotionEvent.ACTION_UP -> {
+                isSelecting = false
+                invalidate()
+                return true
             }
         }
-        return true
-    }
-
-    fun getCropRect(): android.graphics.Rect {
-        return android.graphics.Rect(
-            selectionRect.left.toInt(),
-            selectionRect.top.toInt(),
-            selectionRect.right.toInt(),
-            selectionRect.bottom.toInt()
-        )
+        return super.onTouchEvent(event)
     }
 }

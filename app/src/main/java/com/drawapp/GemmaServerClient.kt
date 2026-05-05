@@ -9,7 +9,6 @@ import kotlinx.coroutines.sync.Semaphore
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
-import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
 
@@ -629,90 +628,6 @@ class GemmaServerClient(private val context: Context) {
 
     fun setEventListener(listener: ServerEventListener?) {
         this.eventListener = listener
-    }
-
-    /**
-     * Connect to WebSocket for streaming events
-     */
-    fun connectWebSocket(onMessage: (String) -> Unit, onError: (String) -> Unit = {}) {
-        val wsUrl = _baseUrl.replace("http://", "ws://").replace("https://", "wss://") + "/stream/audio"
-        Log.d(TAG, "WebSocket URL: $wsUrl")
-
-        // For now, we'll use a simple polling approach or WebSocket
-        // Android's HttpURLConnection doesn't support WebSocket directly
-        // Consider using OkHttp for WebSocket support
-        scope.launch {
-            try {
-                val url = URL(wsUrl)
-                val conn = url.openConnection() as HttpURLConnection
-                conn.requestMethod = "GET"
-                conn.connectTimeout = 10000
-                conn.readTimeout = 60000
-
-                val responseCode = conn.responseCode
-                Log.d(TAG, "WebSocket upgrade response: $responseCode")
-
-                // Note: Real WebSocket requires OkHttp or similar
-                // This is a placeholder for the WebSocket implementation
-                onMessage("WebSocket connection established")
-            } catch (e: Exception) {
-                Log.e(TAG, "WebSocket error: ${e.message}")
-                onError(e.message ?: "WebSocket connection failed")
-            }
-        }
-    }
-
-    /**
-     * Parse server events from JSON response
-     */
-    fun parseServerEvent(jsonString: String): ServerEvent? {
-        return try {
-            val json = gson.fromJson(jsonString, Map::class.java)
-            when {
-                json.containsKey("type") && json["type"] == "websearch" -> {
-                    val results = (json["results"] as? List<*>)?.mapNotNull { item ->
-                        (item as? Map<*, *>)?.let {
-                            SearchResult(
-                                title = it["title"] as? String ?: "",
-                                url = it["url"] as? String ?: "",
-                                snippet = it["snippet"] as? String ?: "",
-                                source = it["source"] as? String ?: ""
-                            )
-                        }
-                    } ?: emptyList()
-                    ServerEvent.WebSearch(
-                        query = json["query"] as? String ?: "",
-                        results = results
-                    )
-                }
-                json.containsKey("type") && json["type"] == "transcription" -> {
-                    ServerEvent.Transcription(
-                        text = json["text"] as? String ?: "",
-                        isFinal = json["is_final"] as? Boolean ?: false,
-                        progress = (json["progress"] as? Double)?.toFloat() ?: 0f
-                    )
-                }
-                else -> null
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Parse event error: ${e.message}")
-            null
-        }
-    }
-
-    /**
-     * Open URL in browser
-     */
-    fun openInBrowser(url: String): Boolean {
-        return try {
-            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
-            intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-            context.startActivity(intent)
-            true
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to open browser: ${e.message}")
-            false
-        }
     }
 
     fun cleanup() {
