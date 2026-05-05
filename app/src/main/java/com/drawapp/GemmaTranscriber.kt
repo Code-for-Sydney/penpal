@@ -354,26 +354,6 @@ class GemmaTranscriber(private val context: Context) {
         }
     }
 
-    /**
-     * Merge chunk transcriptions into coherent text
-     */
-    private fun mergeTranscriptions(chunks: List<ChunkTranscription>): String {
-        val merged = StringBuilder()
-
-        for (chunk in chunks.sortedBy { it.chunkIndex }) {
-            val text = chunk.transcription.trim()
-            if (text.isNotBlank() && !text.startsWith("[Error")) {
-                merged.append(text)
-                merged.append(" ")
-            }
-        }
-
-        return merged.toString().trim()
-    }
-
-    /**
-     * Save transcription to history
-     */
     fun saveToHistory(
         audioFileName: String,
         transcription: String,
@@ -395,17 +375,12 @@ class GemmaTranscriber(private val context: Context) {
             durationMs = durationMs
         ))
 
-        // Keep only last 50 entries
         val trimmed = history.take(50)
-
         prefs.edit()
             .putString("transcription_history", gson.toJson(trimmed))
             .apply()
     }
 
-    /**
-     * Get transcription history
-     */
     fun getHistory(): List<TranscriptionHistoryItem> {
         val prefs = getPrefs()
         val historyJson = prefs.getString("transcription_history", "[]") ?: "[]"

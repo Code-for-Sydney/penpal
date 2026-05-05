@@ -318,38 +318,6 @@ class ProcessingQueueManager private constructor(private val context: Context) {
      * Since Gemma is multimodal, we convert audio to a visual representation
      * or use the server for actual transcription with cached warm state.
      */
-    private fun prepareAudioForGemma(audioFile: File): ByteArray? {
-        // Read WAV header to validate
-        return try {
-            FileInputStream(audioFile).use { fis ->
-                // Skip WAV header (44 bytes)
-                fis.skip(44)
-                val dataSize = (audioFile.length() - 44).toInt()
-                val buffer = ByteArray(dataSize)
-                fis.read(buffer)
-                buffer
-            }
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    /**
-     * Simulate transcription (placeholder for real implementation).
-     * In production, this would integrate with on-device audio models.
-     */
-    private suspend fun simulateTranscription(item: QueueItem): String {
-        // Simulate processing time based on file size
-        val fileSizeSeconds = item.audioFile.length() / 64000 // ~16kHz mono
-        val processingTime = minOf(fileSizeSeconds * 100L, 30000L) // Max 30s
-
-        delay(processingTime)
-
-        // For demo, return a placeholder
-        // In production, you'd call the on-device model here
-        return "[Queued for server transcription: ${item.audioFile.name}]"
-    }
-
     // ═══════════════════════════════════════════════════════════════════
     // Results Management
     // ═══════════════════════════════════════════════════════════════════
