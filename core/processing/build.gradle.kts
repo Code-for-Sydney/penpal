@@ -24,6 +24,8 @@ dependencies {
     implementation("com.tom-roush:pdfbox-android:2.0.27.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.google.code.gson:gson:2.11.0")
+    implementation(libs.jsoup)
+    implementation(libs.mlkit.text.recognition)
     implementation(project(":core:ai"))
     implementation(project(":core:data"))
 }

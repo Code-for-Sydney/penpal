@@ -5,16 +5,19 @@ import android.net.Uri
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
+import com.penpal.core.ai.VectorStoreRepository
 import com.penpal.core.data.ExtractionJobDao
+import com.penpal.core.data.PenpalDatabase
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
 
 class ExtractionWorker(
     context: Context,
     params: WorkerParameters
 ) : CoroutineWorker(context, params) {
 
-    private val extractionJobDao = com.penpal.core.data.PenpalDatabase.getInstance(context).extractionJobDao()
+    private val extractionJobDao: ExtractionJobDao = PenpalDatabase.getInstance(context).extractionJobDao()
     private val notificationHelper = NotificationHelper(context)
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
@@ -31,41 +34,51 @@ class ExtractionWorker(
             notificationHelper.showProgressNotification(jobId, job.sourceUri, 10)
 
             val uri = Uri.parse(job.sourceUri)
-            setProgress(workDataOf(KEY_PROGRESS to 50))
-            notificationHelper.showProgressNotification(jobId, job.sourceUri, 50)
+            setProgress(workDataOf(KEY_PROGRESS to 30))
+            notificationHelper.showProgressNotification(jobId, job.sourceUri, 30)
 
-            val chunks = listOf(
-                com.penpal.core.ai.RawChunk(
-                    jobId + "_0",
-                    job.sourceUri,
-                    "Parsed content placeholder",
-                    0
-                )
-            )
+            // Parse the document using the appropriate parser
+            val parserFactory = createParserFactory()
+            val parser = parserFactory.createParser(job.mimeType)
+            val chunks = parser.parse(uri, job.rule)
 
-            setProgress(workDataOf(KEY_PROGRESS to 70))
-            notificationHelper.showProgressNotification(jobId, job.sourceUri, 70)
+            setProgress(workDataOf(KEY_PROGRESS to 60))
+            notificationHelper.showProgressNotification(jobId, job.sourceUri, 60)
 
             if (chunks.isNotEmpty()) {
-                val insertProgress = 70 + (30 * chunks.size / 100).coerceAtMost(30)
-                setProgress(workDataOf(KEY_PROGRESS to insertProgress))
-                notificationHelper.showProgressNotification(jobId, job.sourceUri, insertProgress)
+                // Persist chunks to vector store for RAG
+                val vectorStore = getVectorStore()
+                vectorStore.embed(chunks)
+
+                setProgress(workDataOf(KEY_PROGRESS to 90))
+                notificationHelper.showProgressNotification(jobId, job.sourceUri, 90)
             }
 
             extractionJobDao.updateStatus(jobId, "DONE")
             extractionJobDao.updateProgress(jobId, 100)
 
-            // Show completion notification
             notificationHelper.showCompletionNotification(jobId, job.sourceUri)
 
             Result.success(workDataOf(KEY_JOB_ID to jobId))
 
         } catch (e: Exception) {
             extractionJobDao.updateStatus(jobId, "FAILED")
-            // Show failure notification
             notificationHelper.showFailureNotification(jobId, job.sourceUri, e.message ?: "Unknown error")
             Result.failure(workDataOf(KEY_ERROR to (e.message ?: "Unknown error")))
         }
+    }
+
+    private fun createParserFactory(): ParserFactory {
+        val okHttpClient = OkHttpClient.Builder()
+            .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
+        return ParserFactory(applicationContext, okHttpClient)
+    }
+
+    private fun getVectorStore(): VectorStoreRepository {
+        return com.penpal.core.ai.VectorStoreProvider.instance
+            ?: throw IllegalStateException("VectorStoreProvider not initialized")
     }
 
     companion object {
