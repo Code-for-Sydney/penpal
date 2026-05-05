@@ -26,5 +26,8 @@ dependencies {
     // LiteRT-LM for on-device LLM inference
     implementation(libs.litertlm.android)
 
+    // ONNX Runtime for embeddings
+    implementation(libs.onnxruntime.android)
+
     implementation(project(":core:data"))
 }

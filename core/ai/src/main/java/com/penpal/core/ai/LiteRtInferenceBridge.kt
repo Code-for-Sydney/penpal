@@ -143,7 +143,9 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
     private suspend fun initializeEngine(modelPath: String): Boolean {
         return withContext(Dispatchers.IO) {
             try {
-                // Try GPU first, then CPU
+                // Pixel 8 Pro Tensor G3: GPU backend uses Adreno GPU
+                // which provides excellent acceleration for LLM inference.
+                // CPU is the fallback if GPU init fails.
                 val backends = listOf(
                     Triple("GPU", Backend.GPU(), Backend.GPU()),
                     Triple("CPU", Backend.CPU(), Backend.CPU())

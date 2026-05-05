@@ -82,7 +82,7 @@ class LmEngineManager(private val context: Context) {
 
                     Log.d(TAG, "Initializing LiteRT-LM Engine with model: $modelPath")
 
-                    // Determine backends to try
+                    // Pixel 8 Pro Tensor G3: GPU backend uses Adreno GPU
                     val backends = if (config.useGpu) {
                         listOf(
                             Triple("GPU", Backend.GPU(), Backend.GPU()),
