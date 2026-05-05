@@ -59,10 +59,103 @@ This document provides an in-depth look at the system architecture, component re
 
 | Component | Implementation | Description |
 |-----------|----------------|-------------|
-| **InferenceBridge** | `LiteRtInferenceBridge` | ML Kit GenAI pattern (AI Edge Gallery style) |
+| **InferenceBridge** | `LiteRtInferenceBridge` | LiteRT-LM Engine API pattern |
+| **Engine** | `LmEngineManager` | GPU/CPU backend fallback, Engine lifecycle |
 | **Model** | Gemma 4 E2B-IT | Google's efficient on-device LLM |
-| **API** | ML Kit GenAI | LiteRT-based inference on Android |
-| **Streaming** | Flow-based | StateFlow for progress, Channel for streaming tokens |
+| **API** | LiteRT-LM | Direct on-device inference via Engine class |
+| **Streaming** | MessageCallback | Callback-based streaming responses |
+| **Model Manager** | `ModelManager` | HuggingFace/Kaggle download management |
+| **Model Source** | HuggingFace | `litert-community/gemma-4-E2B-it-litert-lm` (~2.6 GB) |
+
+### AI Inference Architecture (LiteRT-LM Engine API)
+
+The inference system uses the real LiteRT-LM Engine API for on-device LLM inference:
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│                      Inference Layer (core:ai)                       │
+│                                                                      │
+│  ┌──────────────────────────────────────────────────────────────┐  │
+│  │                      InferenceBridge                          │  │
+│  │  (Interface: initialize, generate, streamGenerate, detectItems)│  │
+│  └────────────────────────────┬─────────────────────────────────┘  │
+│                               │                                     │
+│  ┌────────────────────────────▼─────────────────────────────────┐  │
+│  │                  LiteRtInferenceBridge                        │  │
+│  │  • Engine/Conversation lifecycle                              │  │
+│  │  • MessageCallback for streaming                              │  │
+│  │  • Image/Audio content support (Content.ImageBytes)           │  │
+│  │  • GPU/CPU backend fallback                                    │  │
+│  └────────────────────────────┬─────────────────────────────────┘  │
+│                               │                                     │
+│  ┌────────────────────────────▼─────────────────────────────────┐  │
+│  │                    LmEngineManager                             │  │
+│  │  • Creates Engine with GpuBackendSpec or CpuBackendSpec       │  │
+│  │  • Tracks backend state (GPU/CPU)                              │  │
+│  │  • Engine lifecycle management (create/release)                │  │
+│  └────────────────────────────┬─────────────────────────────────┘  │
+│                               │                                     │
+│  ┌────────────────────────────▼─────────────────────────────────┐  │
+│  │              com.google.ai.edge.litertlm.Engine               │  │
+│  │  • startConversation(MessageCallback) → Conversation          │  │
+│  │  • .send(prompt) for inference                                 │  │
+│  └────────────────────────────┬─────────────────────────────────┘  │
+│                               │                                     │
+│  ┌────────────────────────────▼─────────────────────────────────┐  │
+│  │                    ModelManager                                │  │
+│  │  • startDownloadHFAsync() - HuggingFace download              │  │
+│  │  • startDownloadKaggleAsync() - Kaggle download                │  │
+│  │  • queryDownload() - Progress polling                          │  │
+│  │  • Uses Android DownloadManager for reliable downloads         │  │
+│  └──────────────────────────────────────────────────────────────┘  │
+│                                                                      │
+│  ┌──────────────────────────────────────────────────────────────┐  │
+│  │                  Gemma 4 E2B-IT Model                         │  │
+│  │  • Model: gemma-4-E2B-it.litertlm (~2.6 GB)                   │  │
+│  │  • Source: huggingface.co/litert-community/...               │  │
+│  └──────────────────────────────────────────────────────────────┘  │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+#### MessageCallback Interface
+
+```kotlin
+interface MessageCallback {
+    fun onModelMetadata(modelMetadata: ModelMetadata)
+    fun onStart()
+    fun onContent(content: Content)  // Content.Text or Content.ImageBytes
+    fun onComplete()
+    fun onError(error: String)
+}
+```
+
+#### RAG Flow (Chat → VectorStore → Inference)
+
+```
+User Query in Chat
+        │
+        ▼
+VectorStoreRepository.similaritySearch(query, topK=6)
+        │  (retrieves relevant chunks from processed documents)
+        ▼
+ChatViewModel builds prompt with document context
+        │
+        ▼
+Check isModelReady state
+        │
+    ┌───┴───┐
+    │       │
+ Ready   Not Ready
+    │       │
+    ▼       ▼
+runInference()  Show "Model not ready" message
+        │
+        ▼
+MessageCallback.onContent() → streaming tokens
+        │
+        ▼
+UI updates as response streams in
+```
 
 ### Build Configuration (Current)
 
@@ -176,11 +269,14 @@ core:ai/
 ├── AiModule.kt              # Hilt bindings
 ├── DispatcherModule.kt      # @IoDispatcher, @DefaultDispatcher, @InferenceDispatcher
 ├── InferenceBridge.kt       # Interface: initialize(), generate(), stream(), detectItems(), recognizeText()
-├── LiteRtInferenceBridge.kt # ML Kit GenAI implementation (AI Edge Gallery pattern)
+├── LiteRtInferenceBridge.kt # LiteRT-LM Engine API implementation
+├── LmEngineManager.kt       # Engine lifecycle, GPU/CPU backend fallback
 ├── InferenceModule.kt       # Hilt bindings for inference
-├── TextEmbedder.kt          # Interface: embed(text), dimension
+├── ModelManager.kt          # HuggingFace/Kaggle download management
+├── TextEmbedder.kt          # Text embedding interface
 ├── MiniLmEmbedder.kt        # Mock: 384-dim embeddings
-└── VectorStoreRepository.kt # LRU cache + cosine similarity search
+├── VectorStoreRepository.kt # LRU cache + cosine similarity search
+└── ModelStatus.kt           # Model download/load status enum
 ```
 
 #### DispatcherModule
@@ -198,7 +294,7 @@ annotation class InferenceDispatcher
 // @InferenceDispatcher limited to 2 parallel tasks
 ```
 
-#### InferenceBridge (ML Kit GenAI Pattern)
+#### InferenceBridge (LiteRT-LM Engine API)
 
 ```kotlin
 interface InferenceBridge {
@@ -247,11 +343,12 @@ data class DownloadProgress(
 
 enum class DownloadStatus { NOT_STARTED, DOWNLOADING, COMPLETED, FAILED }
 enum class ModelBackend { ON_DEVICE, REMOTE_API }
+enum class ModelStatus { NOT_DOWNLOADED, DOWNLOADING, DOWNLOADED, LOADING, LOADED, ERROR }
 ```
 
-#### LiteRtInferenceBridge (AI Edge Gallery Pattern)
+#### LiteRtInferenceBridge (LiteRT-LM Engine API)
 
-The `LiteRtInferenceBridge` follows the AI Edge Gallery pattern for ML Kit GenAI integration:
+The `LiteRtInferenceBridge` uses the LiteRT-LM Engine API with GPU/CPU backend fallback:
 
 ```kotlin
 @Singleton
@@ -259,8 +356,9 @@ class LiteRtInferenceBridge @Inject constructor(
     @InferenceDispatcher private val inferenceDispatcher: CoroutineDispatcher,
 ) : InferenceBridge {
 
-    private var generativeModel: GenerativeModel? = null
-    private var downloadTask: Task<Void>? = null
+    private var engine: Engine? = null
+    private var conversation: Conversation? = null
+    private var lmEngineManager: LmEngineManager? = null
 
     override val isReadyFlow = MutableStateFlow(false)
     override val isProcessingFlow = MutableStateFlow(false)
@@ -269,32 +367,45 @@ class LiteRtInferenceBridge @Inject constructor(
 
     override suspend fun initialize(context: Context, config: InferenceConfig): Boolean {
         return withContext(inferenceDispatcher) {
-            // ML Kit GenAI API pattern
-            val model = GenerativeModel.Builder()
-                .setModelName(config.modelName)  // "gemma-4-e2b-it"
-                .setApiKey(config.apiKey)        // Optional API key
-                .build()
-            generativeModel = model
-            isReadyFlow.value = true
-            true
+            // LiteRT-LM Engine API pattern
+            lmEngineManager = LmEngineManager(context)
+            engine = lmEngineManager?.createEngine()
+            isReadyFlow.value = engine != null
+            engine != null
         }
     }
 
-    override suspend fun downloadModel(modelId: String): Flow<DownloadProgress> = flow {
-        // Download via ModelDownloadHelper with progress reporting
-        emit(DownloadProgress(0, totalSize, DOWNLOADING))
-        // ... download logic
-        emit(DownloadProgress(totalSize, totalSize, COMPLETED))
+    override fun runInference(prompt: String, callback: MessageCallback) {
+        val eng = engine ?: throw IllegalStateException("Engine not initialized")
+        val conv = eng.startConversation(callback)
+        conversation = conv
+        conv.send(prompt)
     }
+}
 
-    override fun streamGenerate(prompt: String, config: GenerationConfig): Flow<String> = flow {
-        val model = generativeModel ?: throw IllegalStateException("Model not initialized")
-        val input = ContentBuilder.makeContent { text(prompt) }
+// LmEngineManager with GPU/CPU fallback
+class LmEngineManager(private val context: Context) {
+    private var engine: Engine? = null
+    var backend: ModelBackend = ModelBackend.ON_DEVICE
 
-        model.generateContentStream(input).collect { chunk ->
-            emit(chunk.text)
+    fun createEngine(): Engine? {
+        // Try GPU first
+        val gpuSpec = GpuBackendSpec.create()
+        if (gpuSpec != null) {
+            engine = Engine.create(gpuSpec)
+            if (engine != null) {
+                backend = ModelBackend.GPU
+                return engine
+            }
         }
+        // Fallback to CPU
+        val cpuSpec = CpuBackendSpec.create()
+        engine = Engine.create(cpuSpec)
+        backend = ModelBackend.CPU
+        return engine
     }
+
+    fun release() { engine?.close(); engine = null }
 }
 ```
 
@@ -752,34 +863,41 @@ Main Thread (UI) ──suspend/StateFlow──> IO Dispatcher (Room, files, netw
     Result.success()
 ```
 
-### Query → RAG Response
+### Query → RAG Response (LiteRT-LM Engine API)
 
 ```
 1. User sends query in Chat
-           │
-           ▼
+            │
+            ▼
 2. ChatViewModel.sendQuery("What about X?")
-    viewModelScope.launch(Default)
-           │
-           ▼
+     viewModelScope.launch(Default)
+            │
+            ▼
 3. VectorStoreRepository.similaritySearch(query, topK=6)
-    Default dispatcher (embedding + cosine sim)
-           │
-           ▼
-    chunks = [ChunkEntity, ...]    ← top-K relevant text
-           │
-           ▼
-4. InferenceBridge.generate(prompt + context)
-     Inference dispatcher (ML Kit GenAI / Gemma 4 E2B-IT)
-           │
-           ▼
-    result = InferenceResult(text, sources)
-           │
-           ▼
-5. ChatViewModel._messages.update { it + Message(result.text) }
-           │
-           ▼
-6. Compose recomposes ChatScreen
+     Default dispatcher (embedding + cosine sim)
+            │
+            ▼
+     chunks = [ChunkEntity, ...]    ← top-K relevant text
+            │
+            ▼
+4. Check isModelReady state
+            │
+     ┌──────┴──────┐
+     │             │
+     ▼             ▼
+Ready         Not Ready
+     │             │
+     ▼             ▼
+runInference()  Show "Model not ready" message
+     │
+     ▼
+MessageCallback.onContent() → streaming tokens
+            │
+            ▼
+     ChatViewModel updates message UI
+            │
+            ▼
+5. Compose recomposes ChatScreen with streaming response
 ```
 
 ---
@@ -948,7 +1066,7 @@ feature:settings ──> core:data, core:ui
 
 ---
 
-*Last updated: Build Fix & Settings Module Integration (May 2026)*
+*Last updated: LiteRT-LM Real Engine API Integration - Gemma 4 E2B-IT via Engine class (May 2026)*
 
 ---
 

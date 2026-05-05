@@ -19,15 +19,15 @@ This directory contains documentation for the Penpal Android application.
 
 ## Project Overview
 
-Penpal is a handwriting recognition and drawing application for Android that uses on-device AI (Google Gemma) for real-time OCR and text recognition.
+Penpal is a handwriting recognition and drawing application for Android that uses on-device AI (Google Gemma 4 E2B-IT) for real-time OCR, text recognition, and RAG-enabled chat.
 
 ### Key Features
 
-- AI-powered handwriting recognition
-- Multi-page notebooks with vertical scrolling
-- Whiteboard mode with infinite canvas
-- PDF import and export
-- Lasso selection and manipulation
-- Full-text search across pages
-- Undo/redo system
-- SVG-based persistence
+- **AI Inference**: Real LiteRT-LM Engine API integration with GPU/CPU fallback
+- **RAG Chat**: Retrieval-Augmented Generation combining vector search with LLM inference
+- **Model Management**: Download Gemma 4 E2B-IT from HuggingFace/Kaggle via ModelManager
+- **Multi-page Notebooks**: Block-based editor with graphs, drawings, images
+- **Whiteboard Mode**: Infinite canvas for brainstorming and sketching
+- **Document Processing**: Extract and index content from PDFs, URLs, audio, and images
+- **Vector Store**: Semantic similarity search across extracted content
+- **Offline Mode**: Full on-device inference without network connectivity

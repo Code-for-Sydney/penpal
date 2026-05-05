@@ -4,6 +4,136 @@ All notable changes to the Penpal project.
 
 ## [Unreleased]
 
+### LiteRT-LM Real Engine API Integration (May 2026) ✅
+
+**Commits:** `fbd4b86` `8879691` `e370556` `c37743e`
+
+#### LiteRT-LM Dependency Addition ✅
+
+- Added `com.google.ai.edge.litertlm:litertlm-android:latest.release` to `core/ai/build.gradle.kts`
+- Replaced ML Kit GenAI pattern with direct LiteRT-LM Engine API
+
+#### LmEngineManager Rewrite ✅ (`fbd4b86`)
+
+- Rewrote `LmEngineManager` to use real `com.google.ai.edge.litertlm.Engine` API
+- Added `engine: Engine?` property for model management
+- Implemented GPU/CPU backend fallback pattern:
+  - First tries GPU execution with `GpuBackendSpec`
+  - Falls back to CPU if GPU unavailable
+- Added `backend` property tracking current backend state
+
+#### LiteRtInferenceBridge Rewrite ✅
+
+- Rewrote to use real `Engine`, `Conversation`, `MessageCallback` APIs
+- Replaced `GenerativeModel` pattern with LiteRT-LM `Engine` class
+- Streaming via `MessageCallback` interface:
+  ```kotlin
+  interface MessageCallback {
+      fun onModelMetadata(modelMetadata: ModelMetadata)
+      fun onStart()
+      fun onContent(content: Content)
+      fun onComplete()
+      fun onError(error: String)
+  }
+  ```
+- Session management via `Conversation` class
+- Added `LmModelConfig` data class for configuration
+- Image and audio content support via `Content.ImageBytes`
+
+#### ModelManager for Download Management ✅ (`8879691`)
+
+- Copied from main branch with HuggingFace/Kaggle support
+- Uses Android `DownloadManager` for reliable downloads
+- Downloads Gemma 4 E2B IT model from HuggingFace
+- Model: `gemma-4-E2B-it.litertlm` (~2.6 GB)
+- Source: https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm
+- Methods:
+  - `startDownloadHFAsync(token, repoId, filePath)` - HuggingFace download
+  - `startDownloadKaggleAsync(modelUri, filePath)` - Kaggle download
+  - `queryDownload(downloadId)` - Query download progress
+
+#### Settings Integration ✅ (`e370556`)
+
+**SettingsViewModel:**
+- Integrated `ModelManager` for downloads
+- Added download polling with `queryDownload()` for progress updates
+- Exposes `ModelStatus` via `modelStatusFlow: StateFlow<ModelStatus>`
+- Shows download progress percentage in UI
+
+**SettingsScreen:**
+- Simplified UI, removed model selector
+- Added `ModelDownloadBottomSheet` Compose component
+- Token input field for HuggingFace authentication
+- Download progress display with percentage
+
+**ModelDownloadBottomSheet:**
+- New bottom sheet component for model download flow
+- Token input for HuggingFace authentication
+- Download status and progress indicator
+- Retry functionality on failure
+
+#### ChatViewModel Real Inference Integration ✅ (`c37743e`)
+
+- Added `isModelReady: StateFlow<Boolean>` for readiness check
+- Builds prompt with document context from vector store:
+  ```kotlin
+  val chunks = vectorStore.similaritySearch(userMessage, topK = 6)
+  val context = chunks.joinToString("\n\n") { it.text }
+  val prompt = buildPrompt(userMessage, context)
+  ```
+- Uses placeholder assistant message for streaming updates
+- Updates message as inference streams via `MessageCallback.onContent()`
+- Fixed `ChunkEntity` import (uses `text` field, not `content`)
+- Model readiness state propagates to UI
+
+#### Model Download Flow
+
+```
+1. User enters HuggingFace token in Settings
+              │
+              ▼
+2. ModelManager.startDownloadHFAsync() initiates download
+              │
+              ▼
+3. SettingsViewModel polls ModelManager.queryDownload() for progress
+              │
+              ▼
+4. Progress shown in UI with percentage
+              │
+              ▼
+5. On completion, LiteRtInferenceBridge initializes with model
+```
+
+#### Chat Inference Flow
+
+The complete AI inference flow in Penpal:
+
+```
+1. User sends message in Chat tab
+               │
+               ▼
+2. VectorStoreRepository.similaritySearch() retrieves relevant chunks
+   (topK=6 most similar chunks from vector store)
+               │
+               ▼
+3. ChatViewModel builds prompt with document context
+   - Includes user message and retrieved chunk text
+   - Checks isModelReady state before inference
+               │
+               ▼
+4. If model ready, calls inferenceBridge.runInference()
+   - LiteRtInferenceBridge manages Engine/Conversation lifecycle
+   - LmEngineManager ensures GPU/CPU backend available
+               │
+               ▼
+5. Streaming updates via MessageCallback
+   - onContent() receives streaming tokens
+   - onComplete() signals end of response
+               │
+               ▼
+6. Message UI updates as response streams in real-time
+```
+
 ### Build Fix & Settings Module Integration (May 2026)
 
 #### Build Error Fixes ✅

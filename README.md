@@ -17,7 +17,7 @@ Penpal provides a unified experience for:
 
 ### AI Inference (Central Component)
 
-Penpal's inference layer is built around **Gemma 4 E2B-IT** and uses the **ML Kit GenAI API**:
+Penpal's inference layer is built around **Gemma 4 E2B-IT** and uses the **LiteRT-LM Engine API** for real on-device LLM inference:
 
 | Property | Value |
 |----------|-------|
@@ -25,27 +25,41 @@ Penpal's inference layer is built around **Gemma 4 E2B-IT** and uses the **ML Ki
 | **Size** | ~2.6 GB |
 | **Parameters** | 2 Billion (efficient) |
 | **Context Window** | 8K tokens |
-| **API** | ML Kit GenAI (LiteRT-based) |
+| **API** | LiteRT-LM Engine API (direct on-device inference) |
+| **Source** | HuggingFace: `litert-community/gemma-4-E2B-it-litert-lm` |
 
 #### Inference Capabilities
 
-- **Text Generation**: Streaming token generation for chat responses
+- **Real LiteRT-LM Integration**: Uses actual `Engine`, `Conversation`, `MessageCallback` APIs
+- **GPU/CPU Fallback**: Automatic backend selection (GPU preferred, CPU fallback)
+- **Streaming Responses**: Callback-based token streaming for chat UI
 - **RAG Integration**: Combines vector similarity search with LLM inference
-- **Task Inference**: Detection, OCR, transcription support
+- **Image/Audio Support**: Content handling via `Content.ImageBytes`
+- **Model Manager**: HuggingFace/Kaggle downloads with Android DownloadManager
 - **Offline Mode**: Full on-device inference without network
 
-#### Architecture
+#### Inference Architecture
 
 ```
 ┌────────────────────────────────────────┐
-│           Inference Layer               │
-│         (InferenceBridge)               │
+│           InferenceBridge               │
+│     (Interface for all AI operations)   │
 ├────────────────────────────────────────┤
 │ LiteRtInferenceBridge                  │
-│ (ML Kit GenAI - AI Edge Gallery)        │
+│ • Engine lifecycle management            │
+│ • Conversation for multi-turn chat       │
+│ • MessageCallback for streaming          │
+│ • GPU/CPU backend fallback               │
 ├────────────────────────────────────────┤
-│       Gemma 4 E2B-IT Model              │
-│    (via LiteRT on-device inference)     │
+│ LmEngineManager                         │
+│ • Creates Engine with backend spec       │
+│ • Tracks GPU/CPU backend state           │
+├────────────────────────────────────────┤
+│ ModelManager                            │
+│ • HuggingFace/Kaggle downloads           │
+│ • DownloadManager integration            │
+├────────────────────────────────────────┤
+│      Gemma 4 E2B-IT Model (.litertlm)   │
 └────────────────────────────────────────┘
 ```
 
@@ -89,18 +103,19 @@ app/                    # Shell app, MainScreen, BottomNavigation
 └── PenpalApplication  # Lazy DI singleton
 
 core/
-├── ai/                 # InferenceBridge, Gemma 4, TextEmbedder, VectorStoreRepository, ModelStatus
+├── ai/                 # InferenceBridge, LmEngineManager, LiteRtInferenceBridge,
+│                       # ModelManager, Gemma 4, TextEmbedder, VectorStoreRepository, ModelStatus
 ├── data/               # Room database (PenpalDatabase v2), entities, DAOs
 ├── processing/         # DocumentParser, ExtractionWorker, WorkerLauncher
 ├── media/              # Media processing utilities
 └── ui/                 # Material 3 Theme
 
 feature/
-├── chat/               # ChatScreen, ChatViewModel (RAG flow)
+├── chat/               # ChatScreen, ChatViewModel (RAG flow with real inference)
 ├── process/            # ProcessScreen, ProcessViewModel (job queue)
 ├── inference/          # InferenceScreen, InferenceViewModel (model management)
 ├── notebooks/          # NotebookScreen, NotebookEditorViewModel (block-based editor)
-└── settings/           # SettingsScreen, SettingsViewModel (app configuration)
+└── settings/           # SettingsScreen, SettingsViewModel (model download UI)
 ```
 
 ### Dependency Direction
@@ -129,11 +144,25 @@ cd penpal
 
 ### Model Download
 
-When the Inference tab is used, the app will prompt for Gemma 4 E2B-IT model download (~2.6 GB).
+The Settings tab manages model downloads via ModelManager. Users can download Gemma 4 E2B-IT from HuggingFace (~2.6 GB).
 
-The model is managed via ML Kit GenAI with download progress tracking. Users can:
-1. View model status and size in the Inference tab
-2. Download on-demand when needed
-3. Monitor download progress in real-time
+**Download Flow:**
+1. Enter HuggingFace token in Settings (if required)
+2. Tap "Download Model" in ModelDownloadBottomSheet
+3. Monitor progress with percentage display
+4. On completion, model is ready for inference
 
-**Privacy**: All inference runs locally on-device using LiteRT - no data leaves the device.
+**Features:**
+- HuggingFace and Kaggle download sources
+- Android DownloadManager for reliable downloads
+- Real-time progress polling
+- Retry on failure
+
+**Privacy**: All inference runs locally on-device using LiteRT-LM Engine API - no data leaves the device.
+
+## Supported Model Sources
+
+| Source | URL | Authentication |
+|--------|-----|----------------|
+| **HuggingFace** | `litert-community/gemma-4-E2B-it-litert-lm` | Token required |
+| **Kaggle** | Google Gemma models | Kaggle credentials |

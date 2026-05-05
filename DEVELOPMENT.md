@@ -4,40 +4,43 @@ This guide provides instructions for setting up a development environment and un
 
 ## AI Inference Setup
 
-Penpal v2.x uses **Google Gemma 4 E2B-IT** as the primary inference model via **ML Kit GenAI API**. This section covers setup and configuration.
+Penpal v2.x uses **Google Gemma 4 E2B-IT** as the primary inference model via **LiteRT-LM Engine API**. This section covers setup and configuration.
 
-### ML Kit GenAI API Setup
+### LiteRT-LM Engine API Setup
 
-The inference layer follows the **AI Edge Gallery pattern** for ML Kit GenAI integration:
+The inference layer uses the **LiteRT-LM Engine API** with GPU/CPU backend fallback:
 
 #### 1. Add Dependencies
 
 ```kotlin
 // In core:ai/build.gradle.kts
 dependencies {
-    // ML Kit GenAI (LiteRT-based inference)
-    implementation("com.google.ai.edge.litert:genai-android:0.1.0")
-    implementation("com.google.ai.edge.litert:api:0.1.0")
+    // LiteRT-LM for Gemma inference
+    implementation("com.google.ai.edge.litertlm:litertlm-android:latest.release")
     
     // Google Play Services (required for model download)
     implementation("com.google.android.gms:play-services-base:18.3.0")
 }
 ```
 
-#### 2. Configure API Key (Optional)
+#### 2. Configure Model Download
 
-ML Kit GenAI supports two modes:
-- **Local inference only**: No API key required (limited model selection)
-- **With API key**: Access to latest models, quota management
+LiteRT-LM supports model downloads from HuggingFace and Kaggle:
 
 ```kotlin
-// Create InferenceConfig
-val config = InferenceConfig(
-    modelName = "gemma-4-e2b-it",  // Model identifier
-    apiKey = null,  // Optional: null for local-only inference
-    maxTokens = 1024,
-    temperature = 0.7f,
+// ModelManager for download management
+val modelManager = ModelManager(context)
+
+// Download from HuggingFace
+val downloadId = modelManager.startDownloadHFAsync(
+    token = "your_hf_token",
+    repoId = "google/gemma-4-2b-it",
+    filePath = context.filesDir.resolve("models/gemma-4-2b-it.bin")
 )
+
+// Poll for progress
+val progress = modelManager.queryDownload(downloadId)
+val percentage = (progress.bytesDownloaded * 100) / progress.totalBytes
 ```
 
 #### 3. Initialize InferenceBridge
@@ -49,9 +52,67 @@ val inferenceBridge: InferenceBridge = LiteRtInferenceBridge()
 lifecycleScope.launch {
     val success = inferenceBridge.initialize(context, config)
     if (success) {
-        Log.d("Penpal", "Inference ready")
+        Log.d("Penpal", "LiteRT-LM Engine ready")
     }
 }
+```
+
+### LmEngineManager with GPU/CPU Backend Fallback
+
+```kotlin
+class LmEngineManager(private val context: Context) {
+    private var engine: Engine? = null
+    var backend: ModelBackend = ModelBackend.ON_DEVICE
+
+    fun createEngine(): Engine? {
+        // Try GPU first
+        val gpuSpec = GpuBackendSpec.create()
+        if (gpuSpec != null) {
+            engine = Engine.create(gpuSpec)
+            if (engine != null) {
+                backend = ModelBackend.GPU
+                return engine
+            }
+        }
+        // Fallback to CPU
+        val cpuSpec = CpuBackendSpec.create()
+        engine = Engine.create(cpuSpec)
+        backend = ModelBackend.CPU
+        return engine
+    }
+
+    fun release() { engine?.close(); engine = null }
+}
+```
+
+### Streaming via MessageCallback
+
+```kotlin
+interface MessageCallback {
+    fun onModelMetadata(modelMetadata: ModelMetadata)
+    fun onStart()
+    fun onContent(content: Content)
+    fun onComplete()
+    fun onError(error: String)
+}
+
+// Usage
+inferenceBridge.runInference(prompt, object : MessageCallback {
+    override fun onContent(content: Content) {
+        // Update UI with streamed tokens
+        viewModel.appendToken(content.text)
+    }
+    
+    override fun onComplete() {
+        // Inference finished
+        viewModel.finalizeMessage()
+    }
+    
+    override fun onError(error: String) {
+        // Handle error
+        viewModel.showError(error)
+    }
+})
 ```
 
 ### Gemma 4 E2B-IT Model Configuration
@@ -90,41 +151,58 @@ data class InferenceConfig(
 
 ### Model Download Flow
 
-The app supports downloading models on-demand:
+The app downloads models via Settings using ModelManager:
 
 ```
-1. User opens Inference tab
-           │
-           ▼
-2. Check modelInfoFlow.state.isDownloaded
-           │
-    ┌──────┴──────┐
-    │             │
-    ▼             ▼
-Downloaded    Not Downloaded
-    │             │
-    ▼             ▼
-Initialize    Show "Download Model" button
-           │
-           ▼
-User taps "Download"
-           │
-           ▼
-inferenceBridge.downloadModel(modelId)
-           │
-           ▼
-Observe downloadProgressFlow:
-  - bytesDownloaded / totalBytes
-  - status: DOWNLOADING → COMPLETED
-           │
-           ▼
-On complete: Initialize and use model
+1. User opens Settings tab
+            │
+            ▼
+2. Enter HuggingFace token (if not already saved)
+            │
+            ▼
+3. Tap "Download Model" button
+            │
+            ▼
+4. ModelManager.startDownloadHFAsync() initiates download
+            │
+            ▼
+5. SettingsViewModel polls ModelManager.queryDownload() for progress
+            │
+            ▼
+6. Progress shown in ModelDownloadBottomSheet:
+   - bytesDownloaded / totalBytes
+   - percentage
+   - status: DOWNLOADING → COMPLETED
+            │
+            ▼
+7. On complete: LiteRtInferenceBridge initializes with model
 ```
 
-#### ModelDownloadHelper
+#### ModelManager
 
 ```kotlin
-class ModelDownloadHelper(private val context: Context) {
+class ModelManager(private val context: Context) {
+    
+    fun startDownloadHFAsync(
+        token: String,
+        repoId: String,  // e.g., "google/gemma-4-2b-it"
+        filePath: File
+    ): Long  // Returns downloadId
+    
+    fun startDownloadKaggleAsync(
+        modelUri: String,
+        filePath: File
+    ): Long
+    
+    fun queryDownload(downloadId: Long): DownloadProgress
+}
+
+data class DownloadProgress(
+    val bytesDownloaded: Long,
+    val totalBytes: Long,
+    val status: DownloadStatus  // NOT_STARTED, DOWNLOADING, COMPLETED, FAILED
+)
+```
     
     fun downloadModel(
         modelId: String,
