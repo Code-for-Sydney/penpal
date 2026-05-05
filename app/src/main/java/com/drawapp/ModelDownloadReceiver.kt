@@ -4,6 +4,7 @@ import android.app.DownloadManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import com.penpal.core.ai.ModelManager
 
 /**
  * Receives the system DOWNLOAD_COMPLETE broadcast.

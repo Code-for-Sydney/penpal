@@ -6,6 +6,7 @@ import com.google.gson.Gson
 import com.penpal.core.ai.InferenceBridge
 import com.penpal.core.ai.LiteRtInferenceBridge
 import com.penpal.core.ai.MiniLmEmbedder
+import com.penpal.core.ai.ModelManager
 import com.penpal.core.ai.VectorStoreRepositoryImpl
 import com.penpal.core.processing.NotificationHelper
 import com.penpal.core.processing.WorkerLauncher

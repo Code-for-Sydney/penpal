@@ -116,9 +116,7 @@ class ChatViewModel(
                 inferenceBridge.runInference(
                     input = contextPrompt,
                     resultListener = { partialResult, done ->
-                        if (done) {
-                            updateLastAssistantMessage(partialResult, sourceIds)
-                        }
+                        updateLastAssistantMessage(partialResult, sourceIds)
                     },
                     cleanUpListener = {
                         _uiState.update { it.copy(isLoading = false, retrievedContext = emptyList()) }

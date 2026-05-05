@@ -17,6 +17,7 @@ import androidx.core.content.ContextCompat
 import androidx.activity.result.contract.ActivityResultContracts
 import java.io.File
 import java.io.FileOutputStream
+import com.penpal.core.ai.ModelManager
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import org.json.JSONArray
