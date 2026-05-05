@@ -133,6 +133,54 @@ class OllamaInferenceBridge(
         downloadManager.cancelDownload(currentModel)
     }
 
+    override suspend fun listAvailableModels(context: Context): List<ModelManager.ModelInfo> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val ollamaModels = apiService.listModels()
+                ollamaModels.map { model ->
+                    ModelManager.ModelInfo(
+                        name = model.name,
+                        path = model.name,
+                        sizeBytes = model.size ?: 0L,
+                        lastUsed = System.currentTimeMillis()
+                    )
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to list Ollama models", e)
+                emptyList()
+            }
+        }
+    }
+
+    override fun loadModel(context: Context, modelPath: String, onDone: (String) -> Unit) {
+        currentModel = modelPath
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val downloaded = isModelDownloaded()
+                _isReady.value = downloaded
+                _modelStatus.value = if (downloaded) ModelStatus.DOWNLOADED else ModelStatus.NOT_DOWNLOADED
+                onDone(if (downloaded) "Model ready: $modelPath" else "Model needs download: $modelPath")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to load Ollama model", e)
+                onDone("Error: ${e.message}")
+            }
+        }
+    }
+
+    override fun deleteModel(modelPath: String) {
+        if (currentModel == modelPath) {
+            _isReady.value = false
+            _modelStatus.value = ModelStatus.NOT_DOWNLOADED
+        }
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                apiService.deleteModel(modelPath)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to delete Ollama model", e)
+            }
+        }
+    }
+
     override fun runInference(
         input: String,
         resultListener: (partialResult: String, done: Boolean) -> Unit,

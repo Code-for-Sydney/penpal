@@ -241,6 +241,110 @@ object ModelManager {
 
     // ── Data ──────────────────────────────────────────────────────────────
 
+    // ── Model tracking / history ────────────────────────────────────────
+
+    private const val KEY_MODEL_HISTORY = "model_history"
+
+    data class ModelInfo(
+        val name: String,
+        val path: String,
+        val sizeBytes: Long,
+        val lastUsed: Long
+    ) {
+        fun toJson(): String =
+            """{"n":"$name","p":"$path","s":$sizeBytes,"t":$lastUsed}"""
+
+        companion object {
+            fun fromJson(json: String): ModelInfo? {
+                return try {
+                    val n = json.substringAfter(""""n":""").substringBefore(""",""")
+                    val p = json.substringAfter(""""p":""").substringBefore(""",""")
+                    val s = json.substringAfter(""""s":""").substringBefore(",").toLong()
+                    val t = json.substringAfter(""""t":""").substringBefore("}").toLong()
+                    ModelInfo(n, p, s, t)
+                } catch (e: Exception) {
+                    null
+                }
+            }
+        }
+    }
+
+    /** Returns all .litertlm files found on the device + previously tracked models. */
+    fun listAvailableModels(context: Context): List<ModelInfo> {
+        val models = mutableMapOf<String, ModelInfo>() // path -> info
+
+        // 1. Previously tracked models
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val historyJson = prefs.getString(KEY_MODEL_HISTORY, "") ?: ""
+        historyJson.split("|").forEach { json ->
+            if (json.isBlank()) return@forEach
+            ModelInfo.fromJson(json)?.let { info ->
+                if (File(info.path).exists()) {
+                    models[info.path] = info
+                }
+            }
+        }
+
+        // 2. Scan common directories for .litertlm files
+        val scanDirs = listOf(
+            context.getExternalFilesDir(null),
+            context.filesDir,
+            File(context.filesDir, "models"),
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+            File("/sdcard/Download"),
+            File("/sdcard")
+        )
+        scanDirs.forEach { dir ->
+            dir?.listFiles { f ->
+                f.isFile && (f.name.endsWith(".litertlm") || f.name.endsWith(".tflite"))
+            }?.forEach { file ->
+                if (file.length() > 1_000_000L && !models.containsKey(file.absolutePath)) {
+                    models[file.absolutePath] = ModelInfo(
+                        name = file.nameWithoutExtension,
+                        path = file.absolutePath,
+                        sizeBytes = file.length(),
+                        lastUsed = 0L
+                    )
+                }
+            }
+        }
+
+        return models.values.sortedByDescending { it.lastUsed }
+    }
+
+    /** Add or update a model in the history and persist it. */
+    fun trackModel(context: Context, info: ModelInfo) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val current = prefs.getString(KEY_MODEL_HISTORY, "") ?: ""
+        val entries = current.split("|").filter { it.isNotBlank() }.toMutableList()
+
+        // Remove existing entry with same path
+        entries.removeAll { it.contains(""""p":"${info.path}""") }
+        entries.add(info.toJson())
+
+        prefs.edit().putString(KEY_MODEL_HISTORY, entries.joinToString("|")).apply()
+        saveModelPath(context, info.path)
+    }
+
+    /** Remove a model from history and optionally delete the file. */
+    fun untrackModel(context: Context, path: String, deleteFile: Boolean = false) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val current = prefs.getString(KEY_MODEL_HISTORY, "") ?: ""
+        val entries = current.split("|").filter { it.isNotBlank() }.toMutableList()
+        entries.removeAll { it.contains(""""p":"$path""") }
+        prefs.edit().putString(KEY_MODEL_HISTORY, entries.joinToString("|")).apply()
+
+        if (deleteFile) {
+            try { File(path).delete() } catch (_: Exception) { }
+        }
+
+        // If this was the active model, clear it
+        val savedPath = prefs.getString(KEY_MODEL_PATH, null)
+        if (savedPath == path) {
+            prefs.edit().remove(KEY_MODEL_PATH).apply()
+        }
+    }
+
     enum class DownloadState { NOT_FOUND, RUNNING, PAUSED, DONE, FAILED }
 
     data class DownloadStatus(

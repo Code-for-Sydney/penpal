@@ -18,6 +18,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -70,6 +71,8 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
             try {
                 val modelPath = findModelFile(modelName)
                 if (modelPath != null && modelExists(modelPath)) {
+                    // Persist the discovered path so it's reused on next launch
+                    ModelManager.saveModelPath(context, modelPath)
                     val success = initializeEngine(modelPath)
                     if (success) {
                         _modelStatus.value = ModelStatus.DOWNLOADED
@@ -89,11 +92,20 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
     }
 
     private suspend fun findModelFile(modelName: String): String? {
+        // 1. Check ModelManager's tracked file (the known filename from downloads)
+        val managerFile = ModelManager.modelFile(context)
+        if (managerFile.exists() && managerFile.length() > 1_000_000L) {
+            return managerFile.absolutePath
+        }
+
+        // 2. Check ModelManager's persisted path + scan common locations
+        val existing = ModelManager.findExistingModel(context)
+        if (existing != null) return existing
+
+        // 3. Check modelName-based paths
         val candidates = listOf(
-            // App's external files directory
             File(context.getExternalFilesDir(null), "$modelName.litertlm"),
             File(context.filesDir, "models/$modelName.litertlm"),
-            // Common download locations
             File(android.os.Environment.getExternalStoragePublicDirectory(
                 android.os.Environment.DIRECTORY_DOWNLOADS), "$modelName.litertlm"),
             File("/sdcard/Download/$modelName.litertlm"),
@@ -105,6 +117,21 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
                 return file.absolutePath
             }
         }
+
+        // 4. Scan for ANY .litertlm file in common directories (manual downloads)
+        val scanDirs = listOf(
+            context.getExternalFilesDir(null),
+            context.filesDir,
+            android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS),
+            File("/sdcard/Download"),
+            File("/sdcard")
+        )
+        for (dir in scanDirs) {
+            dir?.listFiles { f -> f.extension == "litertlm" || f.name.endsWith(".litertlm") }
+                ?.firstOrNull { it.length() > 1_000_000L }
+                ?.let { return it.absolutePath }
+        }
+
         return null
     }
 
@@ -174,7 +201,10 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
     }
 
     override suspend fun isModelDownloaded(): Boolean {
-        return currentModelPath?.let { modelExists(it) } ?: false
+        // 1. Check in-memory path
+        if (currentModelPath != null && modelExists(currentModelPath!!)) return true
+        // 2. Check persisted path + scan common locations (supports manual downloads)
+        return ModelManager.findExistingModel(context) != null
     }
 
     override fun downloadModel(
@@ -185,47 +215,151 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
         onDone: () -> Unit,
         onError: (String) -> Unit
     ) {
-        // Model download is handled by ModelManager (from main branch pattern)
-        // This is a placeholder that delegates to the download flow
         _isDownloading.value = true
         _modelStatus.value = ModelStatus.DOWNLOADING
 
-        coroutineScope.launch {
-            try {
-                // Simulate download progress
-                for (progress in 0..100 step 5) {
-                    kotlinx.coroutines.delay(200)
-                    val downloaded = (progress * 26_000_000L) / 100
-                    val total = 26_000_000L
-                    _downloadProgress.value = DownloadProgress(downloaded, total)
-                    onProgress(downloaded, total)
-                }
+        val hfToken = ModelManager.savedHfToken(context)
+        val authHeader = if (hfToken.isNotBlank()) "Bearer $hfToken" else null
 
-                _isDownloading.value = false
-                _modelStatus.value = ModelStatus.DOWNLOADED
-                onDone()
-            } catch (e: Exception) {
+        ModelManager.startDownloadAsync(
+            context = context,
+            url = ModelManager.MODEL_DOWNLOAD_URL_HF,
+            authHeader = authHeader,
+            onSuccess = { downloadId ->
+                coroutineScope.launch {
+                    try {
+                        while (true) {
+                            val status = ModelManager.queryDownload(context, downloadId)
+                            when (status.state) {
+                                ModelManager.DownloadState.RUNNING,
+                                ModelManager.DownloadState.PAUSED -> {
+                                    _downloadProgress.value = DownloadProgress(
+                                        downloadedBytes = status.bytesDownloaded,
+                                        totalBytes = status.totalBytes
+                                    )
+                                    onProgress(status.bytesDownloaded, status.totalBytes)
+                                    delay(500)
+                                }
+                                ModelManager.DownloadState.DONE -> {
+                                    _downloadProgress.value = DownloadProgress(
+                                        downloadedBytes = status.totalBytes,
+                                        totalBytes = status.totalBytes
+                                    )
+                                    onProgress(status.totalBytes, status.totalBytes)
+                                    _isDownloading.value = false
+                                    _modelStatus.value = ModelStatus.DOWNLOADED
+                                    val modelPath = ModelManager.modelFile(context).absolutePath
+                                    ModelManager.saveModelPath(context, modelPath)
+                                    if (initializeEngine(modelPath)) {
+                                        currentModelPath = modelPath
+                                    }
+                                    onDone()
+                                    return@launch
+                                }
+                                ModelManager.DownloadState.FAILED -> {
+                                    _isDownloading.value = false
+                                    _modelStatus.value = ModelStatus.ERROR
+                                    onError("Download failed (reason: ${status.reason})")
+                                    return@launch
+                                }
+                                else -> {
+                                    delay(500)
+                                }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        _isDownloading.value = false
+                        _modelStatus.value = ModelStatus.ERROR
+                        onError("Download error: ${e.message}")
+                    }
+                }
+            },
+            onError = { error ->
                 _isDownloading.value = false
                 _modelStatus.value = ModelStatus.ERROR
-                onError(e.message ?: "Download failed")
+                onError(error)
             }
-        }
+        )
     }
 
     override fun downloadModel(listener: InferenceBridge.DownloadProgressListener) {
         scope.launch {
             try {
-                for (progress in 0..100 step 5) {
-                    kotlinx.coroutines.delay(200)
-                    _downloadProgress.value = DownloadProgress(
-                        downloadedBytes = (progress * 26_000_000L) / 100,
-                        totalBytes = 26_000_000L
+                val context = this@LiteRtInferenceBridge.context
+                val hfToken = ModelManager.savedHfToken(context)
+                val authHeader = if (hfToken.isNotBlank()) "Bearer $hfToken" else null
+
+                _isDownloading.value = true
+                _modelStatus.value = ModelStatus.DOWNLOADING
+
+                suspendCoroutine<Unit> { continuation ->
+                    ModelManager.startDownloadAsync(
+                        context = context,
+                        url = ModelManager.MODEL_DOWNLOAD_URL_HF,
+                        authHeader = authHeader,
+                        onSuccess = { downloadId ->
+                            scope.launch {
+                                try {
+                                    while (true) {
+                                        val status = ModelManager.queryDownload(context, downloadId)
+                                        when (status.state) {
+                                            ModelManager.DownloadState.RUNNING,
+                                            ModelManager.DownloadState.PAUSED -> {
+                                                _downloadProgress.value = DownloadProgress(
+                                                    downloadedBytes = status.bytesDownloaded,
+                                                    totalBytes = status.totalBytes
+                                                )
+                                                listener.onProgress(status.progressPercent / 100f)
+                                                delay(500)
+                                            }
+                                            ModelManager.DownloadState.DONE -> {
+                                                _downloadProgress.value = DownloadProgress(
+                                                    downloadedBytes = status.totalBytes,
+                                                    totalBytes = status.totalBytes
+                                                )
+                                                listener.onProgress(1f)
+                                                _isDownloading.value = false
+                                                _modelStatus.value = ModelStatus.DOWNLOADED
+                                                val modelPath = ModelManager.modelFile(context).absolutePath
+                                                ModelManager.saveModelPath(context, modelPath)
+                                                if (initializeEngine(modelPath)) {
+                                                    currentModelPath = modelPath
+                                                }
+                                                listener.onComplete()
+                                                continuation.resume(Unit)
+                                                return@launch
+                                            }
+                                            ModelManager.DownloadState.FAILED -> {
+                                                _isDownloading.value = false
+                                                _modelStatus.value = ModelStatus.ERROR
+                                                val msg = "Download failed (reason: ${status.reason})"
+                                                listener.onError(msg)
+                                                continuation.resume(Unit)
+                                                return@launch
+                                            }
+                                            else -> {
+                                                delay(500)
+                                            }
+                                        }
+                                    }
+                                } catch (e: Exception) {
+                                    _isDownloading.value = false
+                                    _modelStatus.value = ModelStatus.ERROR
+                                    listener.onError("Download error: ${e.message}")
+                                    continuation.resume(Unit)
+                                }
+                            }
+                        },
+                        onError = { error ->
+                            _isDownloading.value = false
+                            _modelStatus.value = ModelStatus.ERROR
+                            listener.onError(error)
+                            continuation.resume(Unit)
+                        }
                     )
-                    listener.onProgress(progress / 100f)
                 }
-                _modelStatus.value = ModelStatus.DOWNLOADED
-                listener.onComplete()
             } catch (e: Exception) {
+                _isDownloading.value = false
                 _modelStatus.value = ModelStatus.ERROR
                 listener.onError(e.message ?: "Download failed")
             }
@@ -240,11 +374,71 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
                 Log.e(TAG, "Failed to delete model", e)
             }
         }
+        ModelManager.clearModelPath(context)
         currentModelPath = null
         _isReady.value = false
         _modelStatus.value = ModelStatus.NOT_DOWNLOADED
         _downloadProgress.value = DownloadProgress()
         Log.d(TAG, "Model deleted")
+    }
+
+    override suspend fun listAvailableModels(context: Context): List<ModelManager.ModelInfo> {
+        return ModelManager.listAvailableModels(context)
+    }
+
+    override fun loadModel(
+        context: Context,
+        modelPath: String,
+        onDone: (String) -> Unit
+    ) {
+        scope.launch {
+            try {
+                if (!modelExists(modelPath)) {
+                    onDone("Model file not found: $modelPath")
+                    return@launch
+                }
+
+                // Track this model as recently used
+                val file = File(modelPath)
+                ModelManager.trackModel(
+                    context,
+                    ModelManager.ModelInfo(
+                        name = file.nameWithoutExtension,
+                        path = modelPath,
+                        sizeBytes = file.length(),
+                        lastUsed = System.currentTimeMillis()
+                    )
+                )
+
+                val success = initializeEngine(modelPath)
+                if (success) {
+                    _modelStatus.value = ModelStatus.DOWNLOADED
+                    onDone("Model loaded: ${file.name}")
+                } else {
+                    onDone("Failed to initialize model")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Load model failed", e)
+                onDone("Error: ${e.message}")
+            }
+        }
+    }
+
+    override fun deleteModel(modelPath: String) {
+        val wasCurrent = currentModelPath == modelPath
+        if (wasCurrent) {
+            scope.launch {
+                conversation?.close()
+                engine?.close()
+                engine = null
+                conversation = null
+                currentModelPath = null
+                _isReady.value = false
+                _isProcessing.value = false
+            }
+        }
+        ModelManager.untrackModel(context, modelPath, deleteFile = true)
+        Log.d(TAG, "Model deleted: $modelPath")
     }
 
     @OptIn(ExperimentalApi::class)

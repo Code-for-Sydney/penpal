@@ -91,6 +91,23 @@ class OllamaApiService(
     }.flowOn(Dispatchers.IO)
 
     /**
+     * Delete a model.
+     */
+    suspend fun deleteModel(name: String) = withContext(Dispatchers.IO) {
+        val deleteRequest = mapOf("name" to name)
+        val body = gson.toJson(deleteRequest).toRequestBody(jsonMediaType)
+
+        val request = Request.Builder()
+            .url("$baseUrl/api/delete")
+            .delete(body)
+            .build()
+
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) throw IOException("Unexpected code $response")
+        }
+    }
+
+    /**
      * Pull/Download a model with progress.
      */
     fun pullModel(name: String): Flow<OllamaPullResponse> = flow {

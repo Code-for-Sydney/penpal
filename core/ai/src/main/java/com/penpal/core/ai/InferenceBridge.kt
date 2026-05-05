@@ -96,6 +96,27 @@ interface InferenceBridge {
     fun release()
 
     /**
+     * List all available models on the device.
+     */
+    suspend fun listAvailableModels(context: Context): List<ModelManager.ModelInfo>
+
+    /**
+     * Load a specific model by its file path.
+     * @param modelPath Full path to the .litertlm file
+     * @param onDone Callback with result message
+     */
+    fun loadModel(
+        context: Context,
+        modelPath: String,
+        onDone: (String) -> Unit
+    )
+
+    /**
+     * Delete a model by its file path.
+     */
+    fun deleteModel(modelPath: String)
+
+    /**
      * Download progress listener interface.
      */
     interface DownloadProgressListener {
