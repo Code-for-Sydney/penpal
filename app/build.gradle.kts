@@ -16,6 +16,11 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
+
+        ndk {
+            // Pixel 8 Pro is arm64-v8a only
+            abiFilters += listOf("arm64-v8a")
+        }
     }
 
     buildTypes {
@@ -41,6 +46,23 @@ android {
 
     buildFeatures {
         compose = true
+    }
+
+    packaging {
+        resources {
+            excludes += listOf(
+                "META-INF/DEPENDENCIES",
+                "META-INF/LICENSE",
+                "META-INF/LICENSE.txt",
+                "META-INF/NOTICE",
+                "META-INF/NOTICE.txt"
+            )
+        }
+        jniLibs {
+            // Keep uncompressed to reduce install size and improve load times
+            // for large native libraries
+            useLegacyPackaging = false
+        }
     }
 }
 

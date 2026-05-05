@@ -7,6 +7,7 @@ import com.penpal.core.ai.InferenceBridge
 import com.penpal.core.ai.LiteRtInferenceBridge
 import com.penpal.core.ai.MiniLmEmbedder
 import com.penpal.core.ai.ModelManager
+import com.penpal.core.ai.OnnxMiniLmEmbedder
 import com.penpal.core.ai.VectorStoreRepositoryImpl
 import com.penpal.core.processing.NotificationHelper
 import com.penpal.core.processing.WorkerLauncher
@@ -57,7 +58,17 @@ class PenpalApplication : Application() {
 
     val vectorStore: VectorStoreRepositoryImpl by lazy {
         val database = com.penpal.core.data.PenpalDatabase.getInstance(this)
-        VectorStoreRepositoryImpl(database.chunkDao(), MiniLmEmbedder(), gson)
+        val onnxEmbedder = OnnxMiniLmEmbedder(OnnxMiniLmEmbedder.modelFile(this).absolutePath)
+        val embedder = if (onnxEmbedder.isInitialized) {
+            Log.d(TAG, "Using ONNX MiniLM embedder")
+            onnxEmbedder
+        } else {
+            Log.d(TAG, "ONNX MiniLM not available, using mock embedder")
+            MiniLmEmbedder()
+        }
+        val repo = VectorStoreRepositoryImpl(database.chunkDao(), embedder, gson)
+        com.penpal.core.ai.VectorStoreProvider.instance = repo
+        repo
     }
 
     val workerLauncher: WorkerLauncher by lazy {

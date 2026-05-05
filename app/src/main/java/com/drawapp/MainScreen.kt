@@ -105,16 +105,24 @@ fun MainScreen(
             // Chat Tab
             // ──────────────────────────────────────────────────────────────
             composable(Screen.Chat.route) {
+                val database = com.penpal.core.data.PenpalDatabase.getInstance(app)
                 val viewModel = remember {
                     ChatViewModel(
                         vectorStore = app.vectorStore,
-                        inferenceBridge = app.inferenceBridge
+                        inferenceBridge = app.inferenceBridge,
+                        chatMessageDao = database.chatMessageDao(),
+                        chatConversationDao = database.chatConversationDao(),
+                        notebookDao = database.notebookDao(),
+                        workerLauncher = app.workerLauncher
                     )
                 }
                 val uiState by viewModel.uiState.collectAsState()
                 ChatScreen(
                     uiState = uiState,
-                    onEvent = viewModel::onEvent
+                    onEvent = viewModel::onEvent,
+                    onNavigateToNotebooks = {
+                        navController.navigate(Screen.Notebooks.route)
+                    }
                 )
             }
 
@@ -143,7 +151,8 @@ fun MainScreen(
             composable(NotebookRoutes.EDITOR) {
                 val viewModel = remember {
                     NotebookEditorViewModel(
-                        notebookDao = com.penpal.core.data.PenpalDatabase.getInstance(app).notebookDao()
+                        notebookDao = com.penpal.core.data.PenpalDatabase.getInstance(app).notebookDao(),
+                        workerLauncher = app.workerLauncher
                     )
                 }
                 NotebookScreen(
@@ -167,7 +176,8 @@ fun MainScreen(
                 val notebookId = backStackEntry.arguments?.getString("notebookId")
                 val viewModel = remember {
                     NotebookEditorViewModel(
-                        notebookDao = com.penpal.core.data.PenpalDatabase.getInstance(app).notebookDao()
+                        notebookDao = com.penpal.core.data.PenpalDatabase.getInstance(app).notebookDao(),
+                        workerLauncher = app.workerLauncher
                     )
                 }
 
