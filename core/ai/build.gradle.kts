@@ -23,5 +23,8 @@ dependencies {
     // WorkManager for background model downloads
     implementation("androidx.work:work-runtime-ktx:2.9.1")
 
+    // LiteRT-LM for on-device LLM inference
+    implementation(libs.litertlm.android)
+
     implementation(project(":core:data"))
 }

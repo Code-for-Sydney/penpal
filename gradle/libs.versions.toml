@@ -16,10 +16,8 @@ coroutines = "1.8.1"
 gson = "2.11.0"
 pdfbox = "3.0.2"
 okhttp = "4.12.0"
-# LiteRT-LM and ML Kit GenAI versions from Google AI Edge Gallery
-litertlm = "0.10.0"
-mlkitGenai = "1.0.0-beta2"
-openidAppAuth = "0.11.1"
+# LiteRT-LM - using latest.release like main branch
+litertlm = "latest.release"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -59,11 +57,7 @@ gson = { group = "com.google.code.gson", name = "gson", version.ref = "gson" }
 pdfbox-android = { group = "com.tom-roush", name = "pdfbox-android", version.ref = "pdfbox" }
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 # LiteRT-LM for on-device LLM inference (Google AI Edge)
-litertlm = { group = "com.google.ai.edge.litertlm", name = "litertlm-android", version.ref = "litertlm" }
-# ML Kit GenAI for model management and inference
-mlkit-genai-prompt = { group = "com.google.mlkit", name = "genai-prompt", version.ref = "mlkitGenai" }
-# OAuth library for HuggingFace authentication
-openid-appauth = { group = "net.openid", name = "appauth", version.ref = "openidAppAuth" }
+litertlm-android = { group = "com.google.ai.edge.litertlm", name = "litertlm-android", version.ref = "litertlm" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

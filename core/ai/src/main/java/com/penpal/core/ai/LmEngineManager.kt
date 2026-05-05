@@ -2,6 +2,9 @@ package com.penpal.core.ai
 
 import android.content.Context
 import android.util.Log
+import com.google.ai.edge.litertlm.Backend
+import com.google.ai.edge.litertlm.Engine
+import com.google.ai.edge.litertlm.EngineConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -12,14 +15,12 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
- * Manages the LLM Engine lifecycle.
+ * Manages the LiteRT-LM Engine lifecycle.
  *
- * Currently uses a placeholder implementation. When LiteRT-LM becomes available,
- * this will be updated to use com.google.ai.edge.litertlm.Engine
- *
- * Expected API when available:
- * - Engine(modelPath, backend) with initialize()
- * - Conversation.create() with sendMessageAsync()
+ * Based on the pattern from InferenceService.kt (main branch):
+ * - Engine is initialized with model path and backend configuration
+ * - Supports GPU, CPU backends with fallback
+ * - Thread-safe initialization using Mutex
  */
 class LmEngineManager(private val context: Context) {
 
@@ -37,37 +38,37 @@ class LmEngineManager(private val context: Context) {
     private val _modelPath = MutableStateFlow<String?>(null)
     val modelPath: StateFlow<String?> = _modelPath.asStateFlow()
 
-    // Placeholder for Engine when LiteRT-LM is available
-    private var engineState: EngineState = EngineState.NotInitialized
+    private var engine: Engine? = null
 
     /**
-     * Engine states for lifecycle management.
-     * Replace with actual Engine class from LiteRT-LM when available.
+     * Configuration for the engine.
      */
-    enum class EngineState {
-        NotInitialized,
-        Loading,
-        Ready,
-        Error
-    }
+    data class Config(
+        val temperature: Float = 0.7f,
+        val topK: Int = 64,
+        val topP: Float = 0.95f,
+        val maxTokens: Int = 4096,
+        val useGpu: Boolean = true
+    )
 
     /**
      * Initialize the engine with the model at modelPath.
      *
      * @param modelPath Path to the .litertlm model file
-     * @param backend Backend to use (CPU, GPU, or NPU) - placeholder
+     * @param config Configuration for the engine
      * @param forceReload If true, close existing engine and reload
+     * @return true if initialization succeeded
      */
     suspend fun getEngine(
         modelPath: String,
-        backend: String = "CPU",
+        config: Config = Config(),
         forceReload: Boolean = false
     ): Boolean = mutex.withLock {
-        if (forceReload && engineState == EngineState.Ready) {
-            releaseEngine()
+        if (forceReload) {
+            releaseEngineInternal()
         }
 
-        if (engineState != EngineState.Ready && !_isLoading.value) {
+        if (engine == null && !_isLoading.value) {
             _isLoading.value = true
             _error.value = null
 
@@ -79,41 +80,74 @@ class LmEngineManager(private val context: Context) {
                         throw IllegalStateException("Model file not found: $modelPath")
                     }
 
-                    // Placeholder: In real implementation, would initialize Engine here
-                    // import com.google.ai.edge.litertlm.Engine
-                    // import com.google.ai.edge.litertlm.EngineConfig
-                    // import com.google.ai.edge.litertlm.Backend
-                    //
-                    // val config = EngineConfig(
-                    //     modelPath = modelPath,
-                    //     backend = Backend.CPU(),
-                    //     cacheDir = context.cacheDir.absolutePath
-                    // )
-                    // engine = Engine(config)
-                    // engine.initialize()
+                    Log.d(TAG, "Initializing LiteRT-LM Engine with model: $modelPath")
 
-                    Log.d(TAG, "Initialized engine with model: $modelPath (placeholder)")
+                    // Determine backends to try
+                    val backends = if (config.useGpu) {
+                        listOf(
+                            Triple("GPU", Backend.GPU(), Backend.GPU()),
+                            Triple("CPU", Backend.CPU(), Backend.CPU())
+                        )
+                    } else {
+                        listOf(Triple("CPU", Backend.CPU(), Backend.CPU()))
+                    }
 
-                    // Simulate initialization
-                    kotlinx.coroutines.delay(100)
+                    var success = false
+                    for ((backendName, backend, visionBackend) in backends) {
+                        try {
+                            Log.d(TAG, "Trying $backendName backend...")
+
+                            // Close existing engine before creating new one
+                            engine?.close()
+
+                            val engineConfig = EngineConfig(
+                                modelPath = modelPath,
+                                backend = backend,
+                                visionBackend = visionBackend,
+                                audioBackend = Backend.CPU(),
+                                maxNumImages = 1,
+                                maxNumTokens = config.maxTokens
+                            )
+
+                            engine = Engine(engineConfig)
+                            engine!!.initialize()
+
+                            Log.d(TAG, "Engine initialized with $backendName backend")
+                            success = true
+                            break
+
+                        } catch (e: Exception) {
+                            Log.e(TAG, "$backendName backend failed: ${e.message}")
+                            if (backendName == backends.last().first) {
+                                throw e
+                            }
+                        }
+                    }
+
+                    if (!success) {
+                        throw IllegalStateException("All backends failed")
+                    }
                 }
 
                 _modelPath.value = modelPath
-                engineState = EngineState.Ready
                 _isInitialized.value = true
 
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to initialize engine", e)
                 _error.value = e.message ?: "Failed to initialize engine"
-                engineState = EngineState.Error
                 _isInitialized.value = false
             } finally {
                 _isLoading.value = false
             }
         }
 
-        engineState == EngineState.Ready
+        engine != null
     }
+
+    /**
+     * Get the current engine instance.
+     */
+    fun getEngine(): Engine? = engine
 
     /**
      * Get the current model path.
@@ -124,19 +158,19 @@ class LmEngineManager(private val context: Context) {
      * Release the engine and free resources.
      */
     suspend fun releaseEngine() = mutex.withLock {
-        withContext(Dispatchers.IO) {
-            try {
-                // Placeholder: In real implementation, would close Engine here
-                // engine?.close()
+        releaseEngineInternal()
+    }
 
-                _modelPath.value = null
-                engineState = EngineState.NotInitialized
-                _isInitialized.value = false
-                Log.d(TAG, "Engine released")
-            } catch (e: Exception) {
-                Log.e(TAG, "Error releasing engine", e)
-            }
+    private fun releaseEngineInternal() {
+        try {
+            engine?.close()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error closing engine", e)
         }
+        engine = null
+        _modelPath.value = null
+        _isInitialized.value = false
+        Log.d(TAG, "Engine released")
     }
 
     /**
