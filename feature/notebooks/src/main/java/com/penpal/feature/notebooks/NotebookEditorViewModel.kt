@@ -23,7 +23,8 @@ import java.util.UUID
  * Manages the document's blocks and handles user interactions.
  */
 class NotebookEditorViewModel(
-    private val notebookDao: NotebookDao? = null
+    private val notebookDao: NotebookDao? = null,
+    private val workerLauncher: com.penpal.core.processing.WorkerLauncher? = null
 ) : ViewModel() {
 
     private val gson = Gson()
@@ -51,6 +52,49 @@ class NotebookEditorViewModel(
     init {
         // Create a new empty document on init
         createNewDocument()
+
+        // Observe extraction jobs and update matching process blocks
+        observeExtractionJobs()
+    }
+
+    private fun observeExtractionJobs() {
+        workerLauncher ?: return
+        viewModelScope.launch {
+            workerLauncher.observeJobs().collect { jobs ->
+                val currentBlocks = _uiState.value.document.blocks
+                val updatedBlocks = currentBlocks.map { block ->
+                    if (block is Block.ProcessBlock && block.status != ProcessStatus.DONE && block.status != ProcessStatus.ERROR) {
+                        // Find matching job by sourceUri
+                        val matchingJob = jobs.find { it.sourceUri == block.sourceUri }
+                        when (matchingJob?.status) {
+                            "QUEUED" -> block.copy(status = ProcessStatus.QUEUED)
+                            "RUNNING" -> block.copy(status = ProcessStatus.RUNNING)
+                            "DONE" -> {
+                                // Job completed - refresh extracted text from vector store
+                                block.copy(status = ProcessStatus.DONE)
+                            }
+                            "FAILED" -> block.copy(
+                                status = ProcessStatus.ERROR,
+                                errorMessage = "Extraction failed"
+                            )
+                            else -> block
+                        }
+                    } else block
+                }
+
+                if (updatedBlocks != currentBlocks) {
+                    _uiState.update { state ->
+                        state.copy(
+                            document = state.document.copy(
+                                blocks = updatedBlocks,
+                                updatedAt = System.currentTimeMillis()
+                            ),
+                            isDirty = true
+                        )
+                    }
+                }
+            }
+        }
     }
 
     /** Creates a new empty document */
@@ -228,6 +272,55 @@ class NotebookEditorViewModel(
                 ),
                 isDirty = true
             )
+        }
+
+        // If this is a ProcessBlock with a URI set to PENDING, trigger processing
+        if (block is Block.ProcessBlock && block.sourceUri.isNotBlank() && block.status == ProcessStatus.PENDING) {
+            enqueueProcessBlock(block)
+        }
+    }
+
+    private fun enqueueProcessBlock(block: Block.ProcessBlock) {
+        workerLauncher ?: return
+        val mimeType = when (block.sourceType) {
+            ProcessSourceType.PDF -> "pdf"
+            ProcessSourceType.AUDIO -> "audio"
+            ProcessSourceType.IMAGE -> "image"
+            ProcessSourceType.URL -> "url"
+            ProcessSourceType.CODE -> "code"
+            ProcessSourceType.FILE -> "pdf" // Default to PDF for generic files
+        }
+
+        viewModelScope.launch {
+            try {
+                _uiState.update { state ->
+                    state.copy(
+                        document = state.document.copy(
+                            blocks = state.document.blocks.map {
+                                if (it.id == block.id) block.copy(status = ProcessStatus.QUEUED) else it
+                            },
+                            updatedAt = System.currentTimeMillis()
+                        ),
+                        isDirty = true
+                    )
+                }
+                workerLauncher.enqueue(block.sourceUri, mimeType, "FULL_TEXT")
+            } catch (e: Exception) {
+                _uiState.update { state ->
+                    state.copy(
+                        document = state.document.copy(
+                            blocks = state.document.blocks.map {
+                                if (it.id == block.id) block.copy(
+                                    status = ProcessStatus.ERROR,
+                                    errorMessage = e.message ?: "Failed to enqueue"
+                                ) else it
+                            },
+                            updatedAt = System.currentTimeMillis()
+                        ),
+                        isDirty = true
+                    )
+                }
+            }
         }
     }
 
