@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="chat_title">Chat</string>
+    <string name="chat_input_placeholder">Ask about your documents...</string>
+    <string name="chat_send">Send</string>
+    <string name="chat_clear">Clear chat</string>
+    <string name="chat_hide_context">Hide context</string>
+    <string name="chat_show_context">Show context</string>
+    <string name="chat_thinking">Thinking...</string>
+    <string name="chat_sources">%d sources</string>
+    <string name="chat_retrieved_chunks">Retrieved %d context chunks</string>
+    <string name="chat_more_chunks">+%d more chunks</string>
+    <string name="chat_error_title">Error</string>
+    <string name="chat_dismiss">Dismiss</string>
+</resources>
