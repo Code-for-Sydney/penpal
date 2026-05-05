@@ -2,6 +2,280 @@
 
 This guide provides instructions for setting up a development environment and understanding the codebase for contributing to Penpal.
 
+## AI Inference Setup
+
+Penpal v2.x uses **Google Gemma 4 E2B-IT** as the primary inference model via **ML Kit GenAI API**. This section covers setup and configuration.
+
+### ML Kit GenAI API Setup
+
+The inference layer follows the **AI Edge Gallery pattern** for ML Kit GenAI integration:
+
+#### 1. Add Dependencies
+
+```kotlin
+// In core:ai/build.gradle.kts
+dependencies {
+    // ML Kit GenAI (LiteRT-based inference)
+    implementation("com.google.ai.edge.litert:genai-android:0.1.0")
+    implementation("com.google.ai.edge.litert:api:0.1.0")
+    
+    // Google Play Services (required for model download)
+    implementation("com.google.android.gms:play-services-base:18.3.0")
+}
+```
+
+#### 2. Configure API Key (Optional)
+
+ML Kit GenAI supports two modes:
+- **Local inference only**: No API key required (limited model selection)
+- **With API key**: Access to latest models, quota management
+
+```kotlin
+// Create InferenceConfig
+val config = InferenceConfig(
+    modelName = "gemma-4-e2b-it",  // Model identifier
+    apiKey = null,  // Optional: null for local-only inference
+    maxTokens = 1024,
+    temperature = 0.7f,
+)
+```
+
+#### 3. Initialize InferenceBridge
+
+```kotlin
+// In Application or ViewModel
+val inferenceBridge: InferenceBridge = LiteRtInferenceBridge()
+
+lifecycleScope.launch {
+    val success = inferenceBridge.initialize(context, config)
+    if (success) {
+        Log.d("Penpal", "Inference ready")
+    }
+}
+```
+
+### Gemma 4 E2B-IT Model Configuration
+
+| Property | Value |
+|----------|-------|
+| **Model ID** | `gemma-4-e2b-it` |
+| **Name** | Gemma 4 Efficient 2B Instruction-Tuned |
+| **Size** | ~2.6 GB |
+| **Parameters** | 2B |
+| **Context Window** | 8K tokens |
+| **Use Case** | Instruction following, RAG, text generation |
+
+#### GenerationConfig
+
+```kotlin
+data class GenerationConfig(
+    val maxTokens: Int = 1024,        // Max output tokens
+    val temperature: Float = 0.7f,    // Creativity (0 = deterministic)
+    val topP: Float = 0.9f,           // Nucleus sampling
+    val topK: Int = 40,               // Top-k sampling
+    val stopSequences: List<String> = emptyList()
+)
+```
+
+#### InferenceConfig
+
+```kotlin
+data class InferenceConfig(
+    val modelName: String = "gemma-4-e2b-it",
+    val apiKey: String? = null,       // Optional API key
+    val maxConcurrentRequests: Int = 2,
+    val cacheDir: File? = context.cacheDir
+)
+```
+
+### Model Download Flow
+
+The app supports downloading models on-demand:
+
+```
+1. User opens Inference tab
+           │
+           ▼
+2. Check modelInfoFlow.state.isDownloaded
+           │
+    ┌──────┴──────┐
+    │             │
+    ▼             ▼
+Downloaded    Not Downloaded
+    │             │
+    ▼             ▼
+Initialize    Show "Download Model" button
+           │
+           ▼
+User taps "Download"
+           │
+           ▼
+inferenceBridge.downloadModel(modelId)
+           │
+           ▼
+Observe downloadProgressFlow:
+  - bytesDownloaded / totalBytes
+  - status: DOWNLOADING → COMPLETED
+           │
+           ▼
+On complete: Initialize and use model
+```
+
+#### ModelDownloadHelper
+
+```kotlin
+class ModelDownloadHelper(private val context: Context) {
+    
+    fun downloadModel(
+        modelId: String,
+        onProgress: (DownloadProgress) -> Unit
+    ): Task<Void> {
+        // Use DownloadManager or custom download logic
+        val request = DownloadManager.Request(Uri.parse(MODEL_URL))
+            .setTitle("Downloading Gemma 4")
+            .setDescription("AI model (~2.6 GB)")
+        
+        return downloadManager.enqueue(request)
+    }
+}
+
+data class DownloadProgress(
+    val bytesDownloaded: Long,
+    val totalBytes: Long,
+    val status: DownloadStatus
+)
+```
+
+### Inference Testing Guidelines
+
+#### Unit Testing InferenceBridge
+
+```kotlin
+@Test
+fun `generate returns response from Gemma`() = runTest {
+    // Given
+    val bridge = LiteRtInferenceBridge()
+    bridge.initialize(context, testConfig)
+    
+    // When
+    val response = bridge.generate("What is 2+2?", GenerationConfig())
+    
+    // Then
+    assertTrue(response.isNotBlank())
+    assertFalse(bridge.isProcessingFlow.value)
+}
+
+@Test
+fun `streamGenerate emits tokens incrementally`() = runTest {
+    // Given
+    val bridge = LiteRtInferenceBridge()
+    bridge.initialize(context, testConfig)
+    
+    // When
+    val tokens = mutableListOf<String>()
+    bridge.streamGenerate("Count to 3", GenerationConfig())
+        .collect { tokens.add(it) }
+    
+    // Then
+    assertTrue(tokens.isNotEmpty())
+    assertTrue(tokens.joinToString("").isNotBlank())
+}
+
+@Test
+fun `downloadModel emits progress updates`() = runTest {
+    // Given
+    val bridge = LiteRtInferenceBridge()
+    
+    // When
+    val progressUpdates = mutableListOf<DownloadProgress>()
+    bridge.downloadModel("gemma-4-e2b-it")
+        .collect { progressUpdates.add(it) }
+    
+    // Then
+    assertTrue(progressUpdates.isNotEmpty())
+    val final = progressUpdates.last()
+    assertEquals(DownloadStatus.COMPLETED, final.status)
+}
+```
+
+#### Integration Testing RAG Flow
+
+```kotlin
+@Test
+fun `RAG flow retrieves context and generates response`() = runTest {
+    // Given
+    val vectorStore = VectorStoreRepository(database, MiniLmEmbedder())
+    val bridge = LiteRtInferenceBridge()
+    
+    // Embed test chunks
+    val chunks = listOf(
+        RawChunk("1", "source", "Kotlin is a programming language", 0),
+        RawChunk("2", "source", "Android is a mobile OS", 1),
+    )
+    vectorStore.embed(chunks)
+    
+    bridge.initialize(context, testConfig)
+    
+    // When
+    val context = vectorStore.similaritySearch("Tell me about programming", 2)
+    val prompt = buildPrompt("Tell me about programming", context)
+    val response = bridge.generate(prompt, GenerationConfig())
+    
+    // Then
+    assertTrue(response.contains("Kotlin") || response.contains("programming"))
+}
+```
+
+#### Mocking for Tests
+
+```kotlin
+@Test
+fun `chat shows streaming response`() = runTest {
+    // Given
+    val mockBridge = mock<InferenceBridge> {
+        on { isReadyFlow } doReturn MutableStateFlow(true)
+        on { streamGenerate(anyString(), any()) } doReturn flow {
+            emit("Th")
+            emit("ank")
+            emit(" you")
+        }
+    }
+    
+    val viewModel = ChatViewModel(
+        inferenceBridge = mockBridge,
+        vectorStore = mockVectorStore
+    )
+    
+    // When
+    viewModel.sendMessage("Thanks")
+    delay(100)
+    
+    // Then
+    assertTrue(viewModel.uiState.value.messages.any { 
+        it.content.contains("Thank") 
+    })
+}
+```
+
+### Testing Model Initialization
+
+```kotlin
+@Test
+fun `inference ready after initialization`() = runTest {
+    // Given
+    val bridge = LiteRtInferenceBridge()
+    val readyFlow = bridge.isReadyFlow
+    
+    // When
+    launch { bridge.initialize(context, config) }
+    
+    // Then
+    assertTrue(readyFlow.first { it })
+}
+```
+
+---
+
 ## Environment Setup
 
 ### Required Tools
