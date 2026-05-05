@@ -11,7 +11,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.penpal.core.ai.ModelStatus
 
 /**
@@ -25,6 +24,9 @@ fun SettingsScreen(
     modifier: Modifier = Modifier
 ) {
     val scrollState = rememberScrollState()
+
+    // Token input for HuggingFace download
+    var hfToken by remember { mutableStateOf("") }
 
     Scaffold(
         topBar = {
@@ -49,74 +51,65 @@ fun SettingsScreen(
             // AI Model Section
             // ──────────────────────────────────────────────────────────────
             SettingsSection(title = "AI Model") {
-                // Model selection
-                var modelExpanded by remember { mutableStateOf(false) }
-                ExposedDropdownMenuBox(
-                    expanded = modelExpanded,
-                    onExpandedChange = { modelExpanded = it }
-                ) {
-                    OutlinedTextField(
-                        value = uiState.modelName,
-                        onValueChange = { },
-                        readOnly = true,
-                        label = { Text("Selected Model") },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .menuAnchor(),
-                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = modelExpanded) },
-                        leadingIcon = { Icon(Icons.Default.Psychology, contentDescription = null) }
-                    )
-                    ExposedDropdownMenu(
-                        expanded = modelExpanded,
-                        onDismissRequest = { modelExpanded = false }
-                    ) {
-                        uiState.availableModels.forEach { model ->
-                            DropdownMenuItem(
-                                text = { Text(model) },
-                                onClick = {
-                                    onEvent(SettingsEvent.SelectModel(model))
-                                    modelExpanded = false
-                                }
+                // Current model info
+                SettingsRow(
+                    icon = Icons.Default.Psychology,
+                    title = "Model",
+                    subtitle = uiState.modelName
+                )
+
+                SettingsRow(
+                    icon = Icons.Default.Description,
+                    title = "File",
+                    subtitle = uiState.modelFileName
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Model status with download progress
+                when (uiState.modelStatus) {
+                    ModelStatus.NOT_DOWNLOADED -> {
+                        SettingsRow(
+                            icon = Icons.Default.CloudOff,
+                            title = "Status",
+                            subtitle = "Not downloaded"
+                        )
+                    }
+                    ModelStatus.DOWNLOADING -> {
+                        SettingsRow(
+                            icon = Icons.Default.Download,
+                            title = "Status",
+                            subtitle = "Downloading..."
+                        )
+                        LinearProgressIndicator(
+                            progress = { uiState.downloadProgress },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        if (uiState.downloadProgressText.isNotEmpty()) {
+                            Text(
+                                text = uiState.downloadProgressText,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
+                    ModelStatus.DOWNLOADED -> {
+                        SettingsRow(
+                            icon = Icons.Default.CheckCircle,
+                            title = "Status",
+                            subtitle = "Ready"
+                        )
+                    }
+                    ModelStatus.ERROR -> {
+                        SettingsRow(
+                            icon = Icons.Default.Error,
+                            title = "Status",
+                            subtitle = "Error - ${uiState.error ?: "Unknown"}"
+                        )
+                    }
                 }
 
-                // Model status
-                if (uiState.isSimulated) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(vertical = 4.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.Info,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.tertiary,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            "Demo mode - download is simulated",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.tertiary
-                        )
-                    }
-                }
-                SettingsRow(
-                    icon = when (uiState.modelStatus) {
-                        ModelStatus.NOT_DOWNLOADED -> Icons.Default.CloudOff
-                        ModelStatus.DOWNLOADING -> Icons.Default.Download
-                        ModelStatus.DOWNLOADED -> Icons.Default.CheckCircle
-                        ModelStatus.ERROR -> Icons.Default.Error
-                    },
-                    title = "Status",
-                    subtitle = when (uiState.modelStatus) {
-                        ModelStatus.NOT_DOWNLOADED -> "Not downloaded"
-                        ModelStatus.DOWNLOADING -> "Downloading... ${(uiState.downloadProgress * 100).toInt()}%"
-                        ModelStatus.DOWNLOADED -> "Ready"
-                        ModelStatus.ERROR -> "Error"
-                    }
-                )
+                Spacer(modifier = Modifier.height(16.dp))
 
                 // Download/Delete button
                 when (uiState.modelStatus) {
@@ -132,17 +125,14 @@ fun SettingsScreen(
                         }
                     }
                     ModelStatus.DOWNLOADING -> {
-                        Column {
-                            LinearProgressIndicator(
-                                progress = { uiState.downloadProgress },
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                            Spacer(Modifier.height(8.dp))
-                            Text(
-                                "Downloading model...",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                        OutlinedButton(
+                            onClick = { /* Cancel download - TODO */ },
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = uiState.isDownloading
+                        ) {
+                            Icon(Icons.Default.Close, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Cancel Download")
                         }
                     }
                     ModelStatus.DOWNLOADED -> {
@@ -158,6 +148,21 @@ fun SettingsScreen(
                             Text("Delete Model")
                         }
                     }
+                }
+
+                // Model size info
+                if (uiState.modelStatus == ModelStatus.NOT_DOWNLOADED) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Model size: ~2.6 GB (Gemma 4 E2B IT)",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "Downloads from HuggingFace or Kaggle",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
 
@@ -264,21 +269,55 @@ fun SettingsScreen(
                     subtitle = "Debug"
                 )
             }
+        }
+    }
 
-            // ──────────────────────────────────────────────────────────────
-            // Danger Zone
-            // ──────────────────────────────────────────────────────────────
-            SettingsSection(title = "Danger Zone") {
-                OutlinedButton(
-                    onClick = { /* TODO: Export data */ },
-                    modifier = Modifier.fillMaxWidth()
+    // Download Dialog
+    if (uiState.showDownloadDialog) {
+        AlertDialog(
+            onDismissRequest = { onEvent(SettingsEvent.HideDownloadDialog) },
+            icon = { Icon(Icons.Default.CloudDownload, contentDescription = null) },
+            title = { Text("Download Model") },
+            text = {
+                Column {
+                    Text(
+                        "Enter your HuggingFace access token to download the Gemma 4 E2B model.",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    OutlinedTextField(
+                        value = hfToken,
+                        onValueChange = { hfToken = it },
+                        label = { Text("Access Token") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    TextButton(
+                        onClick = { /* Open HF tokens page */ }
+                    ) {
+                        Text("Get token at huggingface.co")
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (hfToken.isNotBlank()) {
+                            onEvent(SettingsEvent.StartHfDownload(hfToken))
+                        }
+                    },
+                    enabled = hfToken.isNotBlank()
                 ) {
-                    Icon(Icons.Default.Upload, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Export Data")
+                    Text("Download")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { onEvent(SettingsEvent.HideDownloadDialog) }) {
+                    Text("Cancel")
                 }
             }
-        }
+        )
     }
 
     // Delete confirmation dialog

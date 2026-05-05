@@ -1,11 +1,12 @@
 package com.penpal.feature.settings
 
 import android.app.Application
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.penpal.core.ai.InferenceBridge
+import com.penpal.core.ai.ModelManager
 import com.penpal.core.ai.ModelStatus
-import com.penpal.core.ai.OllamaApiService
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -16,18 +17,21 @@ import kotlinx.coroutines.launch
  * Settings UI State
  */
 data class SettingsUiState(
-    val modelName: String = "llama3.2:latest",
-    val availableModels: List<String> = listOf("llama3.2:latest", "qwen2.5:3b", "gemma2:2b"),
+    val modelName: String = "gemma-4-E2B-it",
+    val modelFileName: String = "gemma-4-E2B-it.litertlm",
     val modelStatus: ModelStatus = ModelStatus.NOT_DOWNLOADED,
     val downloadProgress: Float = 0f,
-    val inferenceMode: InferenceMode = InferenceMode.ON_DEVICE,
-    val maxTokens: Int = 8192,
-    val temperature: Float = 0.7f,
+    val downloadProgressText: String = "",
     val isDownloading: Boolean = false,
-    val isSimulated: Boolean = false,
+    val isLoading: Boolean = false,
+    val inferenceMode: InferenceMode = InferenceMode.ON_DEVICE,
+    val maxTokens: Int = 4096,
+    val temperature: Float = 0.7f,
     val showDeleteConfirmation: Boolean = false,
+    val showDownloadDialog: Boolean = false,
     val appVersion: String = "1.0.0",
-    val error: String? = null
+    val error: String? = null,
+    val message: String? = null
 )
 
 enum class InferenceMode {
@@ -37,7 +41,7 @@ enum class InferenceMode {
 }
 
 /**
- * Settings ViewModel
+ * Settings ViewModel with LiteRT-LM and ModelManager integration
  */
 class SettingsViewModel(
     private val application: Application,
@@ -46,97 +50,108 @@ class SettingsViewModel(
 
     private val _uiState = MutableStateFlow(SettingsUiState())
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
-    
-    private val ollamaApi = OllamaApiService()
 
     init {
         loadSettings()
-        refreshAvailableModels()
-        // Observe model status changes
+    }
+
+    private fun loadSettings() {
         viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true) }
+
+            // Check if model already exists
+            val existingModel = ModelManager.findExistingModel(application)
+            if (existingModel != null) {
+                _uiState.update {
+                    it.copy(
+                        modelStatus = ModelStatus.DOWNLOADED,
+                        isLoading = false
+                    )
+                }
+                // Initialize the model
+                initializeModel()
+            } else {
+                _uiState.update {
+                    it.copy(
+                        modelStatus = ModelStatus.NOT_DOWNLOADED,
+                        isLoading = false
+                    )
+                }
+            }
+
+            // Observe model status changes
             inferenceBridge.modelStatus.collect { status ->
                 _uiState.update { it.copy(modelStatus = status) }
             }
         }
     }
 
-    private fun loadSettings() {
+    private fun initializeModel() {
         viewModelScope.launch {
-            val modelStatus = inferenceBridge.modelStatus.value
-            _uiState.update { it.copy(modelStatus = modelStatus) }
-        }
-    }
-
-    private fun refreshAvailableModels() {
-        viewModelScope.launch {
-            try {
-                val models = ollamaApi.listModels()
-                if (models.isNotEmpty()) {
-                    _uiState.update { it.copy(availableModels = models.map { m -> m.name }) }
-                }
-            } catch (e: Exception) {
-                // Keep defaults if API fails
+            inferenceBridge.initialize(application, _uiState.value.modelName) { result ->
+                _uiState.update { it.copy(message = result) }
             }
         }
     }
 
     fun onEvent(event: SettingsEvent) {
         when (event) {
-            is SettingsEvent.DownloadModel -> downloadModel()
+            is SettingsEvent.DownloadModel -> startDownload()
             is SettingsEvent.DeleteModel -> deleteModel()
-            is SettingsEvent.SelectModel -> selectModel(event.name)
             is SettingsEvent.ToggleInferenceMode -> toggleInferenceMode()
             is SettingsEvent.UpdateMaxTokens -> updateMaxTokens(event.value)
             is SettingsEvent.UpdateTemperature -> updateTemperature(event.value)
             is SettingsEvent.ShowDeleteConfirmation -> showDeleteConfirmation()
             is SettingsEvent.DismissDeleteConfirmation -> dismissDeleteConfirmation()
             is SettingsEvent.DismissError -> dismissError()
+            is SettingsEvent.ShowDownloadDialog -> showDownloadDialog()
+            is SettingsEvent.HideDownloadDialog -> hideDownloadDialog()
+            is SettingsEvent.StartHfDownload -> startHfDownload(event.token)
+            is SettingsEvent.StartKaggleDownload -> startKaggleDownload(event.username, event.apiKey)
         }
     }
 
-    private fun selectModel(name: String) {
-        _uiState.update { it.copy(modelName = name) }
-        viewModelScope.launch {
-            inferenceBridge.initialize(application, name) { result ->
-                // Initialized
-            }
-        }
+    private fun showDownloadDialog() {
+        _uiState.update { it.copy(showDownloadDialog = true) }
     }
 
-    private fun downloadModel() {
+    private fun hideDownloadDialog() {
+        _uiState.update { it.copy(showDownloadDialog = false) }
+    }
+
+    private fun startDownload() {
+        // Show the download dialog for token input
+        showDownloadDialog()
+    }
+
+    private fun startHfDownload(token: String) {
+        hideDownloadDialog()
         viewModelScope.launch {
             _uiState.update {
                 it.copy(
                     isDownloading = true,
-                    downloadProgress = 0f
+                    downloadProgress = 0f,
+                    downloadProgressText = "Connecting to HuggingFace..."
                 )
             }
 
             try {
-                inferenceBridge.downloadModel(object : InferenceBridge.DownloadProgressListener {
-                    override fun onProgress(progress: Float) {
-                        _uiState.update { it.copy(downloadProgress = progress) }
-                    }
-
-                    override fun onComplete() {
+                ModelManager.startDownloadHFAsync(
+                    context = application,
+                    hfToken = token,
+                    onSuccess = { downloadId ->
+                        // Start polling for progress
+                        pollDownloadProgress(downloadId)
+                    },
+                    onError = { error ->
                         _uiState.update {
                             it.copy(
                                 isDownloading = false,
-                                downloadProgress = 1f,
-                                modelStatus = ModelStatus.DOWNLOADED
+                                error = error
                             )
                         }
                     }
-
-                    override fun onError(message: String) {
-                        _uiState.update {
-                            it.copy(
-                                isDownloading = false,
-                                error = message
-                            )
-                        }
-                    }
-                })
+                )
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(
@@ -148,18 +163,135 @@ class SettingsViewModel(
         }
     }
 
+    private fun startKaggleDownload(username: String, apiKey: String) {
+        hideDownloadDialog()
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    isDownloading = true,
+                    downloadProgress = 0f,
+                    downloadProgressText = "Connecting to Kaggle..."
+                )
+            }
+
+            try {
+                ModelManager.startDownloadKaggleAsync(
+                    context = application,
+                    username = username,
+                    apiKey = apiKey,
+                    onSuccess = { downloadId ->
+                        pollDownloadProgress(downloadId)
+                    },
+                    onError = { error ->
+                        _uiState.update {
+                            it.copy(
+                                isDownloading = false,
+                                error = error
+                            )
+                        }
+                    }
+                )
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(
+                        isDownloading = false,
+                        error = e.message ?: "Download failed"
+                    )
+                }
+            }
+        }
+    }
+
+    private fun pollDownloadProgress(downloadId: Long) {
+        viewModelScope.launch {
+            var lastProgress = 0
+            while (_uiState.value.isDownloading) {
+                val status = ModelManager.queryDownload(application, downloadId)
+
+when (status.state) {
+                    ModelManager.DownloadState.RUNNING -> {
+                        val progress = status.progressPercent
+                        if (progress != lastProgress) {
+                            _uiState.update {
+                                it.copy(
+                                    downloadProgress = progress / 100f,
+                                    downloadProgressText = status.progressDisplay
+                                )
+                            }
+                            lastProgress = progress
+                        }
+                        kotlinx.coroutines.delay(1000)
+                    }
+                    ModelManager.DownloadState.PAUSED -> {
+                        val progress = status.progressPercent
+                        if (progress != lastProgress) {
+                            _uiState.update {
+                                it.copy(
+                                    downloadProgress = progress / 100f,
+                                    downloadProgressText = status.progressDisplay
+                                )
+                            }
+                            lastProgress = progress
+                        }
+                        kotlinx.coroutines.delay(1000)
+                    }
+                    ModelManager.DownloadState.DONE -> {
+                        // Model downloaded successfully
+                        val modelPath = ModelManager.modelFile(application).absolutePath
+                        _uiState.update {
+                            it.copy(
+                                isDownloading = false,
+                                downloadProgress = 1f,
+                                downloadProgressText = "Download complete!",
+                                modelStatus = ModelStatus.DOWNLOADED,
+                                message = "Model downloaded. Initializing..."
+                            )
+                        }
+                        // Initialize the model
+                        initializeModel()
+                        return@launch
+                    }
+                    ModelManager.DownloadState.FAILED -> {
+                        _uiState.update {
+                            it.copy(
+                                isDownloading = false,
+                                error = "Download failed. Check your connection and try again.",
+                                modelStatus = ModelStatus.ERROR
+                            )
+                        }
+                        return@launch
+                    }
+                    else -> {
+                        kotlinx.coroutines.delay(1000)
+                    }
+                }
+            }
+        }
+    }
+
     private fun deleteModel() {
         viewModelScope.launch {
             try {
+                // Delete the model file
+                val modelFile = ModelManager.modelFile(application)
+                if (modelFile.exists()) {
+                    modelFile.delete()
+                }
+                ModelManager.clearModelPath(application)
+
                 inferenceBridge.deleteModel()
+
                 _uiState.update {
                     it.copy(
                         modelStatus = ModelStatus.NOT_DOWNLOADED,
-                        showDeleteConfirmation = false
+                        showDeleteConfirmation = false,
+                        message = "Model deleted"
                     )
                 }
             } catch (e: Exception) {
-                _uiState.update { it.copy(error = e.message) }
+                _uiState.update {
+                    it.copy(error = e.message ?: "Failed to delete model")
+                }
             }
         }
     }
@@ -202,11 +334,14 @@ class SettingsViewModel(
 sealed class SettingsEvent {
     data object DownloadModel : SettingsEvent()
     data object DeleteModel : SettingsEvent()
-    data class SelectModel(val name: String) : SettingsEvent()
     data object ToggleInferenceMode : SettingsEvent()
     data class UpdateMaxTokens(val value: Int) : SettingsEvent()
     data class UpdateTemperature(val value: Float) : SettingsEvent()
     data object ShowDeleteConfirmation : SettingsEvent()
     data object DismissDeleteConfirmation : SettingsEvent()
     data object DismissError : SettingsEvent()
+    data object ShowDownloadDialog : SettingsEvent()
+    data object HideDownloadDialog : SettingsEvent()
+    data class StartHfDownload(val token: String) : SettingsEvent()
+    data class StartKaggleDownload(val username: String, val apiKey: String) : SettingsEvent()
 }
