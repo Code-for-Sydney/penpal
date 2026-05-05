@@ -4,8 +4,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.CloudUpload
-import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -21,21 +19,16 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.penpal.feature.chat.ChatScreen
 import com.penpal.feature.chat.ChatViewModel
-import com.penpal.feature.inference.InferenceScreen
-import com.penpal.feature.inference.InferenceViewModel
 import com.penpal.feature.notebooks.NotebookEditorViewModel
 import com.penpal.feature.notebooks.NotebookScreen
 import com.penpal.feature.notebooks.NotebookListScreen
 import com.penpal.feature.notebooks.NotebookListViewModel
-import com.penpal.feature.process.ProcessScreen
-import com.penpal.feature.process.ProcessViewModel
 import com.penpal.feature.settings.SettingsScreen
 import com.penpal.feature.settings.SettingsViewModel
-import com.penpal.core.processing.NetworkMonitor
 
 /**
  * Screen routes for bottom navigation.
- * Ordered as: Chat, Think, Process, Inference, Settings
+ * Ordered as: Chat, Think, Settings
  */
 sealed class Screen(
     val route: String,
@@ -44,8 +37,6 @@ sealed class Screen(
 ) {
     data object Chat : Screen("chat", "Chat", Icons.AutoMirrored.Filled.Chat)
     data object Notebooks : Screen("notebooks", "Think", Icons.Default.AutoAwesome)
-    data object Process : Screen("process", "Process", Icons.Default.CloudUpload)
-    data object Inference : Screen("inference", "Inference", Icons.Default.Psychology)
     data object Settings : Screen("settings", "Settings", Icons.Default.Settings)
 }
 
@@ -55,8 +46,6 @@ sealed class Screen(
 val bottomNavScreens = listOf(
     Screen.Chat,
     Screen.Notebooks,
-    Screen.Process,
-    Screen.Inference,
     Screen.Settings
 )
 
@@ -161,7 +150,7 @@ fun MainScreen(
                     viewModel = viewModel,
                     onNavigateBack = { navController.popBackStack() },
                     onNavigateToHome = {
-                        navController.navigate(Screen.Process.route) {
+                        navController.navigate(Screen.Chat.route) {
                             popUpTo(navController.graph.findStartDestination().id) {
                                 saveState = true
                             }
@@ -193,7 +182,7 @@ fun MainScreen(
                     viewModel = viewModel,
                     onNavigateBack = { navController.popBackStack() },
                     onNavigateToHome = {
-                        navController.navigate(Screen.Process.route) {
+                        navController.navigate(Screen.Chat.route) {
                             popUpTo(navController.graph.findStartDestination().id) {
                                 saveState = true
                             }
@@ -202,42 +191,6 @@ fun MainScreen(
                         }
                     },
                     modifier = Modifier.fillMaxSize()
-                )
-            }
-
-            // ──────────────────────────────────────────────────────────────
-            // Process Tab
-            // ──────────────────────────────────────────────────────────────
-            composable(Screen.Process.route) {
-                val viewModel = remember {
-                    ProcessViewModel(
-                        extractionJobDao = com.penpal.core.data.PenpalDatabase.getInstance(app).extractionJobDao(),
-                        workerLauncher = app.workerLauncher,
-                        networkMonitor = NetworkMonitor.getInstance(app),
-                        getCachedChunkCount = { app.vectorStore.getCachedChunkCount() }
-                    )
-                }
-                val uiState by viewModel.uiState.collectAsState()
-                ProcessScreen(
-                    uiState = uiState,
-                    onEvent = viewModel::onEvent
-                )
-            }
-
-            // ──────────────────────────────────────────────────────────────
-            // Inference Tab
-            // ──────────────────────────────────────────────────────────────
-            composable(Screen.Inference.route) {
-                val viewModel = remember {
-                    InferenceViewModel(
-                        application = app,
-                        inferenceBridge = app.inferenceBridge
-                    )
-                }
-                val uiState by viewModel.uiState.collectAsState()
-                InferenceScreen(
-                    uiState = uiState,
-                    onEvent = viewModel::onEvent
                 )
             }
 

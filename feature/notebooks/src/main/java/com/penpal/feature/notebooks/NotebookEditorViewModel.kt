@@ -141,6 +141,8 @@ class NotebookEditorViewModel(
             is NotebookEvent.LoadDocument -> loadDocument()
             is NotebookEvent.SetImageUri -> setImageUri(event.blockId, event.uri)
             is NotebookEvent.DeleteDocument -> deleteDocument()
+            is NotebookEvent.AddProcessBlock -> addProcessBlock(event.sourceType, event.afterBlockId)
+            is NotebookEvent.UpdateProcessBlockStatus -> updateProcessBlockStatus(event.blockId, event.status, event.text, event.error)
         }
     }
 
@@ -550,7 +552,16 @@ class NotebookEditorViewModel(
                     "id" to block.id,
                     "sourceId" to block.sourceId,
                     "preview" to block.preview,
-                    "type" to block.type.name
+                    "embedType" to block.type.name
+                )
+                is Block.ProcessBlock -> mapOf(
+                    "type" to "process",
+                    "id" to block.id,
+                    "sourceUri" to block.sourceUri,
+                    "sourceType" to block.sourceType.name,
+                    "status" to block.status.name,
+                    "extractedText" to block.extractedText,
+                    "errorMessage" to (block.errorMessage ?: "")
                 )
             }
         }
@@ -613,6 +624,18 @@ class NotebookEditorViewModel(
                         sourceId = item["sourceId"] as? String ?: "",
                         preview = item["preview"] as? String ?: ""
                     )
+                    "process" -> Block.ProcessBlock(
+                        id = item["id"] as? String ?: return@mapNotNull null,
+                        sourceUri = item["sourceUri"] as? String ?: "",
+                        sourceType = (item["sourceType"] as? String)?.let { 
+                            try { ProcessSourceType.valueOf(it) } catch (_: Exception) { ProcessSourceType.FILE }
+                        } ?: ProcessSourceType.FILE,
+                        status = (item["status"] as? String)?.let {
+                            try { ProcessStatus.valueOf(it) } catch (_: Exception) { ProcessStatus.PENDING }
+                        } ?: ProcessStatus.PENDING,
+                        extractedText = item["extractedText"] as? String ?: "",
+                        errorMessage = (item["errorMessage"] as? String)?.takeIf { it.isNotEmpty() }
+                    )
                     else -> null
                 }
             }
@@ -624,6 +647,35 @@ class NotebookEditorViewModel(
     // ──────────────────────────────────────────────────────────────
     // Helper
     // ──────────────────────────────────────────────────────────────
+
+    private fun addProcessBlock(sourceType: ProcessSourceType, afterBlockId: String? = null) {
+        val block = Block.ProcessBlock(
+            id = UUID.randomUUID().toString(),
+            sourceType = sourceType,
+            status = ProcessStatus.PENDING
+        )
+        addBlock(block, afterBlockId)
+    }
+
+    private fun updateProcessBlockStatus(blockId: String, status: ProcessStatus, text: String, error: String?) {
+        _uiState.update { state ->
+            state.copy(
+                document = state.document.copy(
+                    blocks = state.document.blocks.map { block ->
+                        if (block is Block.ProcessBlock && block.id == blockId) {
+                            block.copy(
+                                status = status,
+                                extractedText = text,
+                                errorMessage = error
+                            )
+                        } else block
+                    },
+                    updatedAt = System.currentTimeMillis()
+                ),
+                isDirty = true
+            )
+        }
+    }
 
     /** Generates a new block ID */
     fun newBlockId(): String = UUID.randomUUID().toString()

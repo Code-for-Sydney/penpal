@@ -54,10 +54,32 @@ sealed class Block {
         val preview: String = "",
         val type: EmbedType = EmbedType.LINK
     ) : Block()
+
+    /** A file processing block (PDF, Audio, Image, Code, URL) */
+    data class ProcessBlock(
+        override val id: String,
+        val sourceUri: String = "",
+        val sourceType: ProcessSourceType = ProcessSourceType.FILE,
+        val status: ProcessStatus = ProcessStatus.PENDING,
+        val extractedText: String = "",
+        val errorMessage: String? = null
+    ) : Block()
 }
 
 enum class EmbedType {
     LINK, AUDIO, VIDEO, FILE
+}
+
+enum class ProcessSourceType {
+    PDF, AUDIO, IMAGE, URL, CODE, FILE
+}
+
+enum class ProcessStatus {
+    PENDING,    // Added but not started
+    QUEUED,     // In processing queue
+    RUNNING,    // Currently extracting
+    DONE,       // Extraction complete
+    ERROR       // Extraction failed
 }
 
 /** Node in a graph block */
@@ -126,6 +148,8 @@ sealed class NotebookEvent {
     object LoadDocument : NotebookEvent()
     object DeleteDocument : NotebookEvent()
     data class SetImageUri(val blockId: String, val uri: Uri) : NotebookEvent()
+    data class AddProcessBlock(val sourceType: ProcessSourceType, val afterBlockId: String? = null) : NotebookEvent()
+    data class UpdateProcessBlockStatus(val blockId: String, val status: ProcessStatus, val text: String = "", val error: String? = null) : NotebookEvent()
 }
 
 /** UI events from the screen (not stored in state) */

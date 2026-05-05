@@ -280,6 +280,38 @@ fun NotebookScreen(
                     contentDescription = "Add drawing",
                     onClick = { addNewBlock(viewModel, "drawing") }
                 )
+
+                VerticalDivider(
+                    modifier = Modifier
+                        .height(24.dp)
+                        .padding(horizontal = 4.dp),
+                    color = MaterialTheme.colorScheme.outlineVariant
+                )
+
+                // Process blocks
+                ToolbarButton(
+                    icon = Icons.Default.PictureAsPdf,
+                    contentDescription = "Add PDF",
+                    onClick = { addNewBlock(viewModel, "pdf") }
+                )
+
+                ToolbarButton(
+                    icon = Icons.Default.Mic,
+                    contentDescription = "Add audio",
+                    onClick = { addNewBlock(viewModel, "audio") }
+                )
+
+                ToolbarButton(
+                    icon = Icons.Default.Link,
+                    contentDescription = "Add URL",
+                    onClick = { addNewBlock(viewModel, "url") }
+                )
+
+                ToolbarButton(
+                    icon = Icons.Default.Code,
+                    contentDescription = "Add code",
+                    onClick = { addNewBlock(viewModel, "code") }
+                )
             }
         }
 
@@ -345,6 +377,30 @@ fun NotebookScreen(
                     label = "Graph",
                     onClick = {
                         addNewBlock(viewModel, "graph")
+                        showAddMenu = false
+                    }
+                )
+                QuickActionChip(
+                    icon = Icons.Default.PictureAsPdf,
+                    label = "PDF",
+                    onClick = {
+                        addNewBlock(viewModel, "pdf")
+                        showAddMenu = false
+                    }
+                )
+                QuickActionChip(
+                    icon = Icons.Default.Mic,
+                    label = "Audio",
+                    onClick = {
+                        addNewBlock(viewModel, "audio")
+                        showAddMenu = false
+                    }
+                )
+                QuickActionChip(
+                    icon = Icons.Default.Link,
+                    label = "URL",
+                    onClick = {
+                        addNewBlock(viewModel, "url")
                         showAddMenu = false
                     }
                 )
@@ -432,6 +488,13 @@ fun BlockCard(
                 }
                 is Block.EmbedBlock -> {
                     EmbedBlockContent(
+                        block = block,
+                        isSelected = isSelected,
+                        onUpdate = onUpdate
+                    )
+                }
+                is Block.ProcessBlock -> {
+                    ProcessBlockContent(
                         block = block,
                         isSelected = isSelected,
                         onUpdate = onUpdate
@@ -889,6 +952,102 @@ fun EmptyStateCard(
 // Helper
 // ─────────────────────────────────────────────────────────────────
 
+@Composable
+fun ProcessBlockContent(
+    block: Block.ProcessBlock,
+    isSelected: Boolean,
+    onUpdate: (Block) -> Unit
+) {
+    var uri by remember(block.sourceUri) { mutableStateOf(block.sourceUri) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp)
+    ) {
+        // Status indicator
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(bottom = 8.dp)
+        ) {
+            val statusColor = when (block.status) {
+                ProcessStatus.PENDING -> MaterialTheme.colorScheme.onSurfaceVariant
+                ProcessStatus.QUEUED -> MaterialTheme.colorScheme.tertiary
+                ProcessStatus.RUNNING -> MaterialTheme.colorScheme.primary
+                ProcessStatus.DONE -> MaterialTheme.colorScheme.primary
+                ProcessStatus.ERROR -> MaterialTheme.colorScheme.error
+            }
+            val statusIcon = when (block.status) {
+                ProcessStatus.PENDING -> Icons.Default.Schedule
+                ProcessStatus.QUEUED -> Icons.Default.HourglassTop
+                ProcessStatus.RUNNING -> Icons.Default.Sync
+                ProcessStatus.DONE -> Icons.Default.CheckCircle
+                ProcessStatus.ERROR -> Icons.Default.Error
+            }
+
+            Icon(
+                imageVector = statusIcon,
+                contentDescription = block.status.name,
+                tint = statusColor,
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = "${block.sourceType.name} - ${block.status.name}",
+                style = MaterialTheme.typography.labelMedium,
+                color = statusColor
+            )
+        }
+
+        // Source URI input
+        OutlinedTextField(
+            value = uri,
+            onValueChange = {
+                uri = it
+                onUpdate(block.copy(sourceUri = it))
+            },
+            label = { Text("Source URI or path") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = false,
+            minLines = 2,
+            enabled = block.status == ProcessStatus.PENDING || block.status == ProcessStatus.ERROR
+        )
+
+        // Extracted content preview
+        if (block.extractedText.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "Extracted content:",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = block.extractedText.take(500) + if (block.extractedText.length > 500) "..." else "",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 4.dp)
+                    .background(
+                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        RoundedCornerShape(4.dp)
+                    )
+                    .padding(8.dp)
+            )
+        }
+
+        // Error message
+        block.errorMessage?.let { error ->
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = error,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
+        }
+    }
+}
+
 private fun addNewBlock(viewModel: NotebookEditorViewModel, type: String) {
     val blockId = viewModel.newBlockId()
     val block = when (type) {
@@ -903,6 +1062,26 @@ private fun addNewBlock(viewModel: NotebookEditorViewModel, type: String) {
         "embed" -> Block.EmbedBlock(
             id = blockId,
             sourceId = java.util.UUID.randomUUID().toString()
+        )
+        "pdf" -> Block.ProcessBlock(
+            id = blockId,
+            sourceType = ProcessSourceType.PDF
+        )
+        "audio" -> Block.ProcessBlock(
+            id = blockId,
+            sourceType = ProcessSourceType.AUDIO
+        )
+        "url" -> Block.ProcessBlock(
+            id = blockId,
+            sourceType = ProcessSourceType.URL
+        )
+        "code" -> Block.ProcessBlock(
+            id = blockId,
+            sourceType = ProcessSourceType.CODE
+        )
+        "file" -> Block.ProcessBlock(
+            id = blockId,
+            sourceType = ProcessSourceType.FILE
         )
         else -> Block.TextBlock(id = blockId)
     }
