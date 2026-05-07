@@ -58,7 +58,12 @@ class PenpalApplication : Application() {
 
     val vectorStore: VectorStoreRepositoryImpl by lazy {
         val database = com.penpal.core.data.PenpalDatabase.getInstance(this)
-        val onnxEmbedder = OnnxMiniLmEmbedder(OnnxMiniLmEmbedder.modelFile(this).absolutePath)
+        val tokenizer = com.penpal.core.ai.WordPieceTokenizer.fromAssets(this)
+            ?: com.penpal.core.ai.WordPieceTokenizer.fallback()
+        val onnxEmbedder = OnnxMiniLmEmbedder(
+            modelPath = OnnxMiniLmEmbedder.modelFile(this).absolutePath,
+            tokenizer = tokenizer
+        )
         val embedder = if (onnxEmbedder.isInitialized) {
             Log.d(TAG, "Using ONNX MiniLM embedder")
             onnxEmbedder

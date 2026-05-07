@@ -17,6 +17,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.penpal.feature.chat.ChatEvent
 import com.penpal.feature.chat.ChatScreen
 import com.penpal.feature.chat.ChatViewModel
 import com.penpal.feature.notebooks.NotebookEditorViewModel
@@ -60,6 +61,13 @@ object NotebookRoutes {
     fun editorRoute(notebookId: String) = "notebooks/editor/$notebookId"
 }
 
+object ChatRoutes {
+    const val CHAT = "chat"
+    const val CHAT_WITH_NOTEBOOK = "chat/{notebookId}"
+
+    fun chatWithNotebookRoute(notebookId: String) = "chat/$notebookId"
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(
@@ -71,6 +79,12 @@ fun MainScreen(
     val currentDestination = navBackStackEntry?.destination
 
     val app = LocalContext.current.applicationContext as PenpalApplication
+    val database = remember { com.penpal.core.data.PenpalDatabase.getInstance(app) }
+
+    // Shared notebook list view model for picker
+    val notebookListViewModel = remember {
+        NotebookListViewModel(notebookDao = database.notebookDao())
+    }
 
     Scaffold(
         bottomBar = {
@@ -105,7 +119,6 @@ fun MainScreen(
             // Chat Tab
             // ──────────────────────────────────────────────────────────────
             composable(Screen.Chat.route) {
-                val database = com.penpal.core.data.PenpalDatabase.getInstance(app)
                 val viewModel = remember {
                     ChatViewModel(
                         vectorStore = app.vectorStore,
@@ -122,7 +135,46 @@ fun MainScreen(
                     onEvent = viewModel::onEvent,
                     onNavigateToNotebooks = {
                         navController.navigate(Screen.Notebooks.route)
+                    },
+                    onNavigateToChatWithNotebook = { notebookId ->
+                        navController.navigate(ChatRoutes.chatWithNotebookRoute(notebookId))
+                    },
+                    notebookListViewModel = notebookListViewModel
+                )
+            }
+
+            // Chat with pre-attached notebook
+            composable(ChatRoutes.CHAT_WITH_NOTEBOOK) { backStackEntry ->
+                val notebookId = backStackEntry.arguments?.getString("notebookId")
+                val viewModel = remember {
+                    ChatViewModel(
+                        vectorStore = app.vectorStore,
+                        inferenceBridge = app.inferenceBridge,
+                        chatMessageDao = database.chatMessageDao(),
+                        chatConversationDao = database.chatConversationDao(),
+                        notebookDao = database.notebookDao(),
+                        workerLauncher = app.workerLauncher
+                    )
+                }
+                val uiState by viewModel.uiState.collectAsState()
+
+                // Auto-attach notebook when entering this route
+                LaunchedEffect(notebookId) {
+                    notebookId?.let { id ->
+                        viewModel.onEvent(ChatEvent.AttachNotebook(id))
                     }
+                }
+
+                ChatScreen(
+                    uiState = uiState,
+                    onEvent = viewModel::onEvent,
+                    onNavigateToNotebooks = {
+                        navController.navigate(Screen.Notebooks.route)
+                    },
+                    onNavigateToChatWithNotebook = { navNotebookId ->
+                        navController.navigate(ChatRoutes.chatWithNotebookRoute(navNotebookId))
+                    },
+                    notebookListViewModel = notebookListViewModel
                 )
             }
 
@@ -130,18 +182,19 @@ fun MainScreen(
             // Think Tab (Notebooks)
             // ──────────────────────────────────────────────────────────────
             composable(Screen.Notebooks.route) {
-                val viewModel = remember {
-                    NotebookListViewModel(
-                        notebookDao = com.penpal.core.data.PenpalDatabase.getInstance(app).notebookDao()
-                    )
-                }
                 NotebookListScreen(
-                    viewModel = viewModel,
+                    viewModel = notebookListViewModel,
                     onNotebookSelected = { notebookId ->
                         navController.navigate(NotebookRoutes.editorRoute(notebookId))
                     },
                     onCreateNew = {
                         navController.navigate(NotebookRoutes.EDITOR)
+                    },
+                    onChatWithNotebook = { notebookId ->
+                        navController.navigate(ChatRoutes.chatWithNotebookRoute(notebookId)) {
+                            popUpTo(Screen.Chat.route) { inclusive = true }
+                            launchSingleTop = true
+                        }
                     },
                     modifier = Modifier.fillMaxSize()
                 )
@@ -151,7 +204,7 @@ fun MainScreen(
             composable(NotebookRoutes.EDITOR) {
                 val viewModel = remember {
                     NotebookEditorViewModel(
-                        notebookDao = com.penpal.core.data.PenpalDatabase.getInstance(app).notebookDao(),
+                        notebookDao = database.notebookDao(),
                         workerLauncher = app.workerLauncher
                     )
                 }
@@ -167,6 +220,12 @@ fun MainScreen(
                             restoreState = true
                         }
                     },
+                    onChatWithNotebook = { notebookId ->
+                        navController.navigate(ChatRoutes.chatWithNotebookRoute(notebookId)) {
+                            popUpTo(Screen.Chat.route) { inclusive = true }
+                            launchSingleTop = true
+                        }
+                    },
                     modifier = Modifier.fillMaxSize()
                 )
             }
@@ -176,7 +235,7 @@ fun MainScreen(
                 val notebookId = backStackEntry.arguments?.getString("notebookId")
                 val viewModel = remember {
                     NotebookEditorViewModel(
-                        notebookDao = com.penpal.core.data.PenpalDatabase.getInstance(app).notebookDao(),
+                        notebookDao = database.notebookDao(),
                         workerLauncher = app.workerLauncher
                     )
                 }
@@ -198,6 +257,12 @@ fun MainScreen(
                             }
                             launchSingleTop = true
                             restoreState = true
+                        }
+                    },
+                    onChatWithNotebook = { navNotebookId ->
+                        navController.navigate(ChatRoutes.chatWithNotebookRoute(navNotebookId)) {
+                            popUpTo(Screen.Chat.route) { inclusive = true }
+                            launchSingleTop = true
                         }
                     },
                     modifier = Modifier.fillMaxSize()
