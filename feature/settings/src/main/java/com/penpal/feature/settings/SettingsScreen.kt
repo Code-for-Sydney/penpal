@@ -201,6 +201,49 @@ fun SettingsScreen(
             }
 
             // ──────────────────────────────────────────────────────────────
+            // Backend Section
+            // ──────────────────────────────────────────────────────────────
+            SettingsSection(title = "Backend") {
+                Text(
+                    text = "Select which processor to use for AI inference",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+
+                BackendOption(
+                    label = "Auto (GPU preferred)",
+                    description = "Automatically select best available",
+                    selected = uiState.backendPreference == BackendPreference.AUTO,
+                    onClick = { onEvent(SettingsEvent.UpdateBackendPreference(BackendPreference.AUTO)) }
+                )
+
+                BackendOption(
+                    label = "GPU",
+                    description = "Fastest, uses more battery",
+                    selected = uiState.backendPreference == BackendPreference.GPU,
+                    onClick = { onEvent(SettingsEvent.UpdateBackendPreference(BackendPreference.GPU)) }
+                )
+
+                BackendOption(
+                    label = "CPU",
+                    description = "Slower, works on all devices",
+                    selected = uiState.backendPreference == BackendPreference.CPU,
+                    onClick = { onEvent(SettingsEvent.UpdateBackendPreference(BackendPreference.CPU)) }
+                )
+
+                if (uiState.modelStatus == ModelStatus.DOWNLOADED) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Restart the app to apply backend changes",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(start = 8.dp)
+                    )
+                }
+            }
+
+            // ──────────────────────────────────────────────────────────────
             // Generation Settings
             // ──────────────────────────────────────────────────────────────
             SettingsSection(title = "Generation Settings") {
@@ -515,6 +558,38 @@ fun SettingsSection(
             Column(
                 modifier = Modifier.padding(16.dp),
                 content = content
+            )
+        }
+    }
+}
+
+@Composable
+private fun BackendOption(
+    label: String,
+    description: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        RadioButton(
+            selected = selected,
+            onClick = onClick
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Column {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Text(
+                text = description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }

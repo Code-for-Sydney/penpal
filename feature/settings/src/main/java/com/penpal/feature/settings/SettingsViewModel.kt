@@ -33,13 +33,20 @@ data class SettingsUiState(
     val error: String? = null,
     val message: String? = null,
     val availableModels: List<ModelManager.ModelInfo> = emptyList(),
-    val isLoadingModels: Boolean = false
+    val isLoadingModels: Boolean = false,
+    val backendPreference: BackendPreference = BackendPreference.AUTO
 )
 
 enum class InferenceMode {
     ON_DEVICE,
     CLOUD,
     HYBRID
+}
+
+enum class BackendPreference {
+    GPU,
+    CPU,
+    AUTO
 }
 
 /**
@@ -90,7 +97,12 @@ class SettingsViewModel(
 
     private fun initializeModel() {
         viewModelScope.launch {
-            inferenceBridge.initialize(application, _uiState.value.modelName) { result ->
+            val backend = when (_uiState.value.backendPreference) {
+                BackendPreference.GPU -> "GPU"
+                BackendPreference.CPU -> "CPU"
+                BackendPreference.AUTO -> null
+            }
+            inferenceBridge.initialize(application, _uiState.value.modelName, backend) { result ->
                 _uiState.update { it.copy(message = result) }
             }
         }
@@ -113,7 +125,12 @@ class SettingsViewModel(
             is SettingsEvent.RefreshModelList -> refreshModelList()
             is SettingsEvent.SelectModel -> selectModel(event.modelPath)
             is SettingsEvent.DeleteSpecificModel -> deleteSpecificModel(event.modelPath)
+            is SettingsEvent.UpdateBackendPreference -> updateBackendPreference(event.preference)
         }
+    }
+
+    private fun updateBackendPreference(preference: BackendPreference) {
+        _uiState.update { it.copy(backendPreference = preference) }
     }
 
     private fun showDownloadDialog() {
@@ -347,9 +364,15 @@ when (status.state) {
     private fun selectModel(modelPath: String) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, message = "Loading model...") }
+            val backend = when (_uiState.value.backendPreference) {
+                BackendPreference.GPU -> "GPU"
+                BackendPreference.CPU -> "CPU"
+                BackendPreference.AUTO -> null
+            }
             inferenceBridge.loadModel(
                 context = application,
                 modelPath = modelPath,
+                backend = backend,
                 onDone = { message ->
                     val success = message.startsWith("Model loaded")
                     _uiState.update {
@@ -396,4 +419,5 @@ sealed class SettingsEvent {
     data object RefreshModelList : SettingsEvent()
     data class SelectModel(val modelPath: String) : SettingsEvent()
     data class DeleteSpecificModel(val modelPath: String) : SettingsEvent()
+    data class UpdateBackendPreference(val preference: BackendPreference) : SettingsEvent()
 }
