@@ -2,23 +2,40 @@
 
 ## Chat `:feature:chat`
 
-**Purpose:** Conversational RAG interface. Queries go through `InferenceEngine` with vector-retrieved context. Supports quizlet generation, concept maps, and paper analysis as structured outputs.
+**Purpose:** Conversational RAG interface. Queries go through `InferenceBridge` with vector-retrieved context. Uses Flow-based streaming with trie-based special token filtering.
 
 **Key classes:**
-- `ChatViewModel` — manages conversation history as `List<Message>` in `StateFlow`
-- `SynthesisHub` — wraps `InferenceEngine`, formats structured outputs (quizlet, summary, concept map)
-- `ChatScreen` — lazy column of `MessageBubble` composables; input field with mic toggle
+- `ChatViewModel` — manages conversation history as `List<ChatMessage>` in `StateFlow`, uses `runInferenceFlow()`
+- `ChatScreen` — lazy column of message bubbles; input field with context panel
+- `StreamingTokenFilter` — removes Gemma 4 control tokens from model output (in `core:ai`)
+- `GemmaSpecialTokens` — definitions for all control tokens (in `core:ai`)
 
 **Flow:**
 ```
-User types → ChatViewModel.send() → launch(defaultDispatcher)
-  → VectorStore.similaritySearch()     // retrieve top-K chunks
-  → InferenceEngine.query()            // prompt + context → response
-  → _messages.update()                 // StateFlow emits
-  → Compose recompose                  // UI updates
+User types → ChatViewModel.sendMessage() → launch(Default)
+  → VectorStore.similaritySearch()           // retrieve top-K chunks
+  → buildPrompt(userMessage, chunks)         // RAG context assembly
+  → inferenceBridge.runInferenceFlow(prompt) // Flow-based streaming
+       → conversation.sendMessageAsync()     // LiteRT-LM Engine API
+       → renderMessageIntoString()           // Extract text from Message
+       → StreamingTokenFilter.append(chunk)  // Remove special tokens
+  → Flow.collect { partialResult ->
+       updateLastAssistantMessage(partialResult)
+    }
+  → _uiState.update()                        // StateFlow emits
+  → Compose recompose                        // UI updates
 ```
 
-**Structured output types:**
+**Current Issue — Text Splitting After Special Characters:**
+After implementing `StreamingTokenFilter`, chat text is split into separate lines after each special token occurrence. The Gemma 4 chat template includes structural newlines around turn tokens (e.g., `<|turn>model\n...\n<turn|>`), which remain after token removal.
+
+**Investigation:**
+- `renderMessageIntoString()` output format needs analysis
+- Potential fix: newline coalescing in `StreamingTokenFilter`
+- Potential fix: boundary whitespace trimming around removed tokens
+- Long-term: track token types as annotated spans in the data model
+
+**Structured output types (planned):**
 ```kotlin
 sealed class SynthesisOutput {
     data class RawAnswer(val text: String, val citations: List<String>) : SynthesisOutput()

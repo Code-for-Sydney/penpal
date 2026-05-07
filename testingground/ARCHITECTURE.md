@@ -13,7 +13,7 @@
 | Local DB | Room |
 | Preferences | DataStore (Proto) |
 | Embeddings | on-device VectorStore (SQLite FTS5 or Chroma-lite) |
-| **AI inference** | **Gemma 4 E2B-IT via ML Kit GenAI (LiteRT on-device)** |
+| **AI inference** | **Gemma 4 E2B-IT via LiteRT-LM Engine API (Flow-based streaming)** |
 | Audio | MediaRecorder → WAV 16kHz pipeline |
 | Media parsing | iText (PDF) · Coil (image) · ExoPlayer (YouTube/audio) |
 
@@ -41,9 +41,17 @@
 │  │                      Gemma 4 E2B-IT                             │   │
 │  │           (Google's efficient on-device LLM)                    │   │
 │  │                                                                    │   │
-│  │  • 2B parameters, ~2.6 GB                                        │   │
-│  │  • 8K token context window                                       │   │
-│  │  • Instruction-tuned for RAG, chat, text generation              │   │
+│  │  • 2B parameters, ~2.6 GB                                        │  │
+│  │  • 8K token context window                                       │  │
+│  │  • Instruction-tuned for RAG, chat, text generation              │  │
+│  │  • Outputs control tokens: <|turn>, <|think|>, <bos>, <eos>     │  │
+│  └────────────────────────────────────────────────────────────────┘   │
+│                                                                       │
+│  ┌────────────────────────────────────────────────────────────────┐   │
+│  │               StreamingTokenFilter                              │   │
+│  │  • Trie-based special token removal (O(m) matching)            │   │
+│  │  • Character-by-character with boundary buffering              │   │
+│  │  • Filters: turn, tool, thinking, media, sequence tokens       │   │
 │  └────────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -52,27 +60,33 @@
 
 ```
 User Query (Chat tab)
-       │
-       ▼
+        │
+        ▼
 VectorStoreRepository.similaritySearch(query, topK=6)
-       │  ← Embed query, search chunks
-       ▼
+        │  ← Embed query, search chunks
+        ▼
 Context Chunks (top-K relevant text)
-       │
-       ▼
+        │
+        ▼
 buildPrompt(userQuery, contextChunks)
-       │
-       ▼
-InferenceBridge.streamGenerate(prompt, config)
-       │  ← Gemma 4 E2B-IT via ML Kit GenAI
-       ▼
-Streaming Tokens (Flow<String>)
-       │
-       ▼
+        │
+        ▼
+InferenceBridge.runInferenceFlow(prompt)
+        │  ← Gemma 4 E2B-IT via LiteRT-LM
+        ▼
+Flow<Message> → renderMessageIntoString()
+        │
+        ▼
+StreamingTokenFilter.append(chunk)
+        │  ← Removes <|turn>, <|think|>, <bos>, <eos>, etc.
+        ▼
+Cleaned Text Flow (Flow<String>)
+        │
+        ▼
 UI Updates (token-by-token display)
-       │
-       ▼
-Complete Response
+        │
+        ▼
+Complete Response (with timeout guard: 120s)
 ```
 
 ### Module Dependency on Inference

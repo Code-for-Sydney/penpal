@@ -55,6 +55,9 @@ This document provides an in-depth look at the system architecture, component re
 | Phase 4.5: Notebooks | ✅ Complete | Think tab with block-based editor, GraphNodeCanvas, DrawingCanvas |
 | Phase 4.6: Notebooks Enhanced | ✅ Complete | Image picker, Coil integration, home navigation |
 | Phase 5: Real Parsers & Chat Persistence | ✅ Complete | Document parsing, vector persistence, chat enhancements |
+| Phase 5.5: Streaming Token Filter | ✅ Complete | Trie-based filter, Flow-based inference, 120s timeout |
+| Phase 5.6: Text Structure Fix | ✅ Complete | Smart spacing, whitespace handling, lastEmittedChar tracking |
+| Phase 5.7: Structured Message Parts | ✅ Complete | Opencode-inspired parts architecture with rich UI rendering |
 
 ### Key Inference Components
 
@@ -64,14 +67,20 @@ This document provides an in-depth look at the system architecture, component re
 | **Engine** | `LmEngineManager` | GPU/CPU backend fallback, Engine lifecycle |
 | **Model** | Gemma 4 E2B-IT | Google's efficient on-device LLM |
 | **API** | LiteRT-LM | Direct on-device inference via Engine class |
-| **Streaming** | MessageCallback | Callback-based streaming responses |
+| **Streaming** | `Flow<String>` / `Flow<List<MessagePart>>` | Flow-based streaming (primary) + callback fallback |
+| **Token Filter** | `StreamingTokenFilter` | Trie-based special token removal with mode transitions |
+| **Special Tokens** | `GemmaSpecialTokens` | Definitions for turn, tool, thinking, media, sequence tokens |
+| **Message Parts** | `MessagePart` sealed class | Structured parts: Text, Reasoning, ToolCall, ToolResponse, Image, Audio |
+| **Part Aggregator** | `MessagePartAggregator` | Builds MessageParts from streaming token filter transitions |
 | **Model Manager** | `ModelManager` | HuggingFace/Kaggle download management |
 | **Text Embedder** | `OnnxMiniLmEmbedder` | ONNX Runtime with mean pooling + L2 normalization (fallback to mock) |
 | **Model Source** | HuggingFace | `litert-community/gemma-4-E2B-it-litert-lm` (~2.6 GB) |
+| **Timeout Guard** | `AtomicBoolean` + 120s | Prevents hung inference sessions |
+| **Markdown Render** | `MarkdownText.kt` | Lightweight markdown renderer for chat messages |
 
 ### AI Inference Architecture (LiteRT-LM Engine API)
 
-The inference system uses the real LiteRT-LM Engine API for on-device LLM inference:
+The inference system uses the real LiteRT-LM Engine API for on-device LLM inference. The architecture has been updated to support **Flow-based streaming** with **trie-based token filtering**:
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
@@ -85,7 +94,10 @@ The inference system uses the real LiteRT-LM Engine API for on-device LLM infere
 │  ┌────────────────────────────▼─────────────────────────────────┐  │
 │  │                  LiteRtInferenceBridge                        │  │
 │  │  • Engine/Conversation lifecycle                              │  │
-│  │  • MessageCallback for streaming                              │  │
+│  │  • Flow<String> for streaming (primary)                       │  │
+│  │  • MessageCallback for legacy streaming                       │  │
+│  │  • StreamingTokenFilter (trie-based special token removal)    │  │
+│  │  • 120s timeout with AtomicBoolean guards                     │  │
 │  │  • Image/Audio content support (Content.ImageBytes)           │  │
 │  │  • GPU/CPU backend fallback                                    │  │
 │  └────────────────────────────┬─────────────────────────────────┘  │
@@ -99,8 +111,9 @@ The inference system uses the real LiteRT-LM Engine API for on-device LLM infere
 │                               │                                     │
 │  ┌────────────────────────────▼─────────────────────────────────┐  │
 │  │              com.google.ai.edge.litertlm.Engine               │  │
-│  │  • startConversation(MessageCallback) → Conversation          │  │
-│  │  • .send(prompt) for inference                                 │  │
+│  │  • createConversation() -> Conversation                       │  │
+│  │  • sendMessageAsync() -> Flow<Message> / MessageCallback      │  │
+│  │  • renderMessageIntoString() for text extraction              │  │
 │  └────────────────────────────┬─────────────────────────────────┘  │
 │                               │                                     │
 │  ┌────────────────────────────▼─────────────────────────────────┐  │
@@ -115,20 +128,96 @@ The inference system uses the real LiteRT-LM Engine API for on-device LLM infere
 │  │                  Gemma 4 E2B-IT Model                         │  │
 │  │  • Model: gemma-4-E2B-it.litertlm (~2.6 GB)                   │  │
 │  │  • Source: huggingface.co/litert-community/...               │  │
+│  │  • Outputs control tokens: <|turn>, <|think|>, <bos>, <eos>  │  │
 │  └──────────────────────────────────────────────────────────────┘  │
+│                                                                      │
+│  ┌──────────────────────────────────────────────────────────────┐  │
+│  │               StreamingTokenFilter (NEW)                      │  │
+│  │  • TokenTrie for O(m) special token matching                  │  │
+│  │  • Character-by-character processing with boundary buffering  │  │
+│  │  • Removes: turn, tool, thinking, media, sequence tokens      │  │
+│  │  • Mode transition tracking for structured parts              │  │
+│  │  • Smart spacing: lastEmittedChar, word-char detection        │  │
+│  └──────────────────────────────────────────────────────────────┘
+│                                                                      │
+│  ┌──────────────────────────────────────────────────────────────┐  │
+│  │            MessagePart Architecture (NEW)                     │  │
+│  │  • MessagePart sealed class: Text, Reasoning, ToolCall, etc.  │  │
+│  │  • MessagePartAggregator builds parts from stream transitions │  │
+│  │  • InferenceBridge.runInferenceFlowParts(): Flow<List<...>>   │  │
+│  │  • ChatViewModel collects parts, ChatScreen renders with UI   │  │
+│  └──────────────────────────────────────────────────────────────┘
 └────────────────────────────────────────────────────────────────────┘
 ```
 
-#### MessageCallback Interface
+#### Flow-Based Streaming (Primary)
+
+```kotlin
+// ChatViewModel uses Flow-based inference with structured parts
+inferenceBridge.runInferenceFlowParts(contextPrompt)
+    .catch { error -> /* handle error */ }
+    .onCompletion { /* save to DB, cleanup */ }
+    .collect { parts ->
+        updateLastAssistantMessage(parts)
+    }
+```
+
+The Flow-based approach:
+1. `conversation.sendMessageAsync(content)` returns `Flow<Message>`
+2. Each `Message` is converted to text via `conv.renderMessageIntoString(message)`
+3. `StreamingTokenFilter.appendWithTransitions(chunk)` removes special tokens and emits mode transitions
+4. `MessagePartAggregator` builds immutable `MessagePart` objects from transitions
+5. `Flow<List<MessagePart>>` is collected by `ChatViewModel` and rendered by `ChatScreen`
+6. `withTimeout(120_000)` prevents hung inference
+
+**Two streaming APIs are available:**
+- `runInferenceFlow(): Flow<String>` — Plain text accumulation (legacy compatibility)
+- `runInferenceFlowParts(): Flow<List<MessagePart>>` — Structured parts for rich UI rendering
+
+#### MessageCallback Interface (Legacy)
 
 ```kotlin
 interface MessageCallback {
-    fun onModelMetadata(modelMetadata: ModelMetadata)
-    fun onStart()
-    fun onContent(content: Content)  // Content.Text or Content.ImageBytes
-    fun onComplete()
-    fun onError(error: String)
+    fun onMessage(message: Message)
+    fun onDone()
+    fun onError(throwable: Throwable)
 }
+```
+
+Callback-based streaming is still available via `runInference()` but `ChatViewModel` now prefers `runInferenceFlow()`.
+
+#### StreamingTokenFilter
+
+```kotlin
+class StreamingTokenFilter(
+    specialTokens: Set<String> = GemmaSpecialTokens.ALL_USER_FACING
+) {
+    fun append(chunk: String): String  // Returns safe prefix, buffers partial tokens
+    fun appendWithTransitions(chunk: String): FilteredChunkWithTransitions
+    fun flush(): String                // Emit remaining safe text at stream end
+    fun clear()                        // Reset buffer
+}
+```
+
+The filter uses a `TokenTrie` (prefix tree) to match special tokens character-by-character. This ensures partial tokens at chunk boundaries are correctly buffered until the complete token arrives.
+
+**Smart Spacing Logic:**
+- `lastEmittedChar` tracking prevents `\n\n` spam between words
+- Only adds space before word characters, not punctuation or symbols
+- Handles mode transitions (REGULAR → THINKING → TOOL_CALL → REGULAR) via `appendWithTransitions()`
+
+#### GemmaSpecialTokens
+
+```kotlin
+object GemmaSpecialTokens {
+    val TURN_TOKENS: Set<String>       // <|turn>, <turn|>, <|turn>model, etc.
+    val TOOL_TOKENS: Set<String>       // <|tool>, <tool_call|>, etc.
+    val THINKING_TOKENS: Set<String>   // <|think|>, <|channel>, etc.
+    val MEDIA_TOKENS: Set<String>      // <|image>, <audio|>, etc.
+    val SEQUENCE_TOKENS: Set<String>   // <bos>, <eos>, <|endoftext|>
+    val ALL_USER_FACING: Set<String>   // Union of all above
+}
+```
 ```
 
 #### RAG Flow (Chat → VectorStore → Inference)
@@ -191,7 +280,7 @@ PenpalDatabase (Singleton via getInstance())
 
 | Tab | ViewModel | UI Status | Backend Status |
 |-----|-----------|-----------|----------------|
-| Chat | ChatViewModel | ✅ Functional | ✅ RAG via InferenceBridge |
+| Chat | ChatViewModel | ✅ Functional | ✅ RAG via InferenceBridge, structured MessageParts |
 | Think | NotebookEditorViewModel | ✅ Functional | ✅ Room persistence |
 | Process | ProcessViewModel | ✅ Functional | ✅ Connected to VectorStore |
 | Inference | InferenceViewModel | ✅ Functional | ✅ ML Kit GenAI / Gemma 4 |
@@ -219,7 +308,9 @@ penpal/
 │   │   ├── TextEmbedder.kt        # Text embedding interface
 │   │   ├── MiniLmEmbedder.kt      # Mock embedder (384-dim, fallback)
 │   │   ├── OnnxMiniLmEmbedder.kt  # ONNX Runtime embedder with mean pooling + L2 norm
-│   │   └── VectorStoreRepository.kt # LRU cache + similarity
+│   │   ├── VectorStoreRepository.kt # LRU cache + similarity
+│   │   ├── MessagePart.kt         # Structured message parts (Text, Reasoning, ToolCall)
+│   │   └── StreamingTokenFilter.kt # Trie-based special token filtering with mode transitions
 │   ├── data/                      # ✅ Implemented
 │   │   ├── PenpalDatabase.kt      # Room database
 │   │   ├── Entities.kt            # 5 entities
@@ -237,7 +328,7 @@ penpal/
 │   └── ui/                        # ✅ Partial
 │       └── Theme.kt               # Material 3 dark/light
 ├── feature/                       # ✅ Phase 3 & 4 Complete
-│   ├── chat/                      # ✅ RAG chat interface
+│   ├── chat/                      # ✅ RAG chat with structured MessageParts
 │   ├── process/                   # ✅ Document extraction UI
 │   ├── inference/                 # ✅ Model management UI
 │   ├── notebooks/                 # ✅ Think tab - block editor
@@ -275,6 +366,7 @@ core:ai/
 ├── DispatcherModule.kt      # @IoDispatcher, @DefaultDispatcher, @InferenceDispatcher
 ├── InferenceBridge.kt       # Interface: initialize(), generate(), stream(), detectItems(), recognizeText()
 ├── LiteRtInferenceBridge.kt # LiteRT-LM Engine API implementation
+├── OllamaInferenceBridge.kt # Remote inference via Ollama REST API
 ├── LmEngineManager.kt       # Engine lifecycle, GPU/CPU backend fallback
 ├── InferenceModule.kt       # Hilt bindings for inference
 ├── ModelManager.kt          # HuggingFace/Kaggle download management
@@ -282,7 +374,10 @@ core:ai/
 ├── MiniLmEmbedder.kt        # Mock: 384-dim embeddings (fallback)
 ├── OnnxMiniLmEmbedder.kt    # ONNX Runtime: mean pooling, L2 normalization
 ├── VectorStoreRepository.kt # LRU cache + cosine similarity search
-└── ModelStatus.kt           # Model download/load status enum
+├── ModelStatus.kt           # Model download/load status enum
+├── MessagePart.kt           # Structured message parts (Text, Reasoning, ToolCall, ToolResponse, Image, Audio)
+├── StreamingTokenFilter.kt  # Trie-based special token filtering with mode transitions
+└── GemmaSpecialTokens.kt    # Gemma 4 control token definitions
 ```
 
 #### DispatcherModule
@@ -319,6 +414,10 @@ interface InferenceBridge {
     // Generation with streaming support
     suspend fun generate(prompt: String, config: GenerationConfig): String
     fun streamGenerate(prompt: String, config: GenerationConfig): Flow<String>
+    fun runInferenceFlow(input: String): Flow<String>
+    fun runInferenceFlowParts(input: String): Flow<List<MessagePart>>
+    fun runInferenceWithImageFlow(input: String, image: Bitmap): Flow<String>
+    fun runInferenceWithImageFlowParts(input: String, image: Bitmap): Flow<List<MessagePart>>
 
     // Task-specific inference
     suspend fun detectItems(bitmap: Bitmap, prompt: String): List<DetectedItem>
@@ -881,38 +980,66 @@ Main Thread (UI) ──suspend/StateFlow──> IO Dispatcher (Room, files, netw
 
 ```
 1. User sends query in Chat
-            │
-            ▼
+             │
+             ▼
 2. ChatViewModel.sendQuery("What about X?")
-     viewModelScope.launch(Default)
-            │
-            ▼
+      viewModelScope.launch(Default)
+             │
+             ▼
 3. VectorStoreRepository.similaritySearch(query, topK=6)
-     Default dispatcher (embedding + cosine sim)
-            │
-            ▼
-     chunks = [ChunkEntity, ...]    ← top-K relevant text
-            │
-            ▼
+      Default dispatcher (embedding + cosine sim)
+             │
+             ▼
+      chunks = [ChunkEntity, ...]    ← top-K relevant text
+             │
+             ▼
 4. Check isModelReady state
-            │
-     ┌──────┴──────┐
-     │             │
-     ▼             ▼
+             │
+      ┌──────┴──────┐
+      │             │
+      ▼             ▼
 Ready         Not Ready
-     │             │
-     ▼             ▼
-runInference()  Show "Model not ready" message
-     │
-     ▼
-MessageCallback.onContent() → streaming tokens
-            │
-            ▼
-     ChatViewModel updates message UI
-            │
-            ▼
+      │             │
+      ▼             ▼
+runInferenceFlowParts()  Show "Model not ready" message
+      │
+      ▼
+Flow.collect() → StreamingTokenFilter → MessagePartAggregator → List<MessagePart>
+             │
+             ▼
+      ChatViewModel updates message with parts
+             │
+             ▼
+      ChatScreen renders TextPart, ReasoningBlock, ToolCallBlock
+             │
+             ▼
 5. Compose recomposes ChatScreen with streaming response
 ```
+
+---
+
+## Known Issues
+
+### Text Splitting After Special Character Filtering ✅
+
+**Status**: Resolved
+
+**Problem**: After implementing the `StreamingTokenFilter`, chat text was being split into separate lines after each special character occurrence. The model output contains structural newlines around control tokens (e.g., `<|turn>model\n...content...\n<turn|>`), and when tokens were removed, spurious line breaks remained in the user-facing text.
+
+**Solution**:
+- Implemented smart spacing logic in `StreamingTokenFilter` with `lastEmittedChar` tracking
+- Added `appendWithTransitions()` method that emits mode transition events for structured parsing
+- Space insertion is now context-aware: only before word characters, not punctuation/symbols
+- Prevents `\n\n` spam between words while preserving natural paragraph structure
+
+**Result**: Chat responses now render with proper text structure. Excessive line breaks have been eliminated while preserving intentional paragraph breaks.
+
+**Files Involved**:
+- `core/ai/StreamingTokenFilter.kt`
+- `core/ai/GemmaSpecialTokens.kt`
+- `core/ai/LiteRtInferenceBridge.kt` (Flow accumulation logic)
+- `feature/chat/ChatViewModel.kt` (message update logic)
+- `feature/chat/ChatScreen.kt` (text rendering)
 
 ---
 
@@ -1080,7 +1207,7 @@ feature:settings ──> core:data, core:ui
 
 ---
 
-*Last updated: Document Parsers, Vector Persistence & Chat Enhancements - Real parsing, ONNX embeddings, persistent chat (May 2026)*
+*Last updated: Structured Message Parts Architecture — Opencode-inspired parts system with MessagePart sealed class, MessagePartAggregator, StreamingTokenFilter mode transitions, smart spacing, MarkdownText renderer, collapsible ReasoningBlock and ToolCallBlock UI (May 2026)*
 
 ---
 

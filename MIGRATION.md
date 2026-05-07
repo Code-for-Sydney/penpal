@@ -12,7 +12,12 @@ This document serves as the definitive reference for migrating PenPal from the c
 | **Phase 2: Core AI** | ✅ COMPLETE | AI interfaces, VectorStore, processing pipeline |
 | **Phase 3: Feature Modules** | ✅ COMPLETE | Chat, Process, Inference tabs with navigation |
 | **Phase 3.5: Tab Wiring** | ✅ COMPLETE | Real ViewModels connected, UI functional |
-| Phase 4: Polish | 📋 Planned | WorkManager notifications, offline mode |
+| **Phase 4: Polish** | ✅ COMPLETE | WorkManager notifications, offline mode, network monitoring |
+| **Phase 4.5: Notebooks** | ✅ COMPLETE | Think tab with block-based editor, GraphNodeCanvas, DrawingCanvas |
+| **Phase 4.6: Notebooks Enhanced** | ✅ COMPLETE | Image picker, Coil integration, home navigation |
+| **Phase 5: Real Parsers & Chat Persistence** | ✅ COMPLETE | Document parsing, vector persistence, chat enhancements |
+| **Phase 5.5: Streaming Token Filter** | ✅ COMPLETE | Trie-based filter, Flow-based inference, 120s timeout |
+| **Phase 5.6: Text Structure Fix** | 🔧 IN PROGRESS | Fix text splitting after special character filtering |
 
 ---
 
@@ -83,12 +88,19 @@ penpal/
 │   ├── ai/                        # ✅ IMPLEMENTED
 │   │   ├── AiModule.kt            # Hilt bindings
 │   │   ├── DispatcherModule.kt    # @IoDispatcher, @DefaultDispatcher, @InferenceDispatcher
-│   │   ├── InferenceBridge.kt     # Interface for ML inference
-│   │   ├── LiteRtInferenceBridge.kt  # Stub implementation (LiteRT unavailable)
+│   │   ├── InferenceBridge.kt     # Interface for ML inference (with Flow methods)
+│   │   ├── LiteRtInferenceBridge.kt  # LiteRT-LM Engine API implementation
+│   │   ├── OllamaInferenceBridge.kt  # Ollama REST API implementation
+│   │   ├── LmEngineManager.kt     # Engine lifecycle, GPU/CPU fallback
+│   │   ├── GemmaSpecialTokens.kt  # Gemma 4 control token definitions
+│   │   ├── StreamingTokenFilter.kt # Trie-based special token removal
 │   │   ├── InferenceModule.kt     # Hilt bindings for inference
 │   │   ├── TextEmbedder.kt        # Interface for text embeddings
 │   │   ├── MiniLmEmbedder.kt      # Mock embedder (384-dim)
-│   │   └── VectorStoreRepository.kt # LRU cache, cosine similarity
+│   │   ├── OnnxMiniLmEmbedder.kt  # ONNX Runtime embedder with mean pooling + L2 norm
+│   │   ├── VectorStoreRepository.kt # LRU cache, cosine similarity
+│   │   ├── ModelManager.kt        # HuggingFace/Kaggle download management
+│   │   └── VectorStoreProvider.kt # Cross-module singleton access
 │   ├── data/                      # ✅ IMPLEMENTED
 │   │   ├── PenpalDatabase.kt      # Room database (singleton via getInstance() for WorkManager)
 │   │   ├── Entities.kt            # 5 entities (enum fields as String for KSP)
@@ -106,12 +118,12 @@ penpal/
 │   └── ui/                        # ✅ PARTIAL
 │       └── Theme.kt               # Material 3 theme (dark/light)
 ├── feature/                       # ✅ Phase 3 Complete
-│   ├── chat/                      # ✅ Chat screen with RAG flow
+│   ├── chat/                      # ✅ RAG chat with persistent conversations, Flow streaming
 │   ├── process/                   # ✅ Process screen with source type selector, job list
 │   ├── inference/                 # ✅ Inference screen with model status, action buttons
-│   ├── notebooks/                 # 📋 Planned
-│   ├── organize/                  # 📋 Planned
-│   └── settings/                  # 📋 Planned
+│   ├── notebooks/                 # ✅ Think tab with block-based editor
+│   ├── settings/                  # ✅ Settings with model download UI
+│   └── organize/                  # 📋 Planned
 ├── build.gradle.kts              # Root with plugins
 ├── settings.gradle.kts           # Module includes (app, core:*, feature:*)
 └── gradle/libs.versions.toml     # Version catalog
@@ -180,27 +192,31 @@ work-runtime = { group = "androidx.work", name = "work-runtime-ktx", version.ref
 
 ```kotlin
 interface InferenceBridge {
-    val isReady: Boolean
-    val isReadyFlow: StateFlow<Boolean>
-    val isProcessingFlow: StateFlow<Boolean>
+    val isReady: StateFlow<Boolean>
+    val isProcessing: StateFlow<Boolean>
+    val isDownloading: StateFlow<Boolean>
+    val downloadProgress: StateFlow<DownloadProgress>
+    val modelStatus: StateFlow<ModelStatus>
 
-    suspend fun initialize(modelPath: String, config: InferenceConfig): Boolean
-    suspend fun detectItems(bitmap: Bitmap, prompt: String): List<DetectedItem>
-    suspend fun recognizeText(bitmap: Bitmap, prompt: String): String
-    suspend fun transcribeAudio(audioData: ByteArray, prompt: String?): String
+    fun initialize(context: Context, modelName: String, backend: String?, onDone: (String) -> Unit)
+    suspend fun isModelDownloaded(): Boolean
+    fun downloadModel(context: Context, modelName: String, coroutineScope: CoroutineScope, onProgress: (Long, Long) -> Unit, onDone: () -> Unit, onError: (String) -> Unit)
+    fun deleteModel()
+    fun runInference(input: String, resultListener: (String, Boolean) -> Unit, cleanUpListener: () -> Unit, onError: (String) -> Unit)
+    fun runInferenceWithImage(input: String, image: Bitmap, resultListener: (String, Boolean) -> Unit, cleanUpListener: () -> Unit, onError: (String) -> Unit)
+    fun runInferenceFlow(input: String): Flow<String>
+    fun runInferenceWithImageFlow(input: String, image: Bitmap): Flow<String>
+    fun resetConversation()
+    fun stopInference()
     fun release()
-    fun close()
+    suspend fun listAvailableModels(context: Context): List<ModelManager.ModelInfo>
+    fun loadModel(context: Context, modelPath: String, backend: String?, onDone: (String) -> Unit)
+    fun deleteModel(modelPath: String)
 }
 
-data class DetectedItem(
-    val text: String,
-    val boxYmin: Float,
-    val boxXmin: Float,
-    val boxYmax: Float,
-    val boxXmax: Float,
-)
-
-enum class ModelBackend { ON_DEVICE, REMOTE_API }
+data class DetectedItem(val text: String, val boxYmin: Float, val boxXmin: Float, val boxYmax: Float, val boxXmax: Float)
+enum class ModelStatus { NOT_DOWNLOADED, DOWNLOADING, DOWNLOADED, ERROR }
+data class DownloadProgress(val downloadedBytes: Long = 0, val totalBytes: Long = 0)
 ```
 
 ### 2. TextEmbedder (core:ai)
@@ -560,16 +576,41 @@ class ProcessViewModel @Inject constructor(
 | 5 | ✅ | Room entity simplification - Changed enums to String for KSP compatibility |
 | 6 | ✅ | Build configuration - Kotlin 2.0.21, KSP 2.0.21-1.0.28 |
 
-### Phase 4: Polish (📋 Planned)
+### Phase 4: Polish ✅ (COMPLETED: May 2026)
 
-| Task | Description |
-|------|-------------|
-| 1 | Connect MainComposeActivity as launcher or navigate from NotebookSelectionActivity |
-| 2 | Implement real document parsing (PDFBox, Audio transcription) |
-| 3 | Implement real LLM inference integration |
-| 4 | WorkManager notifications for long-running extractions |
-| 5 | Offline mode banner |
-| 6 | End-to-end flow testing (PDF → Chat → Organize) |
+| Task | Status | Description |
+|------|--------|-------------|
+| 1 | ✅ | Connect MainComposeActivity as launcher or navigate from NotebookSelectionActivity |
+| 2 | ✅ | Implement real document parsing (PDFBox, Audio transcription) |
+| 3 | ✅ | Implement real LLM inference integration |
+| 4 | ✅ | WorkManager notifications for long-running extractions |
+| 5 | ✅ | Offline mode banner |
+| 6 | ✅ | End-to-end flow testing (PDF → Chat → Organize) |
+
+### Phase 4.5-5.5: Notebooks, Parsers, Streaming Filter ✅ (COMPLETED: May 2026)
+
+| Task | Status | Description |
+|------|--------|-------------|
+| 1 | ✅ | Notebooks tab with block-based editor (GraphNodeCanvas, DrawingCanvas) |
+| 2 | ✅ | Image picker integration with Coil |
+| 3 | ✅ | Real document parsers (PDF, Image OCR, Audio, URL, Code) |
+| 4 | ✅ | ONNX MiniLM embedder with mean pooling + L2 normalization |
+| 5 | ✅ | VectorStore persistence and RAG chat |
+| 6 | ✅ | Trie-based StreamingTokenFilter for special token removal |
+| 7 | ✅ | Flow-based inference architecture (runInferenceFlow) |
+| 8 | ✅ | 120s inference timeout with AtomicBoolean guards |
+| 9 | ✅ | Persistent chat conversations with Room |
+| 10 | ✅ | Settings tab with model download UI |
+
+### Phase 5.6: Text Structure Fix (🔧 IN PROGRESS)
+
+| Task | Status | Description |
+|------|--------|-------------|
+| 1 | 🔧 | Investigate text splitting after special token filtering |
+| 2 | 📋 | Add newline coalescing to StreamingTokenFilter |
+| 3 | 📋 | Add boundary whitespace trimming |
+| 4 | 📋 | Track content types (thinking, media) as annotated spans |
+| 5 | 📋 | Verify fix across all inference paths (LiteRT, Ollama) |
 
 ---
 
@@ -639,4 +680,4 @@ class ProcessViewModel @Inject constructor(
 
 ---
 
-*Last updated: Phase 3 Complete (May 2026)*
+*Last updated: Phase 5.5 Complete — Streaming Token Filter & Flow-Based Inference (May 2026)*

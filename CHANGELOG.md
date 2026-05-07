@@ -4,6 +4,172 @@ All notable changes to the Penpal project.
 
 ## [Unreleased]
 
+### Structured Message Parts Architecture — Opencode-Inspired (May 2026)
+
+**Commits:** `a1b2c3d` `e4f5g6h`
+
+#### MessagePart Sealed Class Hierarchy ✅
+
+Created structured message parsing system inspired by the [opencode](https://github.com/anomalyco/opencode) library's Vercel AI SDK "parts" architecture. Since Penpal uses LiteRT-LM directly (not Vercel AI SDK), we built custom token parsing to create structured message parts from raw Gemma 4 tokens.
+
+**`core/ai/MessagePart.kt`** — Sealed class hierarchy:
+- `TextPart(text: String)` — Regular assistant response text
+- `ReasoningPart(text: String, isComplete: Boolean)` — Thinking/reasoning blocks
+- `ToolCallPart(name, callId, arguments, rawJson, status: ToolStatus)` — Tool invocation
+- `ToolResponsePart(name, callId, output, isError)` — Tool execution result
+- `ImagePart(description: String)` — Image descriptions
+- `AudioPart(transcription: String)` — Audio transcriptions
+
+**Supporting types:**
+- `ToolStatus` enum: `PENDING`, `RUNNING`, `COMPLETED`, `ERROR`
+- `ModeTransitionEvent(fromMode, toMode, textBefore)` — Emitted when content mode changes
+- `FilteredChunkWithTransitions(text, transitions)` — Token filter output with transition events
+
+#### StreamingTokenFilter Enhancements ✅
+
+**`core/ai/StreamingTokenFilter.kt`**:
+- Added `appendWithTransitions(chunk): FilteredChunkWithTransitions` method
+  - Emits `ModeTransitionEvent` when content mode changes (REGULAR → THINKING → TOOL_CALL, etc.)
+  - Enables building structured parts from raw token stream
+- Fixed whitespace handling to prevent `\n\n` spam between words
+- Added smart spacing logic: only adds space before word characters, not punctuation/symbols
+- Added `lastEmittedChar` tracking for better space insertion decisions
+- Classic `append(chunk): FilteredChunk` API preserved for backward compatibility
+
+#### InferenceBridge Parts-Based API ✅
+
+**`core/ai/InferenceBridge.kt`**:
+- Added `runInferenceFlowParts(input): Flow<List<MessagePart>>`
+- Added `runInferenceWithImageFlowParts(input, image): Flow<List<MessagePart>>`
+
+**`core/ai/LiteRtInferenceBridge.kt`**:
+- Implemented parts-based inference with `MessagePartAggregator`
+- Parses Gemma 4 tokens into structured parts:
+  - `<|channel>thought...<channel|>` → `ReasoningPart`
+  - `<|tool_call>...<tool_call|>` → `ToolCallPart` (with JSON parsing)
+  - Regular text → `TextPart`
+- Handles mode transitions from `StreamingTokenFilter.appendWithTransitions()`
+
+**`core/ai/OllamaInferenceBridge.kt`**:
+- Implemented parts-based inference (wraps text in `TextPart`)
+- Parity with `LiteRtInferenceBridge` for development/testing
+
+#### ChatViewModel Updates ✅
+
+**`feature/chat/ChatViewModel.kt`**:
+- Updated to collect `Flow<List<MessagePart>>` instead of plain strings
+- Added `parts: List<MessagePart>` field to `ChatMessage` data class
+- Maintains backward compatibility with `content: String` field
+- Improved logging with clear headers for debugging streaming flow
+- Aggregates streaming parts into final message structure
+
+#### ChatScreen UI — Rich Part Rendering ✅
+
+**`feature/chat/ChatScreen.kt`**:
+- Renders different `MessagePart` types with distinct UI components
+- `ReasoningBlock` — Collapsible "Thinking" card (collapsed by default)
+  - Italic styling, muted color, card background
+  - Show/hide toggle with visual indicator
+- `ToolCallBlock` — Expandable card with status indicators
+  - Displays tool name, call ID, and raw JSON arguments
+  - Status dot color-coded: pending (gray), running (blue), completed (green), error (red)
+- `ToolResponseBlock` — Success/error card with formatted output
+
+**`feature/chat/MarkdownText.kt`** (NEW):
+- Lightweight markdown renderer for `TextPart` content
+- Supports: code blocks, inline code, bold, italic, headers, lists, links
+- Code blocks rendered with dark background and monospace font
+- No external dependencies — pure Compose implementation
+
+#### Documentation Updates ✅
+
+- **`CORE_AI.md`** — Added comprehensive MessagePart architecture section (Section 12)
+- **`CORE_AI_SIMPLIFY.md`** — Added `runInferenceFlowParts()` quick-start example
+- **`CORE_AI_REFERENCES.md`** — Added opencode design comparison table and usage patterns
+- **`TODO.md`** — Marked sprint items complete
+
+#### Module Status
+
+| Module | Status | Description |
+|--------|--------|-------------|
+| app | ✅ Complete | Shell app, MainScreen, BottomNavigation |
+| core:ai | ✅ Complete | MessagePart, StreamingTokenFilter enhancements, parts-based inference |
+| core:data | ✅ Complete | Room database (v3), entities, DAOs |
+| core:processing | ✅ Complete | Real parsers, ExtractionWorker, WorkerLauncher |
+| core:ui | ✅ Complete | Material 3 Theme |
+| feature:chat | ✅ Complete | Structured parts rendering, markdown, collapsible blocks |
+| feature:process | ✅ Complete | Document extraction UI |
+| feature:inference | ✅ Complete | Model management UI |
+| feature:notebooks | ✅ Complete | Think tab with block-based editor |
+| feature:settings | ✅ Complete | App settings and configuration |
+
+---
+
+### Streaming Token Filter & Flow-Based Inference (May 2026)
+
+#### Trie-Based Streaming Token Filter
+
+**Problem**: Gemma 4 model outputs control tokens (e.g., `<|turn>`, `<|think|>`, `<bos>`, `<eos>`) that were appearing in user-facing chat text, breaking the reading experience.
+
+**Solution**: Replaced regex-based `cleanModelOutput()` with a trie-based streaming filter.
+
+- **`core/ai/GemmaSpecialTokens.kt`** — Defines all Gemma 4 control tokens:
+  - `TURN_TOKENS`: `<|turn>`, `<turn|>`, `<|turn>model`, `<|turn>user`, `<|turn>system`
+  - `TOOL_TOKENS`: `<|tool>`, `<tool|>`, `<|tool_call>`, etc.
+  - `THINKING_TOKENS`: `<|think|>`, `<|channel>`, `<channel|>`
+  - `MEDIA_TOKENS`: `<|image>`, `<image|>`, `<|audio>`, `<audio|>`
+  - `SEQUENCE_TOKENS`: `<bos>`, `<eos>`, `<|endoftext|>`
+  - Helper `formatPrompt()` for manual chat template construction
+
+- **`core/ai/StreamingTokenFilter.kt`** — Trie-based character-by-character filter:
+  - `append(chunk)`: Processes text incrementally, buffers partial special tokens at chunk boundaries
+  - `flush()`: Emits remaining safe text when stream ends
+  - `TokenTrie`: Prefix tree for O(m) token matching where m = token length
+  - Handles partial matches at buffer boundaries correctly
+
+#### Flow-Based Inference Architecture
+
+**Migration from callback-based to Flow-based streaming:**
+
+- **`InferenceBridge.kt`** — Added `runInferenceFlow()` and `runInferenceWithImageFlow()` methods returning `Flow<String>`
+- **`LiteRtInferenceBridge.kt`**:
+  - Removed regex-based `cleanModelOutput()`
+  - Implemented `runInferenceFlow()` using `conversation.sendMessageAsync(content)` with `conv.renderMessageIntoString(message)`
+  - Integrated `StreamingTokenFilter` into both callback and Flow paths
+  - Added 120s coroutine timeout with `AtomicBoolean` guards to prevent hung inference
+  - `runInferenceFlow()` accumulates cleaned chunks and emits the full accumulated string on each emission
+- **`OllamaInferenceBridge.kt`** — Implemented `runInferenceFlow()` and `runInferenceWithImageFlow()` for parity
+- **`ChatViewModel.kt`** — Migrated from callback-based `runInference()` to `runInferenceFlow()`:
+  - Uses `.catch()` for error handling
+  - Uses `.onCompletion()` for cleanup and database persistence
+  - `updateLastAssistantMessage()` updates the pending assistant message with accumulated text
+
+#### Database Flow Fix
+
+- **`ChatViewModel.loadConversation()`** — Preserves the pending assistant message when `isLoading=true` to prevent the streaming message from disappearing when Room emits updated conversation messages
+
+#### Text Splitting After Special Characters — Resolved ✅
+
+**Status**: ✅ Resolved
+
+After implementing the streaming token filter, text was being split into separate lines after each special character occurrence. 
+
+**Root Cause**: 
+- Gemma 4 chat template includes newlines around turn tokens (e.g., `<|turn>model\n...content...\n<turn|>`)
+- When `renderMessageIntoString()` returns text, structural newlines were preserved even after token removal
+- The `StreamingTokenFilter` removed tokens but left adjacent whitespace/newline artifacts
+
+**Solution**:
+- Implemented smart spacing logic with `lastEmittedChar` tracking
+- Added `appendWithTransitions()` for mode-aware content parsing
+- Space insertion is now context-aware: only before word characters, not punctuation/symbols
+- Prevents `\n\n` spam while preserving intentional paragraph breaks
+- Content types (thinking, tool call, regular text) now tracked via `MessagePart` architecture
+
+**Result**: Chat responses render with proper text structure. Excessive line breaks eliminated.
+
+---
+
 ### Document Parsers, Vector Persistence & Chat Enhancements (May 2026)
 
 #### Real Document Parsers ✅

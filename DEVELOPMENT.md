@@ -8,7 +8,7 @@ Penpal v2.x uses **Google Gemma 4 E2B-IT** as the primary inference model via **
 
 ### LiteRT-LM Engine API Setup
 
-The inference layer uses the **LiteRT-LM Engine API** with GPU/CPU backend fallback:
+The inference layer uses the **LiteRT-LM Engine API** with GPU/CPU backend fallback. The app has migrated from MediaPipe LLM Inference API (deprecated) to LiteRT-LM.
 
 #### 1. Add Dependencies
 
@@ -47,14 +47,14 @@ val percentage = (progress.bytesDownloaded * 100) / progress.totalBytes
 
 ```kotlin
 // In Application or ViewModel
-val inferenceBridge: InferenceBridge = LiteRtInferenceBridge()
+val inferenceBridge: InferenceBridge = LiteRtInferenceBridge(context)
 
-lifecycleScope.launch {
-    val success = inferenceBridge.initialize(context, config)
-    if (success) {
-        Log.d("Penpal", "LiteRT-LM Engine ready")
-    }
-}
+inferenceBridge.initialize(
+    context = context,
+    modelName = "google/gemma-4-e2b-it",
+    backend = null,  // null = auto (GPU first, CPU fallback)
+    onDone = { message -> Log.d("Penpal", message) }
+)
 ```
 
 ### LmEngineManager with GPU/CPU Backend Fallback
@@ -85,35 +85,77 @@ class LmEngineManager(private val context: Context) {
 }
 ```
 
-### Streaming via MessageCallback
+### Streaming via Flow (Primary)
+
+The recommended approach for streaming inference uses Kotlin Flow:
+
+```kotlin
+// Flow-based streaming (primary)
+inferenceBridge.runInferenceFlow(prompt)
+    .catch { error ->
+        // Handle timeout, cancellation, or model errors
+        Log.e("Penpal", "Inference error", error)
+    }
+    .onCompletion {
+        // Save to database, cleanup
+    }
+    .collect { partialResult ->
+        // Update UI with accumulated cleaned text
+        viewModel.updateLastAssistantMessage(partialResult)
+    }
+```
+
+The Flow-based pipeline:
+1. `conversation.sendMessageAsync(content)` returns `Flow<Message>`
+2. Each message is rendered to text via `conv.renderMessageIntoString(message)`
+3. `StreamingTokenFilter.append(chunk)` removes special tokens incrementally
+4. Clean text is accumulated and emitted
+5. `withTimeout(120_000)` prevents hung inference sessions
+
+### Streaming via MessageCallback (Legacy)
 
 ```kotlin
 interface MessageCallback {
-    fun onModelMetadata(modelMetadata: ModelMetadata)
-    fun onStart()
-    fun onContent(content: Content)
-    fun onComplete()
-    fun onError(error: String)
+    fun onMessage(message: Message)
+    fun onDone()
+    fun onError(throwable: Throwable)
 }
 
 // Usage
-inferenceBridge.runInference(prompt, object : MessageCallback {
-    override fun onContent(content: Content) {
-        // Update UI with streamed tokens
-        viewModel.appendToken(content.text)
-    }
-    
-    override fun onComplete() {
-        // Inference finished
-        viewModel.finalizeMessage()
-    }
-    
-    override fun onError(error: String) {
-        // Handle error
-        viewModel.showError(error)
-    }
-})
+inferenceBridge.runInference(
+    input = prompt,
+    resultListener = { partial, done ->
+        viewModel.updateLastAssistantMessage(partial)
+    },
+    cleanUpListener = { /* cleanup */ },
+    onError = { error -> viewModel.showError(error) }
+)
 ```
+
+### StreamingTokenFilter
+
+The `StreamingTokenFilter` removes Gemma 4 control tokens from the model output using a trie (prefix tree) for efficient character-by-character matching:
+
+```kotlin
+val filter = StreamingTokenFilter(GemmaSpecialTokens.ALL_USER_FACING)
+
+// Process streaming chunks
+val emitted1 = filter.append("Hello <|tur")   // Returns "Hello " (partial buffered)
+val emitted2 = filter.append("n> world")       // Returns "world" (token removed)
+val remaining = filter.flush()                 // Returns "" (buffer was only token)
+```
+
+**Why trie-based?**
+- Regex would re-scan the entire accumulated text on each chunk (O(n) per chunk)
+- Trie matches in O(m) where m = token length, regardless of input size
+- Correctly handles partial tokens at chunk boundaries via internal buffering
+
+**Token Categories Filtered:**
+- **Turn tokens**: `<|turn>`, `<turn|>`, `<|turn>model`, `<|turn>user`, `<|turn>system`
+- **Tool tokens**: `<|tool>`, `<tool_call|>`, `<|tool_response>`, etc.
+- **Thinking tokens**: `<|think|>`, `<|channel>`, `<channel|>`
+- **Media tokens**: `<|image>`, `<image|>`, `<|audio>`, `<audio|>`
+- **Sequence tokens**: `<bos>`, `<eos>`, `<|endoftext|>`, `<|im_start|>`, `<|im_end|>`
 
 ### Gemma 4 E2B-IT Model Configuration
 
@@ -125,27 +167,30 @@ inferenceBridge.runInference(prompt, object : MessageCallback {
 | **Parameters** | 2B |
 | **Context Window** | 8K tokens |
 | **Use Case** | Instruction following, RAG, text generation |
+| **API** | LiteRT-LM Engine API |
 
-#### GenerationConfig
+#### ConversationConfig
 
 ```kotlin
-data class GenerationConfig(
-    val maxTokens: Int = 1024,        // Max output tokens
-    val temperature: Float = 0.7f,    // Creativity (0 = deterministic)
-    val topP: Float = 0.9f,           // Nucleus sampling
-    val topK: Int = 40,               // Top-k sampling
-    val stopSequences: List<String> = emptyList()
+ConversationConfig(
+    samplerConfig = SamplerConfig(
+        topK = 64,
+        topP = 0.95,
+        temperature = 0.7
+    )
 )
 ```
 
-#### InferenceConfig
+#### EngineConfig
 
 ```kotlin
-data class InferenceConfig(
-    val modelName: String = "gemma-4-e2b-it",
-    val apiKey: String? = null,       // Optional API key
-    val maxConcurrentRequests: Int = 2,
-    val cacheDir: File? = context.cacheDir
+EngineConfig(
+    modelPath = modelPath,
+    backend = Backend.GPU(),        // or Backend.CPU()
+    visionBackend = Backend.GPU(),  // for image support
+    audioBackend = Backend.CPU(),   // for audio support
+    maxNumImages = 1,
+    maxNumTokens = 4096
 )
 ```
 
@@ -203,26 +248,38 @@ data class DownloadProgress(
     val status: DownloadStatus  // NOT_STARTED, DOWNLOADING, COMPLETED, FAILED
 )
 ```
-    
-    fun downloadModel(
-        modelId: String,
-        onProgress: (DownloadProgress) -> Unit
-    ): Task<Void> {
-        // Use DownloadManager or custom download logic
-        val request = DownloadManager.Request(Uri.parse(MODEL_URL))
-            .setTitle("Downloading Gemma 4")
-            .setDescription("AI model (~2.6 GB)")
-        
-        return downloadManager.enqueue(request)
-    }
-}
 
-data class DownloadProgress(
-    val bytesDownloaded: Long,
-    val totalBytes: Long,
-    val status: DownloadStatus
-)
+### Known Issue: Text Splitting After Special Characters
+
+**Status**: In Progress
+
+After implementing `StreamingTokenFilter`, chat responses exhibit spurious line breaks after special token occurrences.
+
+**Symptoms**:
+- Model outputs text with structural newlines around turn tokens
+- After filtering `<|turn>model\n...\n<turn|>`, extra `\n` characters remain
+- Text appears fragmented in the chat UI
+
+**Debugging Tips**:
+
+```kotlin
+// Add logging to trace token boundaries
+Log.d("TokenFilter", "Raw chunk: ${text.take(50).replace("\n", "\\n")}")
+Log.d("TokenFilter", "Cleaned chunk: ${cleaned.take(50).replace("\n", "\\n")}")
 ```
+
+**Potential Fixes**:
+1. **Newline coalescing**: Collapse multiple consecutive `\n` into a single `\n` after token removal
+2. **Boundary trimming**: Trim whitespace around removed token boundaries
+3. **Annotated spans**: Track token types as metadata rather than filtering from raw text
+4. **Template-aware filtering**: Understand Gemma 4 chat template structure to remove associated whitespace
+
+**Files to Modify**:
+- `core/ai/StreamingTokenFilter.kt` — Add newline coalescing/trimming
+- `core/ai/LiteRtInferenceBridge.kt` — Verify chunk accumulation logic
+- `feature/chat/ChatViewModel.kt` — Post-process received text
+
+---
 
 ### Inference Testing Guidelines
 
@@ -308,14 +365,14 @@ fun `RAG flow retrieves context and generates response`() = runTest {
 
 ```kotlin
 @Test
-fun `chat shows streaming response`() = runTest {
+fun `chat shows streaming response via Flow`() = runTest {
     // Given
     val mockBridge = mock<InferenceBridge> {
-        on { isReadyFlow } doReturn MutableStateFlow(true)
-        on { streamGenerate(anyString(), any()) } doReturn flow {
+        on { isReady } doReturn MutableStateFlow(true)
+        on { runInferenceFlow(anyString()) } doReturn flow {
             emit("Th")
-            emit("ank")
-            emit(" you")
+            emit("Thank")
+            emit("Thank you")
         }
     }
     
@@ -325,7 +382,7 @@ fun `chat shows streaming response`() = runTest {
     )
     
     // When
-    viewModel.sendMessage("Thanks")
+    viewModel.onEvent(ChatEvent.SendMessage)
     delay(100)
     
     // Then

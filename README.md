@@ -32,11 +32,14 @@ Penpal's inference layer is built around **Gemma 4 E2B-IT** and uses the **LiteR
 
 - **Real LiteRT-LM Integration**: Uses actual `Engine`, `Conversation`, `MessageCallback` APIs
 - **GPU/CPU Fallback**: Automatic backend selection (GPU preferred, CPU fallback)
-- **Streaming Responses**: Callback-based token streaming for chat UI
+- **Streaming Responses**: Flow-based token streaming (primary) + callback fallback
+- **Special Token Filtering**: Trie-based `StreamingTokenFilter` removes Gemma 4 control tokens (`<|turn>`, `<|think|>`, `<bos>`, `<eos>`) from user-facing text with mode transition tracking
+- **Structured Message Parts**: `MessagePart` sealed class hierarchy (Text, Reasoning, ToolCall, ToolResponse, Image, Audio) for rich UI rendering
 - **RAG Integration**: Combines vector similarity search with LLM inference
 - **Image/Audio Support**: Content handling via `Content.ImageBytes`
 - **Model Manager**: HuggingFace/Kaggle downloads with Android DownloadManager
 - **Offline Mode**: Full on-device inference without network
+- **Timeout Protection**: 120s coroutine timeout with `AtomicBoolean` guards prevents hung inference
 
 #### Inference Architecture
 
@@ -169,6 +172,23 @@ The Settings tab manages model downloads via ModelManager. Users can download Ge
 - Retry on failure
 
 **Privacy**: All inference runs locally on-device using LiteRT-LM Engine API - no data leaves the device.
+
+#### Structured Message Parts & Markdown Rendering
+
+Penpal implements an opencode-inspired "parts" architecture for structured message parsing:
+
+- **`MessagePart` sealed class** — TextPart, ReasoningPart, ToolCallPart, ToolResponsePart, ImagePart, AudioPart
+- **`MessagePartAggregator`** — Builds immutable parts from streaming token transitions
+- **Rich Chat UI** — Collapsible "Thinking" cards, expandable tool call blocks with status indicators, success/error response cards
+- **`MarkdownText`** — Lightweight markdown renderer supporting code blocks, inline code, bold, italic, headers, lists, and links
+
+Since Penpal uses LiteRT-LM directly (not Vercel AI SDK), custom token parsing creates structured parts from raw Gemma 4 tokens (`<|channel>`, `<|tool_call>`, etc.).
+
+#### Text Structure After Token Filtering ✅
+
+The `StreamingTokenFilter` now uses smart spacing logic with `lastEmittedChar` tracking to prevent spurious line breaks while preserving natural paragraph structure. The text splitting issue has been resolved.
+
+**Status**: ✅ Resolved — see [ARCHITECTURE.md](./ARCHITECTURE.md) for details.
 
 ## Supported Model Sources
 
