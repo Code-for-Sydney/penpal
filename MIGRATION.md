@@ -17,7 +17,7 @@ This document serves as the definitive reference for migrating PenPal from the c
 | **Phase 4.6: Notebooks Enhanced** | ✅ COMPLETE | Image picker, Coil integration, home navigation |
 | **Phase 5: Real Parsers & Chat Persistence** | ✅ COMPLETE | Document parsing, vector persistence, chat enhancements |
 | **Phase 5.5: Streaming Token Filter** | ✅ COMPLETE | Trie-based filter, Flow-based inference, 120s timeout |
-| **Phase 5.6: Text Structure Fix** | 🔧 IN PROGRESS | Fix text splitting after special character filtering |
+| **Phase 5.6: Text Structure Fix** | ✅ COMPLETE | Smart spacing, whitespace handling, lastEmittedChar tracking |
 
 ---
 
@@ -78,52 +78,58 @@ This document serves as the definitive reference for migrating PenPal from the c
 
 ## Module Structure
 
+**Note:** Dependency injection is manual via `PenpalApplication`, not Hilt. No `@HiltViewModel`, `@Module`, or `@Inject` annotations exist in the codebase.
+
 ```
 penpal/
 ├── app/                           # Shell app, navigation, MainScreen with BottomNav
-│   ├── MainScreen.kt              # Compose NavHost + BottomNavigation (Process, Chat, Inference)
-│   ├── MainComposeActivity.kt     # Compose-based Activity entry point
-│   └── MainViewModel.kt           # ViewModel for MainScreen
+│   ├── MainScreen.kt              # Compose NavHost + BottomNavigation (Chat, Think, Settings)
+│   ├── MainComposeActivity.kt     # Compose-based Activity entry point (Launcher)
+│   ├── PenpalApplication.kt       # Manual DI singleton
+│   └── (legacy: MainActivity, NotebookSelectionActivity, etc.)
 ├── core/
 │   ├── ai/                        # ✅ IMPLEMENTED
-│   │   ├── AiModule.kt            # Hilt bindings
-│   │   ├── DispatcherModule.kt    # @IoDispatcher, @DefaultDispatcher, @InferenceDispatcher
 │   │   ├── InferenceBridge.kt     # Interface for ML inference (with Flow methods)
 │   │   ├── LiteRtInferenceBridge.kt  # LiteRT-LM Engine API implementation
 │   │   ├── OllamaInferenceBridge.kt  # Ollama REST API implementation
 │   │   ├── LmEngineManager.kt     # Engine lifecycle, GPU/CPU fallback
 │   │   ├── GemmaSpecialTokens.kt  # Gemma 4 control token definitions
 │   │   ├── StreamingTokenFilter.kt # Trie-based special token removal
-│   │   ├── InferenceModule.kt     # Hilt bindings for inference
+│   │   ├── MessagePart.kt         # Structured message parts
+│   │   ├── MessagePartAggregator.kt # Builds parts from stream transitions
 │   │   ├── TextEmbedder.kt        # Interface for text embeddings
 │   │   ├── MiniLmEmbedder.kt      # Mock embedder (384-dim)
 │   │   ├── OnnxMiniLmEmbedder.kt  # ONNX Runtime embedder with mean pooling + L2 norm
 │   │   ├── VectorStoreRepository.kt # LRU cache, cosine similarity
+│   │   ├── VectorStoreProvider.kt # Cross-module singleton access
 │   │   ├── ModelManager.kt        # HuggingFace/Kaggle download management
-│   │   └── VectorStoreProvider.kt # Cross-module singleton access
+│   │   ├── ModelDownloadManager.kt # WorkManager-based download orchestration
+│   │   ├── ModelDownloadWorker.kt # Background download worker
+│   │   ├── OllamaApiService.kt    # REST API client for Ollama
+│   │   ├── OllamaModel.kt         # Data models for Ollama API
+│   │   └── WordPieceTokenizer.kt  # BERT/MiniLM-compatible tokenizer
 │   ├── data/                      # ✅ IMPLEMENTED
-│   │   ├── PenpalDatabase.kt      # Room database (singleton via getInstance() for WorkManager)
-│   │   ├── Entities.kt            # 5 entities (enum fields as String for KSP)
-│   │   ├── Daos.kt               # 4 DAOs defined
-│   │   ├── DatabaseModule.kt      # Hilt DI
-│   │   ├── NetworkModule.kt       # OkHttpClient provider
-│   │   └── TypeConverters.kt      # Enum/type converters
-│   ├── media/                     # ✅ STUB (empty shell)
+│   │   ├── PenpalDatabase.kt      # Room database v3 (singleton via getInstance())
+│   │   ├── Entities.kt            # 7 entities
+│   │   └── Daos.kt               # 6 DAOs
+│   ├── media/                     # ✅ STUB (empty shell, no source files)
 │   ├── processing/                # ✅ IMPLEMENTED
 │   │   ├── DocumentParser.kt      # Interface
-│   │   ├── Parsers.kt             # PDF, Audio, Image, URL, Code (stubs)
-│   │   ├── ExtractionWorker.kt     # WorkManager worker
+│   │   ├── Parsers.kt             # PDF, Audio, Image, URL, Code parsers
+│   │   ├── ExtractionWorker.kt    # WorkManager worker
 │   │   ├── WorkerLauncher.kt      # Job queue management
-│   │   └── ProcessingModule.kt    # Hilt DI
-│   └── ui/                        # ✅ PARTIAL
+│   │   ├── NotificationHelper.kt  # WorkManager notifications
+│   │   ├── NetworkMonitor.kt      # Connectivity tracking
+│   │   ├── WhisperTranscriber.kt  # Audio transcription utilities
+│   │   └── SpeechRecognizer.kt    # Speech recognition
+│   └── ui/                        # ✅ IMPLEMENTED
 │       └── Theme.kt               # Material 3 theme (dark/light)
-├── feature/                       # ✅ Phase 3 Complete
+├── feature/                       # ✅ Phase 3+ Complete
 │   ├── chat/                      # ✅ RAG chat with persistent conversations, Flow streaming
 │   ├── process/                   # ✅ Process screen with source type selector, job list
 │   ├── inference/                 # ✅ Inference screen with model status, action buttons
 │   ├── notebooks/                 # ✅ Think tab with block-based editor
-│   ├── settings/                  # ✅ Settings with model download UI
-│   └── organize/                  # 📋 Planned
+│   └── settings/                  # ✅ Settings with model download UI
 ├── build.gradle.kts              # Root with plugins
 ├── settings.gradle.kts           # Module includes (app, core:*, feature:*)
 └── gradle/libs.versions.toml     # Version catalog
@@ -132,12 +138,14 @@ penpal/
 ### Module Dependencies (Implemented)
 
 ```
-app ──> core:ai, core:data, core:processing, core:media, core:ui
+app ──> all core modules, all feature modules
 core:processing ──> core:ai, core:data
 core:ai ──> core:data
-feature:chat ──> core:ai, core:data, core:ui
-feature:process ──> core:processing, core:data, core:ui
+feature:chat ──> core:ai, core:data, core:processing, core:ui, feature:notebooks
+feature:notebooks ──> core:ai, core:data, core:processing, core:ui
+feature:process ──> core:processing, core:ai, core:data, core:ui
 feature:inference ──> core:ai, core:data, core:ui
+feature:settings ──> core:ai, core:data, core:ui
 ```
 
 ---
@@ -168,21 +176,24 @@ dependencies {
 
 ```toml
 [versions]
-kotlin = "2.1.0"
-compose-compiler = "2.1.0"
-hilt = "2.54"
-room = "2.7.0"
+agp = "9.1.1"
+kotlin = "2.0.21"
+ksp = "2.0.21-1.0.28"
+hilt = "2.51.1"
+room = "2.6.1"
 coroutines = "1.8.1"
 okhttp = "4.12.0"
 work = "2.9.1"
+composeBom = "2024.06.00"
 
 [libraries]
 kotlinx-coroutines = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
-hilt-android = { group = "com.google.dagger", name = "hilt-android", version.ref = "hilt" }
 room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 work-runtime = { group = "androidx.work", name = "work-runtime-ktx", version.ref = "work" }
 ```
+
+**Note:** Hilt plugin is defined in root `build.gradle.kts` at version 2.52, but Hilt is not actively used in the codebase. `core:data` uses Room 2.7.0-beta01 while other modules use 2.6.1.
 
 ---
 
@@ -421,21 +432,24 @@ Main Thread (UI) ──suspend/StateFlow──> IO Dispatcher (Room, files, netw
 ```kotlin
 @Database(
     entities = [
-        NotebookEntity::class,
         ChunkEntity::class,
         ExtractionJobEntity::class,
+        ChatMessageEntity::class,
+        ChatConversationEntity::class,
         GraphNodeEntity::class,
         GraphEdgeEntity::class,
+        NotebookEntity::class,
     ],
-    version = 1,
+    version = 3,
     exportSchema = true,
 )
-@TypeConverters(Converters::class)
 abstract class PenpalDatabase : RoomDatabase() {
-    abstract fun notebookDao(): NotebookDao
     abstract fun chunkDao(): ChunkDao
-    abstract fun jobDao(): ExtractionJobDao
+    abstract fun extractionJobDao(): ExtractionJobDao
+    abstract fun chatMessageDao(): ChatMessageDao
+    abstract fun chatConversationDao(): ChatConversationDao
     abstract fun graphDao(): GraphDao
+    abstract fun notebookDao(): NotebookDao
 }
 ```
 
@@ -680,4 +694,4 @@ class ProcessViewModel @Inject constructor(
 
 ---
 
-*Last updated: Phase 5.5 Complete — Streaming Token Filter & Flow-Based Inference (May 2026)*
+*Last updated: Documentation synced — Phase 5.6 marked complete, corrected tab structure, removed Hilt references, updated Room schema to v3 (May 2026)*

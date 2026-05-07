@@ -37,4 +37,6 @@ Penpal is a handwriting recognition and drawing application for Android that use
 
 ### Current Focus
 
-- **Text Structure Fix**: Resolving spurious line breaks after special token filtering in chat streaming (see [TODO.md](../TODO.md) and [ARCHITECTURE.md](../ARCHITECTURE.md#known-issues))
+- **Think Tab Navigation**: Home button to return to notebook list, X button to close notebook
+- **Code Formatting**: Better syntax highlighting in chat markdown rendering
+- **Model Process Visualizer**: New tab for visualizing model inference steps

@@ -10,6 +10,8 @@ Penpal v2.x uses **Google Gemma 4 E2B-IT** as the primary inference model via **
 
 The inference layer uses the **LiteRT-LM Engine API** with GPU/CPU backend fallback. The app has migrated from MediaPipe LLM Inference API (deprecated) to LiteRT-LM.
 
+**Note:** The project uses manual dependency injection via `PenpalApplication` lazy singletons, not Hilt. ViewModels are instantiated manually in `MainScreen.kt` using `remember { ... }`.
+
 #### 1. Add Dependencies
 
 ```kotlin
@@ -437,6 +439,8 @@ cd penpal
 # Build → Make Project (Ctrl+F9)
 ```
 
+**Note:** The project uses manual dependency injection via `PenpalApplication`, not Hilt. No additional annotation processing setup is required beyond Room KSP.
+
 ### Running on Device/Emulator
 
 1. Connect device or start emulator
@@ -451,46 +455,63 @@ penpal/
 │   └── src/
 │       └── main/
 │           ├── java/com/drawapp/
-│           │   ├── MainActivity.kt           # Main drawing screen
+│           │   ├── MainComposeActivity.kt    # Compose entry point (Launcher)
+│           │   ├── MainScreen.kt             # NavHost + BottomNavigation (Chat, Think, Settings)
+│           │   ├── PenpalApplication.kt      # Manual DI singleton
+│           │   ├── MainActivity.kt           # Legacy drawing screen
 │           │   ├── DrawingView.kt            # Canvas custom view
-│           │   ├── NotebookSelectionActivity.kt # Home screen
+│           │   ├── NotebookSelectionActivity.kt # Legacy home screen
 │           │   ├── NotebookManager.kt        # Notebook persistence
 │           │   ├── Notebook.kt               # Notebook data model
-│           │   ├── HandwritingRecognizer.kt   # Gemma AI wrapper (local)
-│           │   ├── GemmaServerClient.kt     # Remote Gemma server client
-│           │   ├── GemmaTranscriber.kt      # Transcription via remote Gemma
-│           │   ├── InferenceService.kt      # Background inference service
+│           │   ├── HandwritingRecognizer.kt  # Gemma AI wrapper (local)
+│           │   ├── GemmaServerClient.kt      # Remote Gemma server client
+│           │   ├── GemmaTranscriber.kt       # Transcription via remote Gemma
+│           │   ├── InferenceService.kt       # Background inference service
 │           │   ├── InferenceEngineManager.kt # Multi-engine inference manager
-│           │   ├── LlmInferenceEngine.kt    # Local inference engine
-│           │   ├── ProcessingQueueManager.kt  # Batch processing queue
+│           │   ├── LlmInferenceEngine.kt     # Local inference engine
+│           │   ├── ProcessingQueueManager.kt # Batch processing queue
 │           │   ├── AudioRecorder.kt          # Audio recording with amplitude
 │           │   ├── AudioPlayer.kt            # Audio playback with seek
 │           │   ├── AudioChunker.kt           # Audio chunking for streaming
 │           │   ├── RecordingsAdapter.kt      # Audio recordings list adapter
-│           │   ├── ModelManager.kt            # Model download management
-│           │   ├── ModelDownloadHelper.kt     # Download UI helpers
+│           │   ├── ModelManager.kt           # Model download management
+│           │   ├── ModelDownloadHelper.kt    # Download UI helpers
 │           │   ├── ModelDownloadReceiver.kt  # Download broadcast receiver
-│           │   ├── SvgSerializer.kt           # SVG persistence
-│           │   ├── PdfHelper.kt               # PDF text extraction
-│           │   ├── PdfSelectionActivity.kt    # PDF region cropping
-│           │   ├── PdfImportActivity.kt       # PDF page selection
-│           │   ├── SelectionFrameView.kt      # Crop selection view
-│           │   ├── NotebookAdapter.kt         # RecyclerView adapter
-│           │   ├── PenpalApplication.kt       # Application class
-│           │   └── TestReflection.kt          # Testing utilities
+│           │   ├── SvgSerializer.kt          # SVG persistence
+│           │   ├── PdfHelper.kt              # PDF text extraction
+│           │   ├── PdfSelectionActivity.kt   # PDF region cropping
+│           │   ├── PdfImportActivity.kt      # PDF page selection
+│           │   ├── SelectionFrameView.kt     # Crop selection view
+│           │   ├── NotebookAdapter.kt        # RecyclerView adapter
+│           │   └── WebSearchCapture.kt       # Web search utilities
 │           │
 │           └── res/
-│               ├── layout/                    # Activity and dialog layouts
-│               ├── drawable/                   # Icons and shapes
-│               ├── values/                     # Strings, colors, themes
-│               └── mipmap/                     # App icons
+│               ├── layout/                   # Activity and dialog layouts
+│               ├── drawable/                 # Icons and shapes
+│               ├── values/                   # Strings, colors, themes
+│               └── mipmap/                   # App icons
+│
+├── core/
+│   ├── ai/         # InferenceBridge, VectorStore, ModelManager, TokenFilter
+│   ├── data/       # Room database, entities, DAOs
+│   ├── processing/ # Document parsers, ExtractionWorker, WorkerLauncher
+│   ├── media/      # Media utilities (empty shell)
+│   └── ui/         # Material 3 theme
+│
+├── feature/
+│   ├── chat/       # ChatScreen, ChatViewModel, MarkdownText
+│   ├── notebooks/  # NotebookScreen, EditorViewModel, GraphNodeCanvas, DrawingCanvas
+│   ├── process/    # ProcessScreen, ProcessViewModel
+│   ├── inference/  # InferenceScreen, InferenceViewModel
+│   └── settings/   # SettingsScreen, SettingsViewModel, ModelDownloadBottomSheet
 │
 ├── docs/                              # Documentation files
-├── build.gradle                     # Root build config
-├── settings.gradle                  # Project settings
-├── gradle.properties               # Gradle configuration
+├── testingground/                     # Architecture planning docs
+├── build.gradle.kts                   # Root build config
+├── settings.gradle.kts                # Project settings
+├── gradle.properties                  # Gradle configuration
 └── gradle/
-    └── wrapper/                     # Gradle wrapper files
+    └── wrapper/                       # Gradle wrapper files
 ```
 
 ## Code Style Guidelines

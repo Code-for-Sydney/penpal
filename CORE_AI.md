@@ -86,6 +86,8 @@ The user is asking for the chemical formula of water...
 
 ## Module Structure
 
+**Note:** The project uses manual dependency injection via `PenpalApplication` lazy singletons, not Hilt. No `@Module`, `@Inject`, or `@HiltViewModel` annotations exist in the codebase.
+
 ```
 core/ai/
 ├── build.gradle.kts                    # Module build configuration
@@ -429,6 +431,8 @@ dependencies {
 }
 ```
 
+**Note:** Hilt is not used in this module. Dependencies are provided manually via `PenpalApplication` lazy singletons.
+
 ## Key Design Patterns
 
 1. **Bridge Pattern** — `InferenceBridge` abstracts both local and remote inference
@@ -441,11 +445,12 @@ dependencies {
 
 ## Threading Model
 
-- All inference operations run on `Dispatchers.IO`
-- Engine initialization uses `Dispatchers.IO` with mutex locking
+- LiteRT inference runs on `Dispatchers.IO` via `LiteRtInferenceBridge` internal scope
+- Engine initialization uses `Dispatchers.IO`
 - Token filtering is synchronous (no coroutines needed)
 - Embedding generation uses `Dispatchers.Default`
-- Download progress callbacks emit on `Dispatchers.Main`
+- Download progress callbacks emit on main thread via coroutine launch
+- **Note:** No custom `@InferenceDispatcher` or `DispatcherModule` exists. The project uses standard Kotlin dispatchers directly.
 
 ## Error Handling
 

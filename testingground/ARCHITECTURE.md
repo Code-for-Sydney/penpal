@@ -139,17 +139,19 @@ feature:process ──> core:ai ──> InferenceBridge ──> Text extraction 
 
 ## Module graph
 
+**Note:** Dependency injection is manual via `PenpalApplication`, not Hilt.
+
 ```
 :app
  ├── :feature:chat           ──────────────┐
  ├── :feature:notebooks      ──────────────┼──┐
  ├── :feature:process       ──────────────┼──┤
- ├── :feature:organize      ──────────────┼──┤
+ ├── :feature:inference      ──────────────┼──┤
  ├── :feature:settings      ──────────────┼──┤
  ├── :core:ai                ◄────────────────┘  ← Central module
  ├── :core:processing        ──────────────┐
  ├── :core:data                               │
- ├── :core:media          (planned)           │
+ ├── :core:media          (empty shell)       │
  └── :core:ui              (shared composables, theme)
 ```
 
@@ -157,6 +159,8 @@ feature:process ──> core:ai ──> InferenceBridge ──> Text extraction 
 - `core:ai` is the central module - all features depend on `InferenceBridge`
 - `InferenceBridge` → `LiteRtInferenceBridge` → `Gemma 4 E2B-IT`
 - Dependencies flow **downward only**. Feature modules never import each other.
+- `feature:chat` depends on `feature:notebooks` for notebook picker integration.
+- `feature:notebooks` depends on `core:processing` for auto-processing blocks.
 
 ---
 

@@ -3,24 +3,27 @@
 ## Room schema
 
 ```kotlin
-// core/data/src/main/kotlin/data/db/PenpalDatabase.kt
+// core/data/src/main/kotlin/com/penpal/core/data/PenpalDatabase.kt
 @Database(
     entities = [
-        NotebookEntity::class,
         ChunkEntity::class,
         ExtractionJobEntity::class,
+        ChatMessageEntity::class,
+        ChatConversationEntity::class,
         GraphNodeEntity::class,
         GraphEdgeEntity::class,
+        NotebookEntity::class,
     ],
-    version = 1,
+    version = 3,
     exportSchema = true,
 )
-@TypeConverters(Converters::class)
 abstract class PenpalDatabase : RoomDatabase() {
-    abstract fun notebookDao(): NotebookDao
     abstract fun chunkDao(): ChunkDao
-    abstract fun jobDao(): ExtractionJobDao
+    abstract fun extractionJobDao(): ExtractionJobDao
+    abstract fun chatMessageDao(): ChatMessageDao
+    abstract fun chatConversationDao(): ChatConversationDao
     abstract fun graphDao(): GraphDao
+    abstract fun notebookDao(): NotebookDao
 }
 ```
 
@@ -267,22 +270,17 @@ class InferenceEngine @Inject constructor(
 Nodes in the Organize tab are stored in Room as typed entities. The 2D/3D layout position is computed on `Dispatchers.Default` and cached.
 
 ```kotlin
-@Entity(tableName = "graph_nodes")
-data class GraphNodeEntity(
+@Entity(tableName = "extraction_jobs")
+data class ExtractionJobEntity(
     @PrimaryKey val id: String,
-    val label: String,
-    val type: NodeType,            // PAPER · CONCEPT · TOOL · DATA_MODEL
-    val notebookId: String?,
-    val posX: Float = 0f,
-    val posY: Float = 0f,
-    val posZ: Float = 0f,          // non-zero only in 3D mode
-)
-
-@Entity(tableName = "graph_edges", primaryKeys = ["fromId", "toId"])
-data class GraphEdgeEntity(
-    val fromId: String,
-    val toId: String,
-    val relation: String,          // "depends_on" · "references" · "conflicts_with"
-    val weight: Float = 1f,
+    val sourceUri: String,
+    val mimeType: String,          // application/pdf · audio/wav · image/* · text/uri-list
+    val rule: String,              // ExtractionRule as String (no type converters)
+    val status: String,            // JobStatus as String (no type converters)
+    val workerId: String?,         // WorkManager UUID
+    val progress: Int = 0,
+    val createdAt: Long = System.currentTimeMillis(),
 )
 ```
+
+**Note:** Room entities use `String` for enum fields instead of custom type converters. Extraction rules and job statuses are defined as String constants in the processing module.

@@ -649,12 +649,14 @@ Complete Response
 |------------|-------------|-------------|
 | Kotlin | 2.0.10 | 2.0.21 |
 | KSP | 2.0.10-1.0.24 | 2.0.21-1.0.28 |
-| Hilt | 2.51.1 | 2.51.1 |
-| Room | 2.6.1 | 2.6.1 |
+| Hilt | 2.51.1 | 2.52 (plugin only, not actively used) |
+| Room | 2.6.1 | 2.6.1 (app/processing), 2.7.0-beta01 (core:data) |
+| AGP | 9.0.0 | 9.1.1 |
 
 **Room Entity Simplification**
 - Changed enum fields to String in Room entities for KSP compatibility
-- Simplified type converters
+- Added ChatMessageEntity and ChatConversationEntity for persistent conversations
+- Schema version bumped to v3
 
 #### Current State (May 2026)
 

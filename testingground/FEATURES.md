@@ -117,7 +117,7 @@ sealed class NotebookEvent {
 
 ## Process + Add Data `:feature:process`
 
-**Purpose:** Extraction queue management and data ingestion. "Add Data" is a `ModalBottomSheet` within this screen — not a separate tab. Keeps the bottom nav clean.
+**Purpose:** Extraction queue management and data ingestion. This module exists but is not a primary tab in MainScreen. Processing functionality is integrated into notebook auto-processing and chat file attachment flows.
 
 **Entry points for ingestion:**
 ```kotlin
@@ -205,18 +205,18 @@ WorkManager.initialize(context, config)
 
 ## Bottom navigation
 
+**Note:** The actual `MainScreen.kt` has 3 tabs: Chat, Think (Notebooks), Settings. Process and Inference exist as modules but are not primary tabs.
+
 ```kotlin
-enum class PenpalTab(
+sealed class Screen(
     val route: String,
-    val labelRes: Int,
-    val icon: ImageVector,
+    val label: String,
+    val icon: ImageVector
 ) {
-    CHAT      ("chat",      R.string.tab_chat,      Icons.Outlined.Chat),
-    NOTEBOOKS ("notebooks", R.string.tab_notebooks, Icons.Outlined.MenuBook),
-    PROCESS   ("process",   R.string.tab_process,   Icons.Outlined.AccountTree),
-    ORGANIZE  ("organize",  R.string.tab_organize,  Icons.Outlined.Hub),
-    SETTINGS  ("settings",  R.string.tab_settings,  Icons.Outlined.Settings),
+    data object Chat : Screen("chat", "Chat", Icons.AutoMirrored.Filled.Chat)
+    data object Notebooks : Screen("notebooks", "Think", Icons.Default.AutoAwesome)
+    data object Settings : Screen("settings", "Settings", Icons.Default.Settings)
 }
 ```
 
-Tab state survives configuration changes via `rememberNavController()` + `saveState = true` on `popBackStack`. Each tab gets its own `NavBackStackEntry`-scoped ViewModel so switching tabs doesn't destroy state.
+Tab state survives configuration changes via `rememberNavController()` + `saveState = true` on `popBackStack`. ViewModels are instantiated manually with `remember { ... }` in `MainScreen.kt`.

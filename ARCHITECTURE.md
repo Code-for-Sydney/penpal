@@ -49,8 +49,8 @@ This document provides an in-depth look at the system architecture, component re
 |-------|--------|-------------|
 | Phase 1: Foundation | ✅ Complete | Gradle multi-module, Kotlin DSL, core modules |
 | Phase 2: Core AI | ✅ Complete | AI interfaces, VectorStore, processing pipeline |
-| Phase 3: Feature Modules | ✅ Complete | Chat, Process, Inference tabs with navigation |
-| Phase 3.5: Tab Wiring | ✅ Complete | Real ViewModels connected, UI functional |
+| Phase 3: Feature Modules | ✅ Complete | Chat, Process, Inference modules created |
+| Phase 3.5: Tab Wiring | ✅ Complete | ViewModels connected, MainScreen with 3 tabs (Chat, Think, Settings) |
 | Phase 4: Polish | ✅ Complete | WorkManager notifications, offline mode, network monitoring |
 | Phase 4.5: Notebooks | ✅ Complete | Think tab with block-based editor, GraphNodeCanvas, DrawingCanvas |
 | Phase 4.6: Notebooks Enhanced | ✅ Complete | Image picker, Coil integration, home navigation |
@@ -254,26 +254,31 @@ UI updates as response streams in
 |-----------|---------|
 | Kotlin | 2.0.21 |
 | KSP | 2.0.21-1.0.28 |
-| Hilt | 2.51.1 |
-| Room | 2.6.1 |
-| AGP | 9.0.0 |
+| Hilt | 2.52 (plugin only, not actively used) |
+| Room | 2.6.1 (app/processing), 2.7.0-beta01 (core:data) |
+| Compose BOM | 2024.06.00 |
+| AGP | 9.1.1 |
 
 ### Application Architecture
 
+**Note:** The project uses manual dependency injection via `PenpalApplication` lazy singletons, not Hilt. ViewModels are instantiated manually in `MainScreen.kt` using `remember { ... }`.
+
 ```
 PenpalApplication (Singleton)
-├── lazy vectorStore: VectorStoreRepository
-├── lazy vectorStoreProvider: VectorStoreProvider  # Cross-module singleton access
+├── lazy vectorStore: VectorStoreRepositoryImpl
 ├── lazy workerLauncher: WorkerLauncher
-├── lazy inferenceBridge: InferenceBridge
-├── lazy embedder: TextEmbedder  # OnnxMiniLmEmbedder with fallback
-└── lazy gson: Gson
+├── lazy inferenceBridge: InferenceBridge (LiteRtInferenceBridge)
+├── lazy gson: Gson
+└── gemmaServer: GemmaServerClient
 
 PenpalDatabase (Singleton via getInstance())
 ├── notebookDao()
 ├── chunkDao()
-├── jobDao()
-└── graphDao()
+├── extractionJobDao()
+├── chatMessageDao()
+├── chatConversationDao()
+├── graphDao()
+└── fallbackToDestructiveMigration()
 ```
 
 ### Tab Implementation Status
@@ -281,10 +286,10 @@ PenpalDatabase (Singleton via getInstance())
 | Tab | ViewModel | UI Status | Backend Status |
 |-----|-----------|-----------|----------------|
 | Chat | ChatViewModel | ✅ Functional | ✅ RAG via InferenceBridge, structured MessageParts |
-| Think | NotebookEditorViewModel | ✅ Functional | ✅ Room persistence |
-| Process | ProcessViewModel | ✅ Functional | ✅ Connected to VectorStore |
-| Inference | InferenceViewModel | ✅ Functional | ✅ ML Kit GenAI / Gemma 4 |
-| Settings | SettingsViewModel | ✅ Functional | ✅ SharedPreferences / DataStore |
+| Think | NotebookEditorViewModel | ✅ Functional | ✅ Room persistence + auto-processing |
+| Settings | SettingsViewModel | ✅ Functional | ✅ Model download, inference status |
+
+**Note:** MainScreen currently shows 3 tabs. Process and Inference exist as feature modules but are not primary tabs.
 
 ---
 
@@ -295,39 +300,42 @@ PenpalDatabase (Singleton via getInstance())
 ```
 penpal/
 ├── app/                           # Shell application, NavHost, MainScreen
-│   ├── MainScreen.kt              # Compose NavHost + BottomNavigation (Process, Chat, Inference)
-│   ├── MainComposeActivity.kt     # Compose-based Activity entry point
-│   └── MainViewModel.kt           # ViewModel for MainScreen
+│   ├── MainScreen.kt              # Compose NavHost + BottomNavigation (Chat, Think, Settings)
+│   ├── MainComposeActivity.kt     # Compose-based Activity entry point (Launcher)
+│   ├── PenpalApplication.kt       # Manual DI singleton
+│   └── (legacy activities: MainActivity, NotebookSelectionActivity, etc.)
 ├── core/
 │   ├── ai/                        # ✅ Implemented
-│   │   ├── AiModule.kt            # Hilt bindings
-│   │   ├── DispatcherModule.kt    # Coroutine dispatchers
 │   │   ├── InferenceBridge.kt     # ML inference interface
-│   │   ├── LiteRtInferenceBridge.kt # ML Kit GenAI implementation (AI Edge Gallery pattern)
-│   │   ├── InferenceModule.kt     # Hilt inference bindings
+│   │   ├── LiteRtInferenceBridge.kt # LiteRT-LM Engine API implementation
+│   │   ├── OllamaInferenceBridge.kt # Remote inference fallback
+│   │   ├── LmEngineManager.kt     # Engine lifecycle, GPU/CPU fallback
 │   │   ├── TextEmbedder.kt        # Text embedding interface
 │   │   ├── MiniLmEmbedder.kt      # Mock embedder (384-dim, fallback)
 │   │   ├── OnnxMiniLmEmbedder.kt  # ONNX Runtime embedder with mean pooling + L2 norm
 │   │   ├── VectorStoreRepository.kt # LRU cache + similarity
+│   │   ├── VectorStoreProvider.kt # Cross-module singleton access
+│   │   ├── ModelManager.kt        # HuggingFace/Kaggle download management
 │   │   ├── MessagePart.kt         # Structured message parts (Text, Reasoning, ToolCall)
-│   │   └── StreamingTokenFilter.kt # Trie-based special token filtering with mode transitions
+│   │   ├── MessagePartAggregator.kt # Builds parts from streaming transitions
+│   │   ├── StreamingTokenFilter.kt # Trie-based special token filtering with mode transitions
+│   │   ├── GemmaSpecialTokens.kt  # Gemma 4 control token definitions
+│   │   └── WordPieceTokenizer.kt  # BERT/MiniLM-compatible tokenizer
 │   ├── data/                      # ✅ Implemented
-│   │   ├── PenpalDatabase.kt      # Room database
-│   │   ├── Entities.kt            # 5 entities
-│   │   ├── Daos.kt               # 4 DAOs
-│   │   ├── DatabaseModule.kt      # Hilt DI
-│   │   ├── NetworkModule.kt       # OkHttpClient
-│   │   └── TypeConverters.kt     # Enum/type converters
-│   ├── media/                     # ✅ Stub (empty shell)
+│   │   ├── PenpalDatabase.kt      # Room database v3 (singleton via getInstance())
+│   │   ├── Entities.kt            # 7 entities
+│   │   └── Daos.kt               # 6 DAOs
+│   ├── media/                     # ✅ Stub (empty shell, no source files)
 │   ├── processing/                # ✅ Implemented
 │   │   ├── DocumentParser.kt      # Parser interface
 │   │   ├── Parsers.kt             # Real parsers: PDF, Image OCR, Audio, URL, Code
 │   │   ├── ExtractionWorker.kt    # WorkManager worker with real parsing
 │   │   ├── WorkerLauncher.kt      # Job queue
-│   │   └── ProcessingModule.kt    # Hilt DI
-│   └── ui/                        # ✅ Partial
+│   │   ├── NotificationHelper.kt  # WorkManager notifications
+│   │   └── NetworkMonitor.kt      # Connectivity tracking
+│   └── ui/                        # ✅ Implemented
 │       └── Theme.kt               # Material 3 dark/light
-├── feature/                       # ✅ Phase 3 & 4 Complete
+├── feature/                       # ✅ Phase 3+ Complete
 │   ├── chat/                      # ✅ RAG chat with structured MessageParts
 │   ├── process/                   # ✅ Document extraction UI
 │   ├── inference/                 # ✅ Model management UI
@@ -340,17 +348,21 @@ penpal/
 
 ### Module Dependencies
 
+**Note:** Dependency injection is manual via `PenpalApplication`, not Hilt. No `@HiltViewModel`, `@Module`, or `@Inject` annotations exist in the codebase.
+
 ```
-app ──> all core modules, feature:chat, feature:process, feature:inference
+app ──> all core modules, all feature modules
 core:processing ──> core:ai, core:data
 core:ai ──> core:data              ← InferenceBridge is the core AI dependency
-core:media ──> core:ai, core:data
-feature:chat ──> core:ai, core:data, core:ui   ← Depends on InferenceBridge
+core:media ──> (empty, no source files)
+feature:chat ──> core:ai, core:data, core:processing, core:ui, feature:notebooks
+feature:notebooks ──> core:ai, core:data, core:processing, core:ui
 feature:process ──> core:processing, core:ai, core:data, core:ui
 feature:inference ──> core:ai, core:data, core:ui ← Direct inference access
+feature:settings ──> core:ai, core:data, core:ui
 ```
 
-**Key Architectural Principle**: `InferenceBridge` in `core:ai` is the central dependency. All AI-powered features flow through this interface to the Gemma 4 E2B-IT model via ML Kit GenAI.
+**Key Architectural Principle**: `InferenceBridge` in `core:ai` is the central dependency. All AI-powered features flow through this interface to the Gemma 4 E2B-IT model via LiteRT-LM.
 
 ---
 
@@ -362,22 +374,25 @@ Handles AI inference and text embedding. **This is the central architectural mod
 
 ```
 core:ai/
-├── AiModule.kt              # Hilt bindings
-├── DispatcherModule.kt      # @IoDispatcher, @DefaultDispatcher, @InferenceDispatcher
-├── InferenceBridge.kt       # Interface: initialize(), generate(), stream(), detectItems(), recognizeText()
+├── InferenceBridge.kt       # Interface: initialize(), runInference(), runInferenceFlow(), runInferenceFlowParts()
 ├── LiteRtInferenceBridge.kt # LiteRT-LM Engine API implementation
 ├── OllamaInferenceBridge.kt # Remote inference via Ollama REST API
 ├── LmEngineManager.kt       # Engine lifecycle, GPU/CPU backend fallback
-├── InferenceModule.kt       # Hilt bindings for inference
 ├── ModelManager.kt          # HuggingFace/Kaggle download management
+├── ModelDownloadManager.kt  # WorkManager-based download orchestration
+├── ModelDownloadWorker.kt   # Background download worker
 ├── TextEmbedder.kt          # Text embedding interface
 ├── MiniLmEmbedder.kt        # Mock: 384-dim embeddings (fallback)
 ├── OnnxMiniLmEmbedder.kt    # ONNX Runtime: mean pooling, L2 normalization
-├── VectorStoreRepository.kt # LRU cache + cosine similarity search
-├── ModelStatus.kt           # Model download/load status enum
+├── VectorStoreRepository.kt # Interface: embed(), similaritySearch()
+├── VectorStoreProvider.kt   # Static provider for cross-module access
 ├── MessagePart.kt           # Structured message parts (Text, Reasoning, ToolCall, ToolResponse, Image, Audio)
+├── MessagePartAggregator.kt # Builds MessageParts from streaming transitions
 ├── StreamingTokenFilter.kt  # Trie-based special token filtering with mode transitions
-└── GemmaSpecialTokens.kt    # Gemma 4 control token definitions
+├── GemmaSpecialTokens.kt    # Gemma 4 control token definitions
+├── WordPieceTokenizer.kt    # BERT/MiniLM-compatible tokenizer
+├── OllamaApiService.kt      # REST API client for Ollama
+└── OllamaModel.kt           # Data models for Ollama API responses
 ```
 
 #### DispatcherModule
@@ -538,12 +553,9 @@ Handles persistence and networking.
 
 ```
 core:data/
-├── PenpalDatabase.kt      # Room database (singleton via getInstance())
-├── Entities.kt            # 5 entities (enum fields as String for KSP)
-├── Daos.kt               # 4 DAOs defined
-├── DatabaseModule.kt     # Hilt DI for Room
-├── NetworkModule.kt       # OkHttpClient provider
-└── TypeConverters.kt     # Enum/type converters
+├── PenpalDatabase.kt      # Room database v3 (singleton via getInstance())
+├── Entities.kt            # 7 entities
+└── Daos.kt               # 6 DAOs
 ```
 
 #### Room Database Singleton
@@ -576,22 +588,24 @@ class ExtractionWorker(
 ```kotlin
 @Database(
     entities = [
-        NotebookEntity::class,
         ChunkEntity::class,
         ExtractionJobEntity::class,
+        ChatMessageEntity::class,
+        ChatConversationEntity::class,
         GraphNodeEntity::class,
         GraphEdgeEntity::class,
+        NotebookEntity::class,
     ],
     version = 3,
     exportSchema = true,
 )
-@TypeConverters(Converters::class)
 abstract class PenpalDatabase : RoomDatabase() {
-    abstract fun notebookDao(): NotebookDao
     abstract fun chunkDao(): ChunkDao
-    abstract fun jobDao(): ExtractionJobDao
-    abstract fun graphDao(): GraphDao
+    abstract fun extractionJobDao(): ExtractionJobDao
+    abstract fun chatMessageDao(): ChatMessageDao
     abstract fun chatConversationDao(): ChatConversationDao
+    abstract fun graphDao(): GraphDao
+    abstract fun notebookDao(): NotebookDao
 }
 ```
 
@@ -626,7 +640,10 @@ core:processing/
 │                         #   • ParserFactory (MIME type routing)
 ├── ExtractionWorker.kt   # WorkManager worker with real parsing + vector persistence
 ├── WorkerLauncher.kt     # Job queue management
-└── ProcessingModule.kt   # Hilt DI
+├── NotificationHelper.kt # WorkManager progress notifications
+├── NetworkMonitor.kt     # Connectivity tracking for offline mode
+├── WhisperTranscriber.kt # Audio transcription utilities
+└── SpeechRecognizer.kt   # Speech recognition interface
 ```
 
 #### DocumentParser
@@ -1131,19 +1148,17 @@ class ProcessViewModel @Inject constructor(
 |-----|-------|------|--------|
 | Chat | `chat` | AutoMirrored.Chat | ChatScreen |
 | Think | `notebooks` | AutoAwesome | NotebookListScreen → NotebookScreen |
-| Process | `process` | CloudUpload | ProcessScreen |
-| Inference | `inference` | Psychology | InferenceScreen |
 | Settings | `settings` | Settings | SettingsScreen |
 
 ### Tab Implementation Status
 
 | Tab | ViewModel | UI Status | Backend Status |
 |-----|-----------|-----------|----------------|
-| Chat | ChatViewModel | ✅ Functional | ✅ RAG via InferenceBridge, persistent conversations |
+| Chat | ChatViewModel | ✅ Functional | ✅ RAG via InferenceBridge, structured MessageParts |
 | Think | NotebookEditorViewModel | ✅ Functional | ✅ Room persistence + auto-processing |
-| Process | ProcessViewModel | ✅ Functional | ✅ Real parsers + VectorStore persistence |
-| Inference | InferenceViewModel | ✅ Functional | ✅ ML Kit GenAI / Gemma 4 |
-| Settings | SettingsViewModel | ✅ Functional | ✅ SharedPreferences / DataStore |
+| Settings | SettingsViewModel | ✅ Functional | ✅ Model download, inference status |
+
+**Note:** Process and Inference exist as feature modules but are not primary tabs in MainScreen. Process functionality is integrated into notebooks and chat flows. Inference status is shown in Settings.
 
 ### Module Dependencies
 
@@ -1151,15 +1166,15 @@ class ProcessViewModel @Inject constructor(
 app ──> all core modules, all feature modules
 core:processing ──> core:ai, core:data
 core:ai ──> core:data              ← InferenceBridge is the core AI dependency
-core:media ──> core:ai, core:data
-feature:chat ──> core:ai, core:data, core:ui   ← Depends on InferenceBridge
+core:media ──> (empty shell, no source files)
+feature:chat ──> core:ai, core:data, core:processing, core:ui, feature:notebooks
+feature:notebooks ──> core:ai, core:data, core:processing, core:ui
 feature:process ──> core:processing, core:ai, core:data, core:ui
-feature:inference ──> core:ai, core:data, core:ui ← Direct inference access
-feature:notebooks ──> core:data, core:ui, core:ai
-feature:settings ──> core:data, core:ui
+feature:inference ──> core:ai, core:data, core:ui
+feature:settings ──> core:ai, core:data, core:ui
 ```
 
-**Key Architectural Principle**: `InferenceBridge` in `core:ai` is the central dependency. All AI-powered features flow through this interface to the Gemma 4 E2B-IT model via ML Kit GenAI. `ModelStatus` enum is defined in `core:ai` and imported by features that need to check model state.
+**Key Architectural Principle**: `InferenceBridge` in `core:ai` is the central dependency. All AI-powered features flow through this interface to the Gemma 4 E2B-IT model via LiteRT-LM. `ModelStatus` enum is defined in `core:ai` and imported by features that need to check model state.
 
 ---
 
@@ -1170,17 +1185,18 @@ feature:settings ──> core:data, core:ui
 | Embedding cache | LRU with max 10,000 chunks in memory |
 | Bitmap | `recycle()` in finally block |
 | Room pagination | `chunkDao.getAllPaged(offset, limit)` |
+| Engine | `close()` on release, conversation cleanup |
 
 ---
 
 ## Thread Safety Checklist
 
-- [ ] Every Room call in `withContext(Dispatchers.IO)`
-- [ ] Every ONNX/embedding in `withContext(Dispatchers.Default)`
-- [ ] StateFlow updates via `.update {}` (lock-free)
-- [ ] CoroutineWorker, not Worker
-- [ ] No `runBlocking` anywhere
-- [ ] No GlobalScope — viewModelScope or worker scope only
+- [x] Every Room call in `withContext(Dispatchers.IO)`
+- [x] Every ONNX/embedding in `withContext(Dispatchers.Default)`
+- [x] StateFlow updates via `.update {}` (lock-free)
+- [x] CoroutineWorker, not Worker
+- [x] No `runBlocking` anywhere
+- [x] No GlobalScope — viewModelScope or worker scope only
 
 ---
 
@@ -1207,7 +1223,7 @@ feature:settings ──> core:data, core:ui
 
 ---
 
-*Last updated: Structured Message Parts Architecture — Opencode-inspired parts system with MessagePart sealed class, MessagePartAggregator, StreamingTokenFilter mode transitions, smart spacing, MarkdownText renderer, collapsible ReasoningBlock and ToolCallBlock UI (May 2026)*
+*Last updated: Documentation synced with codebase — corrected tab structure (3 tabs), manual DI (no Hilt), removed references to non-existent Hilt modules, updated build versions, verified actual file inventory (May 2026)*
 
 ---
 

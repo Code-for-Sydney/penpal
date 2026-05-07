@@ -74,11 +74,11 @@ Penpal's inference layer is built around **Gemma 4 E2B-IT** and uses the **LiteR
 
 | Tab | Purpose | Status |
 |-----|---------|--------|
-| **Process** | Add documents, URLs, files for extraction | ✅ Functional |
 | **Chat** | RAG-enabled conversations with your knowledge | ✅ Functional |
 | **Think** | Block-based notebooks with graphs, drawings, images | ✅ Functional |
-| **Inference** | Load/unload Gemma model, view status | ✅ Functional |
 | **Settings** | App configuration, model management, preferences | ✅ Functional |
+
+**Note:** The current MainScreen has 3 tabs (Chat, Think, Settings). Process and Inference functionality is integrated into Settings and other flows.
 
 ### Core Capabilities
 
@@ -96,38 +96,38 @@ Penpal's inference layer is built around **Gemma 4 E2B-IT** and uses the **LiteR
 |-----------|---------|
 | Kotlin | 2.0.21 |
 | KSP | 2.0.21-1.0.28 |
-| Hilt | 2.51.1 |
-| Room | 2.6.1 |
+| Hilt | 2.52 |
+| Room | 2.6.1 / 2.7.0-beta01 (core:data) |
 | Compose BOM | 2024.06.00 |
-| AGP | 9.0.0 |
+| AGP | 9.1.1 |
 
 ## Architecture
 
-Penpal uses a modular architecture with clear dependency boundaries:
+Penpal uses a modular architecture with clear dependency boundaries. **Note:** Dependency injection is currently manual (via `PenpalApplication` lazy singletons), not Hilt-based.
 
 ```
 app/                    # Shell app, MainScreen, BottomNavigation
 ├── MainComposeActivity # Compose entry point
-├── MainScreen         # NavHost + 5 tabs (Process, Chat, Think, Inference, Settings)
-└── PenpalApplication  # Lazy DI singleton
+├── MainScreen         # NavHost + 3 tabs (Chat, Think, Settings)
+└── PenpalApplication  # Manual DI singleton (lazy initialization)
 
 core/
 ├── ai/                 # InferenceBridge, LmEngineManager, LiteRtInferenceBridge,
 │                       # ModelManager, Gemma 4, TextEmbedder, OnnxMiniLmEmbedder,
-│                       # VectorStoreRepository, ModelStatus
+│                       # VectorStoreRepository, MessagePart, StreamingTokenFilter
 ├── data/               # Room database (PenpalDatabase v3), entities, DAOs
 ├── processing/         # Real DocumentParsers (PDF, Image, Audio, URL, Code),
 │                       # ExtractionWorker, WorkerLauncher, ParserFactory
-├── media/              # Media processing utilities
+├── media/              # Media processing utilities (empty shell)
 └── ui/                 # Material 3 Theme
 
 feature/
 ├── chat/               # ChatScreen, ChatViewModel (RAG flow, persistent conversations,
-│                       # notebook/file attachment, drag-and-drop)
+│                       # notebook/file attachment, structured MessageParts)
 ├── process/            # ProcessScreen, ProcessViewModel (job queue)
 ├── inference/          # InferenceScreen, InferenceViewModel (model management)
 ├── notebooks/          # NotebookScreen, NotebookEditorViewModel (block-based editor,
-│                       # auto-processing, image picker)
+│                       # auto-processing, image picker, Coil integration)
 └── settings/           # SettingsScreen, SettingsViewModel (model download UI)
 ```
 
@@ -135,8 +135,12 @@ feature/
 
 ```
 app ──> core:ai, core:data, core:processing, core:ui
+feature:chat ──> core:ai, core:data, core:processing, core:ui, feature:notebooks
+feature:notebooks ──> core:ai, core:data, core:processing, core:ui
+feature:process ──> core:ai, core:data, core:processing, core:ui
+feature:inference ──> core:ai, core:data, core:ui
+feature:settings ──> core:ai, core:data, core:ui
 core:processing ──> core:ai, core:data
-feature:* ──> core:* (downward only)
 ```
 
 ## Installation
