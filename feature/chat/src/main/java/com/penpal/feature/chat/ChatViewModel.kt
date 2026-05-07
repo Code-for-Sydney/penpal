@@ -1,10 +1,12 @@
 package com.penpal.feature.chat
 
 import android.net.Uri
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.gson.Gson
 import com.penpal.core.ai.InferenceBridge
+import com.penpal.core.ai.MessagePart
 import com.penpal.core.ai.VectorStoreRepository
 import com.penpal.core.data.ChatConversationDao
 import com.penpal.core.data.ChatConversationEntity
@@ -17,6 +19,9 @@ import com.penpal.core.processing.WorkerLauncher
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.util.UUID
@@ -28,6 +33,7 @@ data class ChatUiState(
     val error: String? = null,
     val retrievedContext: List<ChunkEntity> = emptyList(),
     val isModelReady: Boolean = false,
+    val needsTitleGeneration: Boolean = false,
     // Conversation history
     val conversations: List<ChatConversation> = emptyList(),
     val currentConversationId: String? = null,
@@ -41,6 +47,7 @@ data class ChatMessage(
     val id: String,
     val role: MessageRole,
     val content: String,
+    val parts: List<MessagePart> = emptyList(),
     val sources: List<String> = emptyList(),
     val timestamp: Long = System.currentTimeMillis()
 )
@@ -210,7 +217,14 @@ class ChatViewModel(
                         )
                     }
                     _uiState.update { state ->
-                        state.copy(messages = msgs)
+                        // If there's a pending assistant message (isLoading=true), preserve it
+                        val pendingAssistant = state.messages.lastOrNull { it.role == MessageRole.ASSISTANT && it.content.isEmpty() }
+                        if (pendingAssistant != null && state.isLoading) {
+                            Log.d("ChatViewModel", "loadConversation: preserving pending assistant message while loading")
+                            state.copy(messages = msgs + pendingAssistant)
+                        } else {
+                            state.copy(messages = msgs)
+                        }
                     }
                 }
             }
@@ -411,8 +425,12 @@ class ChatViewModel(
         )
 
         _uiState.update { state ->
+            val newMessages = state.messages + userMessage + assistantMessage
+            Log.d("ChatViewModel", "=== USER MESSAGE ===")
+            Log.d("ChatViewModel", "User: '${userMessage.content}'")
+            Log.d("ChatViewModel", "===================")
             state.copy(
-                messages = state.messages + userMessage + assistantMessage,
+                messages = newMessages,
                 inputText = "",
                 isLoading = true,
                 error = null
@@ -432,18 +450,21 @@ class ChatViewModel(
                 )
             )
 
-            // Update conversation title if first message
+            // Set temporary title from first message - will be replaced by AI-generated title
             if (_uiState.value.messages.size == 2) {
-                val title = currentInput.take(30)
-                chatConversationDao?.updateTitle(conversationId, title, System.currentTimeMillis())
-                _uiState.update { it.copy(currentConversationTitle = title) }
+                val tempTitle = currentInput.take(30)
+                chatConversationDao?.updateTitle(conversationId, tempTitle, System.currentTimeMillis())
+                _uiState.update { it.copy(currentConversationTitle = tempTitle) }
             }
         }
 
         viewModelScope.launch {
             try {
+                Log.d("ChatViewModel", "sendMessage: retrieving context for input: ${currentInput.take(50)}...")
+                
                 // Retrieve context from vector store
                 val relevantChunks = vectorStore.similaritySearch(currentInput, topK = 6)
+                Log.d("ChatViewModel", "Found ${relevantChunks.size} relevant chunks")
 
                 // Also retrieve from attached notebooks
                 val attachedNotebookChunks = mutableListOf<ChunkEntity>()
@@ -451,6 +472,7 @@ class ChatViewModel(
                     val chunks = vectorStore.getChunksForSource(notebook.notebookId)
                     attachedNotebookChunks.addAll(chunks)
                 }
+                Log.d("ChatViewModel", "Found ${attachedNotebookChunks.size} chunks from attached notebooks")
 
                 // Combine and deduplicate
                 val allChunks = (relevantChunks + attachedNotebookChunks)
@@ -464,33 +486,73 @@ class ChatViewModel(
 
                 val contextPrompt = buildPrompt(currentInput, allChunks)
                 val sourceIds = allChunks.map { it.id }
+                Log.d("ChatViewModel", "Built prompt (${contextPrompt.length} chars), isReady=${inferenceBridge.isReady.value}")
 
                 if (!inferenceBridge.isReady.value) {
-                    updateLastAssistantMessage("The AI model is not ready. Please download and load a model in Settings first.", sourceIds)
+                    Log.w("ChatViewModel", "Model not ready, cannot run inference")
+                    updateLastAssistantMessage(
+                        listOf(MessagePart.TextPart("The AI model is not ready. Please download and load a model in Settings first.")),
+                        sourceIds
+                    )
                     _uiState.update { it.copy(isLoading = false, retrievedContext = emptyList()) }
                     return@launch
                 }
 
-                inferenceBridge.runInference(
-                    input = contextPrompt,
-                    resultListener = { partialResult, done ->
-                        updateLastAssistantMessage(partialResult, sourceIds)
-                    },
-                    cleanUpListener = {
-                        _uiState.update { it.copy(isLoading = false, retrievedContext = emptyList()) }
-                    },
-                    onError = { error ->
+                Log.d("ChatViewModel", "Starting inference via FlowParts...")
+                inferenceBridge.runInferenceFlowParts(contextPrompt)
+                    .catch { error ->
+                        Log.e("ChatViewModel", "FlowParts inference error: ${error.message}", error)
                         _uiState.update { state ->
                             state.copy(
                                 isLoading = false,
-                                error = error,
+                                error = error.message ?: "Inference error",
                                 retrievedContext = emptyList()
                             )
                         }
                     }
-                )
+                    .onCompletion {
+                        val lastMessage = _uiState.value.messages.lastOrNull { it.role == MessageRole.ASSISTANT }
+                        val finalContent = lastMessage?.content?.replace("\n", "\\n")
+                        Log.d("ChatViewModel", "=== INFERENCE COMPLETE ===")
+                        Log.d("ChatViewModel", "Final response: '${finalContent}'")
+                        Log.d("ChatViewModel", "Parts: ${lastMessage?.parts?.size}")
+                        Log.d("ChatViewModel", "=========================")
+                        _uiState.update { it.copy(isLoading = false, retrievedContext = emptyList()) }
+
+                        // Save assistant message to DB
+                        if (finalContent != null && finalContent.isNotBlank()) {
+                            val conversationId = _uiState.value.currentConversationId
+                            if (conversationId != null) {
+                                viewModelScope.launch {
+                                    chatMessageDao?.insert(
+                                        ChatMessageEntity(
+                                            id = pendingAssistantMessageId ?: UUID.randomUUID().toString(),
+                                            conversationId = conversationId,
+                                            role = "ASSISTANT",
+                                            content = finalContent,
+                                            sourcesJson = gson.toJson(sourceIds),
+                                            createdAt = System.currentTimeMillis()
+                                        )
+                                    )
+                                }
+                            }
+                        }
+
+                        // Generate title after first successful exchange
+                        if (_uiState.value.messages.count { it.role == MessageRole.USER } == 1) {
+                            generateConversationTitle()
+                        }
+                    }
+                    .collect { parts ->
+                        val textPreview = parts.filterIsInstance<MessagePart.TextPart>().joinToString(" ") { it.text }
+                            .replace("\n", "\\n")
+                            .take(120)
+                        Log.d("ChatViewModel", "Assistant chunk: ${textPreview}")
+                        updateLastAssistantMessage(parts, sourceIds)
+                    }
 
             } catch (e: Exception) {
+                Log.e("ChatViewModel", "Failed to process message", e)
                 _uiState.update { state ->
                     state.copy(
                         isLoading = false,
@@ -502,35 +564,36 @@ class ChatViewModel(
         }
     }
 
-    private fun updateLastAssistantMessage(content: String, sources: List<String>) {
+    private fun updateLastAssistantMessage(parts: List<MessagePart>, sources: List<String>) {
+        // Build content string from text parts for backward compatibility
+        val content = buildString {
+            for (part in parts) {
+                when (part) {
+                    is MessagePart.TextPart -> append(part.text)
+                    is MessagePart.ReasoningPart -> append(part.text)
+                    is MessagePart.ToolCallPart -> append(part.rawJson)
+                    is MessagePart.ToolResponsePart -> append(part.output)
+                    is MessagePart.ImagePart -> append(part.description)
+                    is MessagePart.AudioPart -> append(part.transcription)
+                }
+            }
+        }.trim()
+
+        Log.d("ChatViewModel", "updateLastAssistantMessage: partsCount=${parts.size}, contentLength=${content.length}")
         _uiState.update { state ->
             val messages = state.messages.toMutableList()
             if (messages.isNotEmpty() && messages.last().role == MessageRole.ASSISTANT) {
+                val oldContent = messages.last().content
                 messages[messages.lastIndex] = messages.last().copy(
                     content = content,
+                    parts = parts,
                     sources = sources
                 )
+                Log.d("ChatViewModel", "updateLastAssistantMessage: updated last message, oldLength=${oldContent.length}, newLength=${content.length}")
+            } else {
+                Log.w("ChatViewModel", "updateLastAssistantMessage: last message is not ASSISTANT or list is empty")
             }
             state.copy(messages = messages)
-        }
-
-        // Save assistant message to DB when streaming completes
-        if (content.isNotBlank() && !_uiState.value.isLoading) {
-            val conversationId = _uiState.value.currentConversationId
-            if (conversationId != null) {
-                viewModelScope.launch {
-                    chatMessageDao?.insert(
-                        ChatMessageEntity(
-                            id = pendingAssistantMessageId ?: UUID.randomUUID().toString(),
-                            conversationId = conversationId,
-                            role = "ASSISTANT",
-                            content = content,
-                            sourcesJson = gson.toJson(sources),
-                            createdAt = System.currentTimeMillis()
-                        )
-                    )
-                }
-            }
         }
     }
 
@@ -552,27 +615,74 @@ class ChatViewModel(
         }
     }
 
+    /**
+     * Generates a concise title for the conversation using the LLM.
+     * Called after the first successful user-assistant exchange.
+     */
+    private fun generateConversationTitle() {
+        val conversationId = _uiState.value.currentConversationId ?: return
+        val messages = _uiState.value.messages
+        if (messages.size < 2) return
+
+        val userMessage = messages.find { it.role == MessageRole.USER }?.content ?: return
+        val assistantMessage = messages.findLast { it.role == MessageRole.ASSISTANT }?.content ?: return
+
+        val titlePrompt = """
+            Based on the following conversation, generate a very short, concise title (3-5 words maximum).
+            Do not use quotes. Do not add any explanation. Just output the title.
+            
+            User: $userMessage
+            Assistant: ${assistantMessage.take(200)}
+            
+            Title:
+        """.trimIndent()
+
+        viewModelScope.launch {
+            try {
+                var generatedTitle = ""
+                inferenceBridge.runInferenceFlow(titlePrompt)
+                    .catch { /* Silently fail - keep the temporary title */ }
+                    .collect { partialResult ->
+                        generatedTitle = partialResult.trim()
+                    }
+
+                if (generatedTitle.isNotBlank()) {
+                    // Clean up the title
+                    val cleanTitle = generatedTitle
+                        .replace("\"", "")
+                        .replace("'", "")
+                        .take(40)
+                        .trim()
+                    if (cleanTitle.isNotBlank()) {
+                        chatConversationDao?.updateTitle(
+                            conversationId,
+                            cleanTitle,
+                            System.currentTimeMillis()
+                        )
+                        _uiState.update { it.copy(currentConversationTitle = cleanTitle) }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w("ChatViewModel", "Title generation failed: ${e.message}")
+            }
+        }
+    }
+
     private fun buildPrompt(userMessage: String, context: List<ChunkEntity>): String {
-        val contextText = if (context.isNotEmpty()) {
+        return if (context.isNotEmpty()) {
             val contextItems = context.joinToString("\n\n") { chunk ->
                 "[Document: ${chunk.sourceId}]\n${chunk.text}"
             }
             """
-            |Context from your documents:
-            |$contextItems
-            |
-            |Based on the above context, answer the following question.
-            |If the context doesn't contain relevant information, say so.
-            """.trimMargin()
-        } else {
-            "You are a helpful AI assistant. Answer the following question."
-        }
+            Use the following context to answer the question. If the context doesn't contain relevant information, say so.
 
-        return """
-            |$contextText
-            |
-            |User: $userMessage
-            |Assistant:
-        """.trimMargin()
+            Context:
+            $contextItems
+
+            Question: $userMessage
+            """.trimIndent()
+        } else {
+            userMessage
+        }
     }
 }
