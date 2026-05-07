@@ -6,10 +6,14 @@ import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -44,6 +48,7 @@ class OllamaInferenceBridge(
     override fun initialize(
         context: Context,
         modelName: String,
+        backend: String?,
         onDone: (String) -> Unit
     ) {
         currentModel = modelName
@@ -152,7 +157,7 @@ class OllamaInferenceBridge(
         }
     }
 
-    override fun loadModel(context: Context, modelPath: String, onDone: (String) -> Unit) {
+    override fun loadModel(context: Context, modelPath: String, backend: String?, onDone: (String) -> Unit) {
         currentModel = modelPath
         CoroutineScope(Dispatchers.IO).launch {
             try {
@@ -213,6 +218,61 @@ class OllamaInferenceBridge(
     ) {
         runInference(input, resultListener, cleanUpListener, onError)
     }
+
+    override fun runInferenceFlow(input: String): Flow<String> = flow {
+        _isProcessing.value = true
+        try {
+            apiService.generateStream(currentModel, input)
+                .catch { e ->
+                    Log.e(TAG, "Flow error: ${e.message}", e)
+                    throw e
+                }
+                .collect { response ->
+                    emit(response.response)
+                }
+        } finally {
+            _isProcessing.value = false
+        }
+    }.flowOn(Dispatchers.IO)
+
+    override fun runInferenceWithImageFlow(input: String, image: Bitmap): Flow<String> =
+        runInferenceFlow(input)
+
+    override fun runInferenceFlowParts(input: String): Flow<List<MessagePart>> = flow {
+        _isProcessing.value = true
+        val aggregator = MessagePartAggregator()
+        try {
+            var accumulated = ""
+            apiService.generateStream(currentModel, input)
+                .catch { e ->
+                    Log.e(TAG, "FlowParts error: ${e.message}", e)
+                    throw e
+                }
+                .collect { response ->
+                    accumulated += response.response
+                    val parts = aggregator.processChunk(
+                        FilteredChunkWithTransitions(
+                            text = response.response,
+                            mode = ContentMode.REGULAR,
+                            transitions = emptyList()
+                        )
+                    )
+                    emit(parts)
+                }
+            val finalParts = aggregator.finalize()
+            if (finalParts.isEmpty() && accumulated.isNotBlank()) {
+                emit(listOf(MessagePart.TextPart(accumulated)))
+            } else if (finalParts.isNotEmpty()) {
+                emit(finalParts)
+            }
+        } finally {
+            _isProcessing.value = false
+            aggregator.reset()
+        }
+    }.flowOn(Dispatchers.IO)
+
+    override fun runInferenceWithImageFlowParts(input: String, image: Bitmap): Flow<List<MessagePart>> =
+        runInferenceFlowParts(input)
 
     override fun resetConversation() {
         inferenceJob?.cancel()

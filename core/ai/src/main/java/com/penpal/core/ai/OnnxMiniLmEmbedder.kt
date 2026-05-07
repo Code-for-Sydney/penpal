@@ -20,7 +20,8 @@ import java.nio.LongBuffer
  * If the model file is not found, this falls back to mock embeddings.
  */
 class OnnxMiniLmEmbedder(
-    private val modelPath: String
+    private val modelPath: String,
+    tokenizer: WordPieceTokenizer? = null
 ) : TextEmbedder {
 
     override val dimension: Int = 384
@@ -28,7 +29,7 @@ class OnnxMiniLmEmbedder(
 
     private var environment: OrtEnvironment? = null
     private var session: OrtSession? = null
-    private val tokenizer = SimpleWordPieceTokenizer()
+    private val tokenizer: WordPieceTokenizer = tokenizer ?: WordPieceTokenizer.fallback()
 
     init {
         try {
@@ -141,58 +142,4 @@ class OnnxMiniLmEmbedder(
     }
 }
 
-/**
- * A simple word-piece like tokenizer for demonstration.
- * In production, use a proper tokenizer library or bundle the tokenizer config.
- */
-private class SimpleWordPieceTokenizer {
-    private val vocab = mutableMapOf<String, Int>()
-    private val unkToken = "[UNK]"
-    private val clsToken = "[CLS]"
-    private val sepToken = "[SEP]"
-    private val padToken = "[PAD]"
 
-    init {
-        // Initialize with basic tokens
-        vocab[padToken] = 0
-        vocab[unkToken] = 1
-        vocab[clsToken] = 2
-        vocab[sepToken] = 3
-
-        // Simple character-based fallback vocabulary
-        var nextId = 4
-        "abcdefghijklmnopqrstuvwxyz0123456789 .,!?;:\\-'\"()[]{}".forEach { c ->
-            vocab[c.toString()] = nextId++
-        }
-    }
-
-    fun tokenize(text: String): List<Int> {
-        val tokens = mutableListOf(vocab[clsToken] ?: 2)
-        val normalized = text.lowercase()
-            .replace(Regex("[^a-z0-9 .,!?;:\\-'\"()[]{}]"), " ")
-            .split(Regex("\\s+"))
-            .filter { it.isNotEmpty() }
-
-        for (word in normalized) {
-            if (word.length <= 2) {
-                tokens.add(vocab[word] ?: vocab[unkToken] ?: 1)
-            } else {
-                // Simple character tokenization for longer words
-                var remaining = word
-                while (remaining.isNotEmpty()) {
-                    val token = vocab[remaining] ?: vocab[remaining.take(2)] ?: vocab[remaining.first().toString()]
-                    if (token != null) {
-                        tokens.add(token)
-                        remaining = remaining.drop(2)
-                    } else {
-                        tokens.add(vocab[unkToken] ?: 1)
-                        remaining = remaining.drop(1)
-                    }
-                }
-            }
-        }
-
-        tokens.add(vocab[sepToken] ?: 3)
-        return tokens.take(512) // Truncate to model max length
-    }
-}

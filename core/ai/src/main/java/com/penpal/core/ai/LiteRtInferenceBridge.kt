@@ -19,13 +19,21 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.TimeoutCancellationException
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
 
@@ -65,6 +73,7 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
     override fun initialize(
         context: Context,
         modelName: String,
+        backend: String?,
         onDone: (String) -> Unit
     ) {
         scope.launch {
@@ -73,7 +82,7 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
                 if (modelPath != null && modelExists(modelPath)) {
                     // Persist the discovered path so it's reused on next launch
                     ModelManager.saveModelPath(context, modelPath)
-                    val success = initializeEngine(modelPath)
+                    val success = initializeEngine(modelPath, backend)
                     if (success) {
                         _modelStatus.value = ModelStatus.DOWNLOADED
                         onDone("Model loaded: $modelName")
@@ -140,24 +149,36 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
         return file.exists() && file.length() > 1_000_000L
     }
 
-    private suspend fun initializeEngine(modelPath: String): Boolean {
+    private suspend fun initializeEngine(modelPath: String, preferredBackend: String? = null): Boolean {
         return withContext(Dispatchers.IO) {
             try {
-                // Pixel 8 Pro Tensor G3: GPU backend uses Adreno GPU
-                // which provides excellent acceleration for LLM inference.
-                // CPU is the fallback if GPU init fails.
-                val backends = listOf(
-                    Triple("GPU", Backend.GPU(), Backend.GPU()),
-                    Triple("CPU", Backend.CPU(), Backend.CPU())
-                )
+                // Build backend list based on preference
+                val backends = when (preferredBackend?.uppercase()) {
+                    "GPU" -> listOf(
+                        Triple("GPU", Backend.GPU(), Backend.GPU())
+                    )
+                    "CPU" -> listOf(
+                        Triple("CPU", Backend.CPU(), Backend.CPU())
+                    )
+                    else -> listOf(
+                        // Auto: try GPU first, fall back to CPU
+                        Triple("GPU", Backend.GPU(), Backend.GPU()),
+                        Triple("CPU", Backend.CPU(), Backend.CPU())
+                    )
+                }
 
                 for ((backendName, backend, visionBackend) in backends) {
                     try {
                         Log.d(TAG, "Trying $backendName backend...")
 
-                        // Close existing engine
+                        // Close existing engine (ignore if not initialized)
                         conversation?.close()
-                        engine?.close()
+                        try {
+                            engine?.close()
+                        } catch (_: IllegalStateException) {
+                            // Engine was created but not initialized - safe to ignore
+                        }
+                        engine = null
 
                         val engineConfig = EngineConfig(
                             modelPath = modelPath,
@@ -188,7 +209,8 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
 
                     } catch (e: Exception) {
                         Log.e(TAG, "$backendName backend failed: ${e.message}")
-                        if (backendName == "CPU") {
+                        if (backendName == "CPU" || preferredBackend != null) {
+                            // If specific backend requested and it fails, don't try others
                             throw e
                         }
                     }
@@ -391,6 +413,7 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
     override fun loadModel(
         context: Context,
         modelPath: String,
+        backend: String?,
         onDone: (String) -> Unit
     ) {
         scope.launch {
@@ -412,7 +435,7 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
                     )
                 )
 
-                val success = initializeEngine(modelPath)
+                val success = initializeEngine(modelPath, backend)
                 if (success) {
                     _modelStatus.value = ModelStatus.DOWNLOADED
                     onDone("Model loaded: ${file.name}")
@@ -456,34 +479,78 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
         }
 
         _isProcessing.value = true
+        val completed = AtomicBoolean(false)
 
         scope.launch {
+            val timeoutJob = launch {
+                delay(120_000)
+                if (completed.compareAndSet(false, true)) {
+                    Log.w(TAG, "Inference timed out after 120s")
+                    conversation?.cancelProcess()
+                    _isProcessing.value = false
+                    onError("Inference timed out. The model may be stuck or the device may not have enough memory.")
+                }
+            }
+
             try {
                 val conv = conversation!!
                 val content = Contents.of(Content.Text(input))
+                Log.d(TAG, "Sending message with ${input.length} chars")
+                val filter = StreamingTokenFilter()
 
                 conv.sendMessageAsync(content, object : MessageCallback {
                     private var full = ""
+                    private var lastMode = ContentMode.REGULAR
 
                     override fun onMessage(message: Message) {
-                        full += message.toString()
-                        resultListener(full, false)
+                        val text = conv.renderMessageIntoString(message)
+                        Log.d(TAG, "onMessage: textLength=${text.length}, accumulated=${full.length + text.length}")
+                        
+                        val result = filter.append(text)
+                        if (result.mode != lastMode) {
+                            Log.d(TAG, "onMessage: mode changed ${lastMode} -> ${result.mode}")
+                            lastMode = result.mode
+                        }
+                        
+                        full += result.text
+                        if (result.text.isNotEmpty()) {
+                            resultListener(full, false)
+                        }
                     }
 
                     override fun onDone() {
-                        resultListener(full, true)
-                        _isProcessing.value = false
-                        cleanUpListener()
+                        if (completed.compareAndSet(false, true)) {
+                            val result = filter.flush()
+                            full += result.text
+                            if (full.isEmpty()) {
+                                Log.w(TAG, "onDone: received empty response from model")
+                            } else {
+                                Log.d(TAG, "onDone: finalLength=${full.length}")
+                            }
+                            resultListener(full, true)
+                            _isProcessing.value = false
+                            cleanUpListener()
+                            timeoutJob.cancel()
+                        }
                     }
 
                     override fun onError(throwable: Throwable) {
-                        _isProcessing.value = false
-                        onError(throwable.message ?: "Inference error")
+                        if (completed.compareAndSet(false, true)) {
+                            Log.e(TAG, "onError: ${throwable.message}", throwable)
+                            _isProcessing.value = false
+                            onError(throwable.message ?: "Inference error")
+                            timeoutJob.cancel()
+                        }
                     }
                 })
             } catch (e: Exception) {
-                _isProcessing.value = false
-                onError("Inference error: ${e.message}")
+                if (completed.compareAndSet(false, true)) {
+                    Log.e(TAG, "Inference exception: ${e.message}", e)
+                    _isProcessing.value = false
+                    onError("Inference error: ${e.message}")
+                }
+            } finally {
+                timeoutJob.cancel()
             }
         }
     }
@@ -502,8 +569,19 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
         }
 
         _isProcessing.value = true
+        val completed = AtomicBoolean(false)
 
         scope.launch {
+            val timeoutJob = launch {
+                delay(120_000)
+                if (completed.compareAndSet(false, true)) {
+                    Log.w(TAG, "Image inference timed out after 120s")
+                    conversation?.cancelProcess()
+                    _isProcessing.value = false
+                    onError("Inference timed out. The model may be stuck or the device may not have enough memory.")
+                }
+            }
+
             try {
                 val stream = ByteArrayOutputStream()
                 image.compress(Bitmap.CompressFormat.JPEG, 85, stream)
@@ -514,32 +592,296 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
                     Content.ImageBytes(imageBytes),
                     Content.Text(input)
                 )
+                Log.d(TAG, "Sending image message with ${input.length} chars")
+                val filter = StreamingTokenFilter()
 
                 conv.sendMessageAsync(content, object : MessageCallback {
                     private var full = ""
+                    private var lastMode = ContentMode.REGULAR
 
                     override fun onMessage(message: Message) {
-                        full += message.toString()
-                        resultListener(full, false)
+                        val text = conv.renderMessageIntoString(message)
+                        Log.d(TAG, "onMessage: textLength=${text.length}, accumulated=${full.length + text.length}")
+                        
+                        val result = filter.append(text)
+                        if (result.mode != lastMode) {
+                            Log.d(TAG, "onMessage: mode changed ${lastMode} -> ${result.mode}")
+                            lastMode = result.mode
+                        }
+                        
+                        full += result.text
+                        if (result.text.isNotEmpty()) {
+                            resultListener(full, false)
+                        }
                     }
 
                     override fun onDone() {
-                        resultListener(full, true)
-                        _isProcessing.value = false
-                        cleanUpListener()
+                        if (completed.compareAndSet(false, true)) {
+                            val result = filter.flush()
+                            full += result.text
+                            if (full.isEmpty()) {
+                                Log.w(TAG, "onDone: received empty response from model")
+                            } else {
+                                Log.d(TAG, "onDone: finalLength=${full.length}")
+                            }
+                            resultListener(full, true)
+                            _isProcessing.value = false
+                            cleanUpListener()
+                            timeoutJob.cancel()
+                        }
                     }
 
                     override fun onError(throwable: Throwable) {
-                        _isProcessing.value = false
-                        onError(throwable.message ?: "Inference error")
+                        if (completed.compareAndSet(false, true)) {
+                            Log.e(TAG, "onError: ${throwable.message}", throwable)
+                            _isProcessing.value = false
+                            onError(throwable.message ?: "Inference error")
+                            timeoutJob.cancel()
+                        }
                     }
                 })
             } catch (e: Exception) {
-                _isProcessing.value = false
-                onError("Inference error: ${e.message}")
+                if (completed.compareAndSet(false, true)) {
+                    Log.e(TAG, "Image inference exception: ${e.message}", e)
+                    _isProcessing.value = false
+                    onError("Inference error: ${e.message}")
+                }
+            } finally {
+                timeoutJob.cancel()
             }
         }
     }
+
+    @OptIn(ExperimentalApi::class)
+    override fun runInferenceFlow(input: String): Flow<String> = flow {
+        if (!_isReady.value || conversation == null) {
+            throw IllegalStateException("Model not ready. Please load the model first.")
+        }
+
+        _isProcessing.value = true
+        val filter = StreamingTokenFilter()
+        var accumulated = ""
+
+        try {
+            val conv = conversation!!
+            val content = Contents.of(Content.Text(input))
+            Log.d(TAG, "Sending message via Flow with ${input.length} chars")
+
+            withTimeout(120_000) {
+                conv.sendMessageAsync(content)
+                    .catch { e ->
+                        Log.e(TAG, "Flow error: ${e.message}", e)
+                        throw e
+                    }
+                    .collect { message ->
+                        val text = conv.renderMessageIntoString(message)
+                        if (text.isNotEmpty()) {
+                            val result = filter.append(text)
+                            if (result.text.isNotEmpty()) {
+                                accumulated += result.text
+                                emit(accumulated)
+                            }
+                        }
+                    }
+            }
+
+            // Flush any remaining buffered text
+            val result = filter.flush()
+            if (result.text.isNotEmpty()) {
+                accumulated += result.text
+                emit(accumulated)
+            }
+        } catch (e: TimeoutCancellationException) {
+            Log.w(TAG, "Inference timed out after 120s")
+            conversation?.cancelProcess()
+            throw IllegalStateException("Inference timed out. The model may be stuck or the device may not have enough memory.")
+        } finally {
+            _isProcessing.value = false
+            filter.clear()
+        }
+    }.flowOn(Dispatchers.IO)
+
+    @OptIn(ExperimentalApi::class)
+    override fun runInferenceWithImageFlow(input: String, image: Bitmap): Flow<String> = flow {
+        if (!_isReady.value || conversation == null) {
+            throw IllegalStateException("Model not ready. Please load the model first.")
+        }
+
+        _isProcessing.value = true
+        val filter = StreamingTokenFilter()
+        var accumulated = ""
+
+        try {
+            val stream = java.io.ByteArrayOutputStream()
+            image.compress(Bitmap.CompressFormat.JPEG, 85, stream)
+            val imageBytes = stream.toByteArray()
+
+            val conv = conversation!!
+            val content = Contents.of(
+                Content.ImageBytes(imageBytes),
+                Content.Text(input)
+            )
+            Log.d(TAG, "Sending image message via Flow with ${input.length} chars")
+
+            withTimeout(120_000) {
+                conv.sendMessageAsync(content)
+                    .catch { e ->
+                        Log.e(TAG, "Image Flow error: ${e.message}", e)
+                        throw e
+                    }
+                    .collect { message ->
+                        val text = conv.renderMessageIntoString(message)
+                        if (text.isNotEmpty()) {
+                            val result = filter.append(text)
+                            if (result.text.isNotEmpty()) {
+                                accumulated += result.text
+                                emit(accumulated)
+                            }
+                        }
+                    }
+            }
+
+            // Flush any remaining buffered text
+            val result = filter.flush()
+            if (result.text.isNotEmpty()) {
+                accumulated += result.text
+                emit(accumulated)
+            }
+        } catch (e: TimeoutCancellationException) {
+            Log.w(TAG, "Image inference timed out after 120s")
+            conversation?.cancelProcess()
+            throw IllegalStateException("Inference timed out. The model may be stuck or the device may not have enough memory.")
+        } finally {
+            _isProcessing.value = false
+            filter.clear()
+        }
+    }.flowOn(Dispatchers.IO)
+
+    @OptIn(ExperimentalApi::class)
+    override fun runInferenceFlowParts(input: String): Flow<List<MessagePart>> = flow {
+        if (!_isReady.value || conversation == null) {
+            throw IllegalStateException("Model not ready. Please load the model first.")
+        }
+
+        _isProcessing.value = true
+        val filter = StreamingTokenFilter()
+        val aggregator = MessagePartAggregator()
+
+        try {
+            val conv = conversation!!
+            val content = Contents.of(Content.Text(input))
+            Log.d(TAG, "Sending message via FlowParts with ${input.length} chars")
+
+            withTimeout(120_000) {
+                conv.sendMessageAsync(content)
+                    .catch { e ->
+                        Log.e(TAG, "FlowParts error: ${e.message}", e)
+                        throw e
+                    }
+                    .collect { message ->
+                        val text = conv.renderMessageIntoString(message)
+                        if (text.isNotEmpty()) {
+                            val result = filter.appendWithTransitions(text)
+                            if (result.text.isNotEmpty() || result.transitions.isNotEmpty()) {
+                                val parts = aggregator.processChunk(result)
+                                val textPreview = parts.filterIsInstance<MessagePart.TextPart>().joinToString(" ") { it.text }
+                                    .replace("\n", "\\n")
+                                    .take(80)
+                                Log.d(TAG, "→ '${textPreview}'")
+                                emit(parts)
+                            }
+                        }
+                    }
+            }
+
+            val result = filter.flush()
+            if (result.text.isNotEmpty()) {
+                Log.d(TAG, "Flushing remaining text: '${result.text.take(100).replace("\n", "\\n")}'")
+                val parts = aggregator.processChunk(
+                    FilteredChunkWithTransitions(result.text, result.mode, emptyList())
+                )
+                emit(parts)
+            }
+
+            val finalParts = aggregator.finalize()
+            val finalText = finalParts.filterIsInstance<MessagePart.TextPart>().joinToString(" ") { it.text }.take(100).replace("\n", "\\n")
+            Log.d(TAG, "Finalizing ${finalParts.size} parts, text='${finalText}'")
+            emit(finalParts)
+        } catch (e: TimeoutCancellationException) {
+            Log.w(TAG, "Inference timed out after 120s")
+            conversation?.cancelProcess()
+            throw IllegalStateException("Inference timed out. The model may be stuck or the device may not have enough memory.")
+        } finally {
+            _isProcessing.value = false
+            filter.clear()
+            aggregator.reset()
+        }
+    }.flowOn(Dispatchers.IO)
+
+    @OptIn(ExperimentalApi::class)
+    override fun runInferenceWithImageFlowParts(input: String, image: Bitmap): Flow<List<MessagePart>> = flow {
+        if (!_isReady.value || conversation == null) {
+            throw IllegalStateException("Model not ready. Please load the model first.")
+        }
+
+        _isProcessing.value = true
+        val filter = StreamingTokenFilter()
+        val aggregator = MessagePartAggregator()
+
+        try {
+            val stream = java.io.ByteArrayOutputStream()
+            image.compress(Bitmap.CompressFormat.JPEG, 85, stream)
+            val imageBytes = stream.toByteArray()
+
+            val conv = conversation!!
+            val content = Contents.of(
+                Content.ImageBytes(imageBytes),
+                Content.Text(input)
+            )
+            Log.d(TAG, "Sending image message via FlowParts with ${input.length} chars")
+
+            withTimeout(120_000) {
+                conv.sendMessageAsync(content)
+                    .catch { e ->
+                        Log.e(TAG, "Image FlowParts error: ${e.message}", e)
+                        throw e
+                    }
+                    .collect { message ->
+                        val text = conv.renderMessageIntoString(message)
+                        Log.d(TAG, "Raw model output: '${text.take(100)}'")
+                        if (text.isNotEmpty()) {
+                            val result = filter.appendWithTransitions(text)
+                            Log.d(TAG, "Filtered text: '${result.text.take(100)}', mode=${result.mode}, transitions=${result.transitions.size}")
+                            if (result.text.isNotEmpty() || result.transitions.isNotEmpty()) {
+                                val parts = aggregator.processChunk(result)
+                                val textPreview = parts.filterIsInstance<MessagePart.TextPart>().joinToString(" ") { it.text }.take(100)
+                                Log.d(TAG, "Emitting ${parts.size} parts, text='${textPreview}'")
+                                emit(parts)
+                            }
+                        }
+                    }
+            }
+
+            val result = filter.flush()
+            if (result.text.isNotEmpty()) {
+                val parts = aggregator.processChunk(
+                    FilteredChunkWithTransitions(result.text, result.mode, emptyList())
+                )
+                emit(parts)
+            }
+
+            val finalParts = aggregator.finalize()
+            emit(finalParts)
+        } catch (e: TimeoutCancellationException) {
+            Log.w(TAG, "Image inference timed out after 120s")
+            conversation?.cancelProcess()
+            throw IllegalStateException("Inference timed out. The model may be stuck or the device may not have enough memory.")
+        } finally {
+            _isProcessing.value = false
+            filter.clear()
+            aggregator.reset()
+        }
+    }.flowOn(Dispatchers.IO)
 
     override fun resetConversation() {
         val currentEngine = engine ?: return

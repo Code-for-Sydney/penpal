@@ -3,6 +3,7 @@ package com.penpal.core.ai
 import android.content.Context
 import android.graphics.Bitmap
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 
 /**
@@ -20,11 +21,13 @@ interface InferenceBridge {
      * Initialize the model for inference.
      * @param context Application context
      * @param modelName The model name (e.g., "google/gemma-4-e2b-it")
+     * @param backend Preferred backend (GPU, CPU, or null for auto)
      * @param onDone Callback with result message
      */
     fun initialize(
         context: Context,
         modelName: String = "google/gemma-4-e2b-it",
+        backend: String? = null,
         onDone: (String) -> Unit
     )
 
@@ -81,6 +84,47 @@ interface InferenceBridge {
     )
 
     /**
+     * Run inference with text input, returning a Flow of partial results.
+     *
+     * This is the recommended approach for coroutine-based streaming.
+     * Special tokens are automatically filtered using [StreamingTokenFilter].
+     *
+     * @param input The text prompt
+     * @return Flow of cleaned partial text results
+     */
+    fun runInferenceFlow(input: String): Flow<String>
+
+    /**
+     * Run inference with text input, returning a Flow of structured MessageParts.
+     *
+     * This enables rich UI rendering with separate treatment for thinking blocks,
+     * tool calls, and regular text. Parts are emitted as they are parsed from
+     * the model's token stream.
+     *
+     * @param input The text prompt
+     * @return Flow of MessagePart lists representing the current message structure
+     */
+    fun runInferenceFlowParts(input: String): Flow<List<MessagePart>>
+
+    /**
+     * Run inference with text and image input, returning a Flow of partial results.
+     *
+     * @param input The text prompt
+     * @param image The image bitmap
+     * @return Flow of cleaned partial text results
+     */
+    fun runInferenceWithImageFlow(input: String, image: Bitmap): Flow<String>
+
+    /**
+     * Run inference with text and image input, returning a Flow of structured MessageParts.
+     *
+     * @param input The text prompt
+     * @param image The image bitmap
+     * @return Flow of MessagePart lists representing the current message structure
+     */
+    fun runInferenceWithImageFlowParts(input: String, image: Bitmap): Flow<List<MessagePart>>
+
+    /**
      * Reset conversation history.
      */
     fun resetConversation()
@@ -103,11 +147,13 @@ interface InferenceBridge {
     /**
      * Load a specific model by its file path.
      * @param modelPath Full path to the .litertlm file
+     * @param backend Preferred backend (GPU, CPU, or null for auto)
      * @param onDone Callback with result message
      */
     fun loadModel(
         context: Context,
         modelPath: String,
+        backend: String? = null,
         onDone: (String) -> Unit
     )
 
