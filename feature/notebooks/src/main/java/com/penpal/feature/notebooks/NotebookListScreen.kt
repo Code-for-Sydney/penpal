@@ -26,6 +26,7 @@ fun NotebookListScreen(
     viewModel: NotebookListViewModel,
     onNotebookSelected: (String) -> Unit,
     onCreateNew: () -> Unit,
+    onChatWithNotebook: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -81,7 +82,8 @@ fun NotebookListScreen(
                     NotebookCard(
                         notebook = notebook,
                         onClick = { onNotebookSelected(notebook.id) },
-                        onDelete = { viewModel.showDeleteConfirmation(notebook) }
+                        onDelete = { viewModel.showDeleteConfirmation(notebook) },
+                        onChat = onChatWithNotebook?.let { { it(notebook.id) } }
                     )
                 }
             }
@@ -134,7 +136,8 @@ fun NotebookListScreen(
 private fun NotebookCard(
     notebook: NotebookSummary,
     onClick: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onChat: (() -> Unit)? = null
 ) {
     val dateFormat = remember { SimpleDateFormat("MMM d, yyyy", Locale.getDefault()) }
 
@@ -168,6 +171,19 @@ private fun NotebookCard(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                }
+                if (onChat != null) {
+                    IconButton(
+                        onClick = onChat,
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Chat,
+                            contentDescription = "Chat",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
                 }
                 IconButton(
                     onClick = onDelete,

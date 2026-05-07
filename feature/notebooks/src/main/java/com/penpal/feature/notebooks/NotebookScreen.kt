@@ -47,6 +47,7 @@ fun NotebookScreen(
     viewModel: NotebookEditorViewModel,
     onNavigateBack: () -> Unit = {},
     onNavigateToHome: () -> Unit = {},
+    onChatWithNotebook: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -238,6 +239,15 @@ fun NotebookScreen(
                     contentDescription = "Home",
                     onClick = onNavigateToHome
                 )
+
+                // Chat with notebook
+                if (onChatWithNotebook != null) {
+                    ToolbarButton(
+                        icon = Icons.Default.Chat,
+                        contentDescription = "Chat with notebook",
+                        onClick = { onChatWithNotebook(viewModel.uiState.value.document.id) }
+                    )
+                }
 
                 VerticalDivider(
                     modifier = Modifier

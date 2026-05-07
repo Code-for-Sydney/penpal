@@ -1,0 +1,219 @@
+package com.penpal.feature.notebooks
+
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Book
+import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.launch
+
+/**
+ * Reusable notebook picker bottom sheet.
+ * Can be used from Chat (to attach notebooks) or from Notebook list (to start chat).
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun NotebookPickerBottomSheet(
+    viewModel: NotebookListViewModel,
+    onNotebookSelected: (String, String) -> Unit,
+    onDismiss: () -> Unit,
+    title: String = "Select Notebook",
+    showChatAction: Boolean = false,
+    onChatWithNotebook: ((String, String) -> Unit)? = null,
+    modifier: Modifier = Modifier
+) {
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    var searchQuery by remember { mutableStateOf("") }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        modifier = modifier
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            // Header
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleLarge
+                )
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Default.Close, contentDescription = "Close")
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Search
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text("Search notebooks...") },
+                singleLine = true
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Notebook list
+            val filteredNotebooks = uiState.notebooks.filter {
+                it.title.contains(searchQuery, ignoreCase = true) ||
+                it.preview.contains(searchQuery, ignoreCase = true)
+            }
+
+            if (filteredNotebooks.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(200.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = if (uiState.notebooks.isEmpty()) "No notebooks yet" else "No matches",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.heightIn(max = 400.dp)
+                ) {
+                    items(filteredNotebooks, key = { it.id }) { notebook ->
+                        NotebookPickerItem(
+                            notebook = notebook,
+                            onSelect = { onNotebookSelected(notebook.id, notebook.title) },
+                            showChatAction = showChatAction,
+                            onChat = { onChatWithNotebook?.invoke(notebook.id, notebook.title) }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun NotebookPickerItem(
+    notebook: NotebookSummary,
+    onSelect: () -> Unit,
+    showChatAction: Boolean,
+    onChat: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onSelect),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Default.Book,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(24.dp)
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = notebook.title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = "${notebook.blockCount} blocks",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (showChatAction) {
+                IconButton(onClick = onChat) {
+                    Icon(
+                        imageVector = Icons.Default.Chat,
+                        contentDescription = "Chat with notebook",
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Simple notebook picker dialog for attaching notebooks to chat.
+ */
+@Composable
+fun NotebookPickerDialog(
+    viewModel: NotebookListViewModel,
+    onNotebookSelected: (String, String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Attach Notebook") },
+        text = {
+            if (uiState.notebooks.isEmpty()) {
+                Text("No notebooks available. Create one in the Think tab.")
+            } else {
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    items(uiState.notebooks, key = { it.id }) { notebook ->
+                        TextButton(
+                            onClick = { onNotebookSelected(notebook.id, notebook.title) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    Icons.Default.Book,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    notebook.title,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
+}
