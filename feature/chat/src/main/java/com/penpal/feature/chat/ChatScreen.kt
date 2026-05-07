@@ -1,6 +1,7 @@
 package com.penpal.feature.chat
 
 import android.net.Uri
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -29,6 +30,7 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 
@@ -38,6 +40,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import com.penpal.core.ai.MessagePart
+import com.penpal.core.ai.ToolStatus
 import com.penpal.core.ui.PenpalTheme
 
 /**
@@ -49,11 +53,15 @@ fun ChatScreen(
     uiState: ChatUiState,
     onEvent: (ChatEvent) -> Unit,
     onNavigateToNotebooks: () -> Unit = {},
+    onNavigateToChatWithNotebook: (String) -> Unit = {},
+    notebookListViewModel: com.penpal.feature.notebooks.NotebookListViewModel? = null,
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
     var showContext by remember { mutableStateOf(false) }
     var showHistory by remember { mutableStateOf(false) }
+    var showNotebookPicker by remember { mutableStateOf(false) }
+    var showSpeechInput by remember { mutableStateOf(false) }
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -150,7 +158,8 @@ fun ChatScreen(
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(uiState.messages, key = { it.id }) { message ->
+                items(uiState.messages, key = { it.id + it.content.length + it.parts.size }) { message ->
+                    Log.d("ChatScreen", "MessageBubble: id=${message.id.take(8)}, role=${message.role}, contentLength=${message.content.length}")
                     MessageBubble(
                         message = message,
                         modifier = Modifier.fillMaxWidth()
@@ -179,18 +188,45 @@ fun ChatScreen(
                 )
             }
 
-            // Input area with file attachment
+            // Input area with file attachment, notebook, and speech
             ChatInputArea(
                 text = uiState.inputText,
                 onTextChange = { onEvent(ChatEvent.UpdateInput(it)) },
                 onSend = { onEvent(ChatEvent.SendMessage) },
                 onAttachFile = { filePickerLauncher.launch("*/*") },
+                onAttachNotebook = { showNotebookPicker = true },
+                onSpeechInput = { showSpeechInput = true },
                 isLoading = uiState.isLoading,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(8.dp)
             )
         }
+    }
+
+    // Notebook picker dialog
+    if (showNotebookPicker && notebookListViewModel != null) {
+        com.penpal.feature.notebooks.NotebookPickerDialog(
+            viewModel = notebookListViewModel,
+            onNotebookSelected = { notebookId, title ->
+                onEvent(ChatEvent.AttachNotebook(notebookId))
+                showNotebookPicker = false
+            },
+            onDismiss = { showNotebookPicker = false }
+        )
+    }
+
+    // Speech input dialog
+    if (showSpeechInput) {
+        SpeechInputDialog(
+            onResult = { text ->
+                if (text.isNotBlank()) {
+                    onEvent(ChatEvent.UpdateInput(uiState.inputText + text))
+                }
+                showSpeechInput = false
+            },
+            onDismiss = { showSpeechInput = false }
+        )
     }
 }
 
@@ -505,12 +541,54 @@ private fun MessageBubble(
                 )
                 .padding(12.dp)
         ) {
-            Text(
-                text = message.content,
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (isUser) MaterialTheme.colorScheme.onPrimary
-                else MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            if (isUser || message.parts.isEmpty()) {
+                // User messages or legacy messages without parts
+                Text(
+                    text = message.content,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (isUser) MaterialTheme.colorScheme.onPrimary
+                    else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                // Assistant message with structured parts
+                message.parts.forEach { part ->
+                    when (part) {
+                        is MessagePart.TextPart -> {
+                            MarkdownText(
+                                text = part.text,
+                                modifier = Modifier.fillMaxWidth(),
+                                style = MaterialTheme.typography.bodyMedium.copy(
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            )
+                        }
+                        is MessagePart.ReasoningPart -> {
+                            ReasoningBlock(part = part)
+                        }
+                        is MessagePart.ToolCallPart -> {
+                            ToolCallBlock(part = part)
+                        }
+                        is MessagePart.ToolResponsePart -> {
+                            ToolResponseBlock(part = part)
+                        }
+                        is MessagePart.ImagePart -> {
+                            Text(
+                                text = "[Image: ${part.description.take(100)}]",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                            )
+                        }
+                        is MessagePart.AudioPart -> {
+                            Text(
+                                text = "[Audio: ${part.transcription.take(100)}]",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
+            }
 
             if (message.sources.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(4.dp))
@@ -521,6 +599,164 @@ private fun MessageBubble(
                     else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun ReasoningBlock(part: MessagePart.ReasoningPart) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.5f)
+        ),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Column(modifier = Modifier.padding(8.dp)) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded },
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Info,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.onTertiaryContainer
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = if (part.isComplete) "Thinking" else "Thinking...",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onTertiaryContainer
+                    )
+                }
+                Icon(
+                    imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = if (expanded) "Collapse" else "Expand",
+                    modifier = Modifier.size(16.dp),
+                    tint = MaterialTheme.colorScheme.onTertiaryContainer
+                )
+            }
+
+            AnimatedVisibility(visible = expanded) {
+                Column {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = part.text,
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
+                        ),
+                        color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.8f)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ToolCallBlock(part: MessagePart.ToolCallPart) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer
+        ),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Column(modifier = Modifier.padding(8.dp)) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded },
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    val statusColor = when (part.status) {
+                        ToolStatus.PENDING -> MaterialTheme.colorScheme.primary
+                        ToolStatus.RUNNING -> MaterialTheme.colorScheme.tertiary
+                        ToolStatus.COMPLETED -> MaterialTheme.colorScheme.primary
+                        ToolStatus.ERROR -> MaterialTheme.colorScheme.error
+                    }
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .background(statusColor, CircleShape)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Tool: ${part.name}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                }
+                Icon(
+                    imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = if (expanded) "Collapse" else "Expand",
+                    modifier = Modifier.size(16.dp),
+                    tint = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+            }
+
+            AnimatedVisibility(visible = expanded) {
+                Column {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = part.rawJson,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(
+                                MaterialTheme.colorScheme.background.copy(alpha = 0.5f),
+                                RoundedCornerShape(4.dp)
+                            )
+                            .padding(8.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ToolResponseBlock(part: MessagePart.ToolResponsePart) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = if (part.isError)
+                MaterialTheme.colorScheme.errorContainer
+            else
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+        ),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Column(modifier = Modifier.padding(8.dp)) {
+            Text(
+                text = if (part.isError) "Error" else "Result",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (part.isError)
+                    MaterialTheme.colorScheme.onErrorContainer
+                else
+                    MaterialTheme.colorScheme.onPrimaryContainer
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = part.output,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (part.isError)
+                    MaterialTheme.colorScheme.onErrorContainer
+                else
+                    MaterialTheme.colorScheme.onPrimaryContainer
+            )
         }
     }
 }
@@ -583,18 +819,34 @@ private fun ChatInputArea(
     onTextChange: (String) -> Unit,
     onSend: () -> Unit,
     onAttachFile: () -> Unit,
+    onAttachNotebook: () -> Unit,
+    onSpeechInput: () -> Unit,
     isLoading: Boolean,
     modifier: Modifier = Modifier
 ) {
     Row(
         modifier = modifier,
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         IconButton(onClick = onAttachFile) {
             Icon(
                 imageVector = Icons.Default.AttachFile,
                 contentDescription = "Attach file"
+            )
+        }
+
+        IconButton(onClick = onAttachNotebook) {
+            Icon(
+                imageVector = Icons.Default.Book,
+                contentDescription = "Attach notebook"
+            )
+        }
+
+        IconButton(onClick = onSpeechInput) {
+            Icon(
+                imageVector = Icons.Default.Mic,
+                contentDescription = "Voice input"
             )
         }
 
@@ -640,4 +892,95 @@ private fun getMimeType(uri: Uri): String {
         path.endsWith(".mp3") || path.endsWith(".wav") || path.endsWith(".m4a") -> "audio/*"
         else -> "application/octet-stream"
     }
+}
+
+/**
+ * Dialog for speech input using Android SpeechRecognizer.
+ */
+@Composable
+private fun SpeechInputDialog(
+    onResult: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var recognizedText by remember { mutableStateOf("") }
+    var isListening by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+
+    val speechRecognizer = remember { com.penpal.core.processing.StreamingSpeechRecognizer(context) }
+
+    DisposableEffect(Unit) {
+        onDispose { speechRecognizer.destroy() }
+    }
+
+    LaunchedEffect(Unit) {
+        if (!speechRecognizer.isAvailable()) {
+            errorMessage = "Speech recognition not available on this device"
+            return@LaunchedEffect
+        }
+        isListening = true
+        speechRecognizer.streamTranscription(timeoutMs = 30000).collect { result ->
+            when (result) {
+                is com.penpal.core.processing.SpeechResult.Partial -> {
+                    recognizedText = result.text
+                }
+                is com.penpal.core.processing.SpeechResult.Final -> {
+                    recognizedText = result.text
+                    isListening = false
+                }
+                is com.penpal.core.processing.SpeechResult.Error -> {
+                    errorMessage = result.message
+                    isListening = false
+                }
+                else -> {}
+            }
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = {
+            speechRecognizer.stopListening()
+            onResult(recognizedText)
+            onDismiss()
+        },
+        title = { Text(if (isListening) "Listening..." else "Voice Input") },
+        text = {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                if (isListening) {
+                    CircularProgressIndicator(modifier = Modifier.size(48.dp))
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text("Speak now")
+                } else if (errorMessage != null) {
+                    Text(
+                        text = errorMessage!!,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                } else if (recognizedText.isNotBlank()) {
+                    Text(recognizedText)
+                } else {
+                    Text("No speech recognized")
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                speechRecognizer.stopListening()
+                onResult(recognizedText)
+                onDismiss()
+            }) {
+                Text("Use Text")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = {
+                speechRecognizer.stopListening()
+                onDismiss()
+            }) {
+                Text("Cancel")
+            }
+        }
+    )
 }

@@ -23,6 +23,7 @@ dependencies {
     api(project(":core:data"))
     api(project(":core:processing"))
     api(project(":core:ui"))
+    api(project(":feature:notebooks"))
 
     api("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.4")
     api("androidx.lifecycle:lifecycle-runtime-compose:2.8.4")
