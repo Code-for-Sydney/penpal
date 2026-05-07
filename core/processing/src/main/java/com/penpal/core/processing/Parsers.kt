@@ -17,6 +17,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.jsoup.Jsoup
+import java.io.File
 import java.util.UUID
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -127,14 +128,35 @@ class AudioParser(
                 val fileSize = inputStream.available()
                 val fileName = uri.lastPathSegment ?: "unknown"
 
-                // For now, audio transcription requires a dedicated model (e.g., Whisper)
-                // which is not yet integrated. Return metadata placeholder.
+                // Try to transcribe using available transcriber
+                val transcriber = CompositeTranscriber(context)
+                val transcription = if (transcriber.isAvailable()) {
+                    try {
+                        // Copy to temp file for transcription
+                        val tempFile = File(context.cacheDir, "temp_audio_${System.currentTimeMillis()}.wav")
+                        inputStream.copyTo(tempFile.outputStream())
+                        val result = transcriber.transcribe(tempFile)
+                        tempFile.delete()
+                        if (result.success) result.text else null
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Transcription failed for $fileName: ${e.message}")
+                        null
+                    }
+                } else null
+
+                val content = if (transcription != null) {
+                    "[Audio file: $fileName, Size: ${fileSize / 1024}KB]\n\nTranscription:\n$transcription"
+                } else {
+                    "[Audio file: $fileName, Size: ${fileSize / 1024}KB]\n" +
+                    "Audio transcription requires a speech-to-text model. " +
+                    "Use Android SpeechRecognizer for short clips (via mic button in chat) " +
+                    "or download Whisper ONNX model for file transcription."
+                }
+
                 listOf(RawChunk(
                     UUID.randomUUID().toString(),
                     uri.toString(),
-                    "[Audio file: $fileName, Size: ${fileSize / 1024}KB]\n" +
-                    "Audio transcription requires a speech-to-text model. " +
-                    "Consider using Android SpeechRecognizer for short clips or integrate Whisper for file transcription.",
+                    content,
                     0
                 ))
             } ?: emptyList()
