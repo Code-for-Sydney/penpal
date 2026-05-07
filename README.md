@@ -192,7 +192,7 @@ Since Penpal uses LiteRT-LM directly (not Vercel AI SDK), custom token parsing c
 
 The `StreamingTokenFilter` now uses smart spacing logic with `lastEmittedChar` tracking to prevent spurious line breaks while preserving natural paragraph structure. The text splitting issue has been resolved.
 
-**Status**: ✅ Resolved — see [ARCHITECTURE.md](./ARCHITECTURE.md) for details.
+**Status**: ✅ Resolved — see [ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
 
 ## Supported Model Sources
 

@@ -7,17 +7,23 @@ This directory contains documentation for the Penpal Android application.
 | File | Description |
 |------|-------------|
 | [README.md](../README.md) | Project overview, features, setup instructions |
-| [ARCHITECTURE.md](../ARCHITECTURE.md) | System design, component relationships, data flow |
-| [DEVELOPMENT.md](../DEVELOPMENT.md) | Development guidelines, testing, contribution |
-| [CHANGELOG.md](../CHANGELOG.md) | Version history and notable changes |
-| [TODO.md](../TODO.md) | Current tasks, known issues, and next steps |
-| [MIGRATION.md](../MIGRATION.md) | v1.x to v2.x migration guide and phase tracking |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | System design, component relationships, data flow |
+| [DEVELOPMENT.md](DEVELOPMENT.md) | Development guidelines, testing, contribution |
+| [CHANGELOG.md](CHANGELOG.md) | Version history and notable changes |
+| [TODO.md](TODO.md) | Current tasks, known issues, and next steps |
+| [MIGRATION.md](MIGRATION.md) | v1.x to v2.x migration guide and phase tracking |
+| [CORE_AI.md](CORE_AI.md) | AI inference architecture, LiteRT-LM integration, token filtering |
+| [FEATURES.md](FEATURES.md) | Feature notes by tab/module |
+| [DATA_AND_PROCESSING.md](DATA_AND_PROCESSING.md) | Data layer, document parsing, WorkManager |
+| [MODULES.md](MODULES.md) | Gradle module setup and dependencies |
+| [THREADING.md](THREADING.md) | UI vs inference threading model |
 
 ## Quick Links
 
 - **Getting Started**: See [README.md](../README.md#installation)
-- **Architecture**: See [ARCHITECTURE.md](../ARCHITECTURE.md)
-- **Contributing**: See [DEVELOPMENT.md](../DEVELOPMENT.md#contributing)
+- **Architecture**: See [ARCHITECTURE.md](ARCHITECTURE.md)
+- **Contributing**: See [DEVELOPMENT.md](DEVELOPMENT.md#contributing)
+- **AI/Inference**: See [CORE_AI.md](CORE_AI.md)
 
 ## Project Overview
 

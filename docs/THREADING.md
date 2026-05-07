@@ -3,25 +3,15 @@
 ## Dispatcher assignment
 
 ```kotlin
-// core/ai/src/main/kotlin/ai/Dispatchers.kt
-@Module
-@InstallIn(SingletonComponent::class)
-object DispatcherModule {
-
-    @Provides @DefaultDispatcher
-    fun provideDefaultDispatcher(): CoroutineDispatcher = Dispatchers.Default
-
-    @Provides @IoDispatcher
-    fun provideIoDispatcher(): CoroutineDispatcher = Dispatchers.IO
-
-    @Provides @MainDispatcher
-    fun provideMainDispatcher(): CoroutineDispatcher = Dispatchers.Main
+// Dispatchers are used directly — no custom module needed
+object Dispatchers {
+    val Default = kotlinx.coroutines.Dispatchers.Default
+    val IO = kotlinx.coroutines.Dispatchers.IO
+    val Main = kotlinx.coroutines.Dispatchers.Main
 }
-
-@Qualifier @Retention(AnnotationRetention.BINARY) annotation class DefaultDispatcher
-@Qualifier @Retention(AnnotationRetention.BINARY) annotation class IoDispatcher
-@Qualifier @Retention(AnnotationRetention.BINARY) annotation class MainDispatcher
 ```
+
+**Note:** The project uses manual dependency injection via `PenpalApplication` lazy singletons. Standard Kotlin dispatchers are passed directly to ViewModels and repositories.
 
 ---
 
@@ -30,12 +20,11 @@ object DispatcherModule {
 ViewModels never call suspend functions directly on Main. They launch into the right dispatcher and expose `StateFlow` to Compose.
 
 ```kotlin
-@HiltViewModel
-class ProcessViewModel @Inject constructor(
+class ProcessViewModel(
     private val extractionRepo: ExtractionRepository,
     private val inferenceEngine: InferenceEngine,
-    @IoDispatcher private val ioDispatcher: CoroutineDispatcher,
-    @DefaultDispatcher private val defaultDispatcher: CoroutineDispatcher,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val defaultDispatcher: CoroutineDispatcher = Dispatchers.Default,
 ) : ViewModel() {
 
     private val _queue = MutableStateFlow<List<ExtractionJob>>(emptyList())
@@ -68,9 +57,9 @@ Runs entirely on `Dispatchers.Default`. Never touches Room directly — reads fr
 
 ```kotlin
 // core/ai/src/main/kotlin/ai/InferenceEngine.kt
-class InferenceEngine @Inject constructor(
+class InferenceEngine(
     private val vectorStore: VectorStoreRepository,
-    @DefaultDispatcher private val dispatcher: CoroutineDispatcher,
+    private val dispatcher: CoroutineDispatcher = Dispatchers.Default,
 ) {
     private val session: OrtSession by lazy { loadOnnxSession() }
 
@@ -100,7 +89,7 @@ class InferenceEngine @Inject constructor(
 Use a `Channel` when the UI needs to fire-and-forget into a background pipeline without coupling to the result directly.
 
 ```kotlin
-// In a @ActivityRetainedScoped ViewModel
+// In a ViewModel (activity-scoped)
 private val _ingestionChannel = Channel<IngestionRequest>(capacity = Channel.BUFFERED)
 
 init {
@@ -124,10 +113,9 @@ Long-running jobs (PDF parsing, WAV transcription, YouTube download+extract) lea
 
 ```kotlin
 // core/processing/src/main/kotlin/processing/ExtractionWorker.kt
-@HiltWorker
-class ExtractionWorker @AssistedInject constructor(
-    @Assisted ctx: Context,
-    @Assisted params: WorkerParameters,
+class ExtractionWorker(
+    ctx: Context,
+    params: WorkerParameters,
     private val parser: DocumentParser,
     private val vectorStore: VectorStoreRepository,
 ) : CoroutineWorker(ctx, params) {
@@ -194,8 +182,8 @@ fun observeJob(workId: UUID): Flow<ExtractionStatus> =
 
 ```kotlin
 // core/media/src/main/kotlin/media/AudioRecorder.kt
-class AudioRecorder @Inject constructor(
-    @IoDispatcher private val ioDispatcher: CoroutineDispatcher,
+class AudioRecorder(
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) {
     suspend fun record(outputFile: File, durationMs: Long): Flow<Int> = flow {
         val recorder = MediaRecorder().apply {
