@@ -26,6 +26,7 @@ import com.penpal.feature.notebooks.NotebookListScreen
 import com.penpal.feature.notebooks.NotebookListViewModel
 import com.penpal.feature.settings.SettingsScreen
 import com.penpal.feature.settings.SettingsViewModel
+import com.penpal.core.ai.ModelStatus
 
 /**
  * Screen routes for bottom navigation.
@@ -86,6 +87,24 @@ fun MainScreen(
         NotebookListViewModel(notebookDao = database.notebookDao())
     }
 
+    // Shared model status across all tabs
+    val isModelReady by app.inferenceBridge.isReady.collectAsState()
+    val modelStatus by app.inferenceBridge.modelStatus.collectAsState()
+    val isModelUnloading by app.inferenceBridge.isUnloading.collectAsState()
+
+    // Toggle model handler - load/unload
+    val onToggleModel: () -> Unit = {
+        val bridge = app.inferenceBridge
+        if (isModelReady) {
+            bridge.unloadModel()
+        } else if (modelStatus == ModelStatus.DOWNLOADED) {
+            val modelPath = com.penpal.core.ai.ModelManager.findExistingModel(app)
+            if (modelPath != null) {
+                bridge.loadModel(app, modelPath) { }
+            }
+        }
+    }
+
     Scaffold(
         bottomBar = {
             NavigationBar {
@@ -123,6 +142,7 @@ fun MainScreen(
                     ChatViewModel(
                         vectorStore = app.vectorStore,
                         inferenceBridge = app.inferenceBridge,
+                        application = app,
                         chatMessageDao = database.chatMessageDao(),
                         chatConversationDao = database.chatConversationDao(),
                         notebookDao = database.notebookDao(),
@@ -139,7 +159,12 @@ fun MainScreen(
                     onNavigateToChatWithNotebook = { notebookId ->
                         navController.navigate(ChatRoutes.chatWithNotebookRoute(notebookId))
                     },
-                    notebookListViewModel = notebookListViewModel
+                    notebookListViewModel = notebookListViewModel,
+                    isModelReady = isModelReady,
+                    isModelLoading = modelStatus == ModelStatus.DOWNLOADING,
+                    isModelUnloading = isModelUnloading,
+                    modelStatus = modelStatus,
+                    onToggleModel = if (modelStatus == ModelStatus.DOWNLOADED || isModelReady) onToggleModel else null
                 )
             }
 
@@ -150,6 +175,7 @@ fun MainScreen(
                     ChatViewModel(
                         vectorStore = app.vectorStore,
                         inferenceBridge = app.inferenceBridge,
+                        application = app,
                         chatMessageDao = database.chatMessageDao(),
                         chatConversationDao = database.chatConversationDao(),
                         notebookDao = database.notebookDao(),
@@ -174,7 +200,12 @@ fun MainScreen(
                     onNavigateToChatWithNotebook = { navNotebookId ->
                         navController.navigate(ChatRoutes.chatWithNotebookRoute(navNotebookId))
                     },
-                    notebookListViewModel = notebookListViewModel
+                    notebookListViewModel = notebookListViewModel,
+                    isModelReady = isModelReady,
+                    isModelLoading = modelStatus == ModelStatus.DOWNLOADING,
+                    isModelUnloading = isModelUnloading,
+                    modelStatus = modelStatus,
+                    onToggleModel = if (modelStatus == ModelStatus.DOWNLOADED || isModelReady) onToggleModel else null
                 )
             }
 
@@ -196,6 +227,11 @@ fun MainScreen(
                             launchSingleTop = true
                         }
                     },
+                    isModelReady = isModelReady,
+                    isModelLoading = modelStatus == ModelStatus.DOWNLOADING,
+                    isModelUnloading = isModelUnloading,
+                    modelStatus = modelStatus,
+                    onToggleModel = if (modelStatus == ModelStatus.DOWNLOADED || isModelReady) onToggleModel else null,
                     modifier = Modifier.fillMaxSize()
                 )
             }
@@ -282,7 +318,12 @@ fun MainScreen(
                 val uiState by viewModel.uiState.collectAsState()
                 SettingsScreen(
                     uiState = uiState,
-                    onEvent = viewModel::onEvent
+                    onEvent = viewModel::onEvent,
+                    isModelReady = isModelReady,
+                    isModelLoading = modelStatus == ModelStatus.DOWNLOADING,
+                    isModelUnloading = isModelUnloading,
+                    modelStatus = modelStatus,
+                    onToggleModel = if (modelStatus == ModelStatus.DOWNLOADED || isModelReady) onToggleModel else null
                 )
             }
         }
