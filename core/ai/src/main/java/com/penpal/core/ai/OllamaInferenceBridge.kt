@@ -36,6 +36,9 @@ class OllamaInferenceBridge(
     private val _isDownloading = MutableStateFlow(false)
     override val isDownloading: StateFlow<Boolean> = _isDownloading.asStateFlow()
 
+    private val _isUnloading = MutableStateFlow(false)
+    override val isUnloading: StateFlow<Boolean> = _isUnloading.asStateFlow()
+
     private val _downloadProgress = MutableStateFlow(DownloadProgress())
     override val downloadProgress: StateFlow<DownloadProgress> = _downloadProgress.asStateFlow()
 
@@ -276,6 +279,16 @@ class OllamaInferenceBridge(
 
     override fun resetConversation() {
         inferenceJob?.cancel()
+    }
+
+    override fun unloadModel() {
+        _isUnloading.value = true
+        inferenceJob?.cancel()
+        _isReady.value = false
+        _isProcessing.value = false
+        _modelStatus.value = ModelStatus.NOT_DOWNLOADED
+        Log.d(TAG, "Ollama model unloaded")
+        _isUnloading.value = false
     }
 
     override fun stopInference() {
