@@ -1,4 +1,4 @@
-package com.penpal.feature.notebooks
+package com.penpal.feature.stacks
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -20,15 +20,15 @@ import java.text.SimpleDateFormat
 import java.util.*
 
 /**
- * Notebook List Screen - displays all saved notebooks
+ * Stack List Screen - displays all saved notebooks
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun NotebookListScreen(
-    viewModel: NotebookListViewModel,
-    onNotebookSelected: (String) -> Unit,
+fun StackListScreen(
+    viewModel: StackListViewModel,
+    onStackSelected: (String) -> Unit,
     onCreateNew: () -> Unit,
-    onChatWithNotebook: ((String) -> Unit)? = null,
+    onChatWithStack: ((String) -> Unit)? = null,
     isModelReady: Boolean = false,
     isModelLoading: Boolean = false,
     isModelUnloading: Boolean = false,
@@ -77,7 +77,7 @@ fun NotebookListScreen(
             }
         } else if (uiState.notebooks.isEmpty()) {
             // Empty state
-            EmptyNotebooksState(
+            EmptyStacksState(
                 onCreateNew = onCreateNew,
                 modifier = Modifier
                     .fillMaxSize()
@@ -95,11 +95,11 @@ fun NotebookListScreen(
                     items = uiState.notebooks,
                     key = { it.id }
                 ) { notebook ->
-                    NotebookCard(
+                    StackCard(
                         notebook = notebook,
-                        onClick = { onNotebookSelected(notebook.id) },
+                        onClick = { onStackSelected(notebook.id) },
                         onDelete = { viewModel.showDeleteConfirmation(notebook) },
-                        onChat = onChatWithNotebook?.let { { it(notebook.id) } }
+                        onChat = onChatWithStack?.let { { it(notebook.id) } }
                     )
                 }
             }
@@ -111,7 +111,7 @@ fun NotebookListScreen(
         AlertDialog(
             onDismissRequest = { viewModel.dismissDeleteConfirmation() },
             icon = { Icon(Icons.Default.Delete, contentDescription = null) },
-            title = { Text("Delete Notebook?") },
+            title = { Text("Delete Stack?") },
             text = {
                 Text("Are you sure you want to delete \"${uiState.notebookToDelete!!.title}\"? This cannot be undone.")
             },
@@ -149,8 +149,8 @@ fun NotebookListScreen(
 }
 
 @Composable
-private fun NotebookCard(
-    notebook: NotebookSummary,
+private fun StackCard(
+    notebook: StackSummary,
     onClick: () -> Unit,
     onDelete: () -> Unit,
     onChat: (() -> Unit)? = null
@@ -229,7 +229,7 @@ private fun NotebookCard(
 }
 
 @Composable
-private fun EmptyNotebooksState(
+private fun EmptyStacksState(
     onCreateNew: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -261,7 +261,7 @@ private fun EmptyNotebooksState(
         Button(onClick = onCreateNew) {
             Icon(Icons.Default.Add, contentDescription = null)
             Spacer(Modifier.width(8.dp))
-            Text("Create Notebook")
+            Text("Create Stack")
         }
     }
 }

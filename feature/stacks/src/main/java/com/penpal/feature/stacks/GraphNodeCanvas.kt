@@ -1,4 +1,4 @@
-package com.penpal.feature.notebooks
+package com.penpal.feature.stacks
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background

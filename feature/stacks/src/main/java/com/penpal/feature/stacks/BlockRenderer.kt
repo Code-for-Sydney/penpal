@@ -1,4 +1,4 @@
-package com.penpal.feature.notebooks
+package com.penpal.feature.stacks
 
 import android.annotation.SuppressLint
 import android.graphics.Color

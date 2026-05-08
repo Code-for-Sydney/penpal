@@ -1,4 +1,4 @@
-package com.penpal.feature.notebooks
+package com.penpal.feature.stacks
 
 import android.net.Uri
 import androidx.compose.ui.geometry.Offset
@@ -55,14 +55,16 @@ sealed class Block {
         val type: EmbedType = EmbedType.LINK
     ) : Block()
 
-    /** A file processing block (PDF, Audio, Image, Code, URL) */
+    /** A media processing block (Image, Audio, Video, Text) */
     data class ProcessBlock(
         override val id: String,
         val sourceUri: String = "",
-        val sourceType: ProcessSourceType = ProcessSourceType.FILE,
+        val mediaType: MediaType = MediaType.TEXT,
         val status: ProcessStatus = ProcessStatus.PENDING,
+        val progress: Int = 0,  // 0-100 processing progress
         val extractedText: String = "",
-        val errorMessage: String? = null
+        val errorMessage: String? = null,
+        val showParsedContent: Boolean = true
     ) : Block()
 }
 
@@ -70,8 +72,8 @@ enum class EmbedType {
     LINK, AUDIO, VIDEO, FILE
 }
 
-enum class ProcessSourceType {
-    PDF, AUDIO, IMAGE, URL, CODE, FILE
+enum class MediaType {
+    IMAGE, AUDIO, VIDEO, TEXT
 }
 
 enum class ProcessStatus {
@@ -109,24 +111,26 @@ enum class EdgeType {
 }
 
 /** Document containing a list of blocks */
-data class NotebookDocument(
+data class StackDocument(
     val id: String,
     val title: String,
     val blocks: List<Block> = emptyList(),
+    val systemPrompt: String = "",      // Defines the overall goal for processing
+    val agentPrompt: String = "",        // Guides the thinking/processing approach
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )
 
 /** State for the notebook editor */
-data class NotebookEditorState(
-    val document: NotebookDocument = NotebookEditorState.EmptyDocument,
+data class StackEditorState(
+    val document: StackDocument = StackEditorState.EmptyDocument,
     val selectedBlockId: String? = null,
     val isLoading: Boolean = false,
     val error: String? = null,
     val isDirty: Boolean = false  // Has unsaved changes
 ) {
     companion object {
-        val EmptyDocument = NotebookDocument(
+        val EmptyDocument = StackDocument(
             id = "",
             title = "Untitled",
             blocks = emptyList()
@@ -135,25 +139,30 @@ data class NotebookEditorState(
 }
 
 /** Events that can be triggered in the editor */
-sealed class NotebookEvent {
-    data class AddBlock(val block: Block, val afterBlockId: String? = null) : NotebookEvent()
-    data class RemoveBlock(val blockId: String) : NotebookEvent()
-    data class MoveBlock(val blockId: String, val newIndex: Int) : NotebookEvent()
-    data class UpdateBlock(val block: Block) : NotebookEvent()
-    data class SelectBlock(val blockId: String?) : NotebookEvent()
-    data class UpdateGraphNode(val node: GraphNode) : NotebookEvent()
-    data class AddGraphEdge(val edge: GraphEdge) : NotebookEvent()
-    data class UpdateDocumentTitle(val title: String) : NotebookEvent()
-    object SaveDocument : NotebookEvent()
-    object LoadDocument : NotebookEvent()
-    object DeleteDocument : NotebookEvent()
-    data class SetImageUri(val blockId: String, val uri: Uri) : NotebookEvent()
-    data class AddProcessBlock(val sourceType: ProcessSourceType, val afterBlockId: String? = null) : NotebookEvent()
-    data class UpdateProcessBlockStatus(val blockId: String, val status: ProcessStatus, val text: String = "", val error: String? = null) : NotebookEvent()
+sealed class StackEvent {
+    data class AddBlock(val block: Block, val afterBlockId: String? = null) : StackEvent()
+    data class RemoveBlock(val blockId: String) : StackEvent()
+    data class MoveBlock(val blockId: String, val newIndex: Int) : StackEvent()
+    data class UpdateBlock(val block: Block) : StackEvent()
+    data class SelectBlock(val blockId: String?) : StackEvent()
+    data class UpdateGraphNode(val node: GraphNode) : StackEvent()
+    data class AddGraphEdge(val edge: GraphEdge) : StackEvent()
+    data class UpdateDocumentTitle(val title: String) : StackEvent()
+    data class UpdateSystemPrompt(val prompt: String) : StackEvent()
+    data class UpdateAgentPrompt(val prompt: String) : StackEvent()
+    data class ToggleProcessView(val blockId: String) : StackEvent()
+    object SaveDocument : StackEvent()
+    object LoadDocument : StackEvent()
+    object DeleteDocument : StackEvent()
+    data class SetImageUri(val blockId: String, val uri: Uri) : StackEvent()
+    data class AddProcessBlock(val mediaType: MediaType, val afterBlockId: String? = null) : StackEvent()
+    data class UpdateProcessBlockStatus(val blockId: String, val status: ProcessStatus, val text: String = "", val error: String? = null) : StackEvent()
+    data class ReprocessBlock(val blockId: String) : StackEvent()
+    data class ProcessBlockWithAI(val blockId: String) : StackEvent()
 }
 
 /** UI events from the screen (not stored in state) */
-sealed class NotebookScreenEvent {
-    data object NavigateToHome : NotebookScreenEvent()
-    data class PickImage(val blockId: String) : NotebookScreenEvent()
+sealed class StackScreenEvent {
+    data object NavigateToHome : StackScreenEvent()
+    data class PickImage(val blockId: String) : StackScreenEvent()
 }

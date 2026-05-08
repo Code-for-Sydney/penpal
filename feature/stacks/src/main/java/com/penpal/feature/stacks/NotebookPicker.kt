@@ -1,4 +1,4 @@
-package com.penpal.feature.notebooks
+package com.penpal.feature.stacks
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -19,17 +19,17 @@ import kotlinx.coroutines.launch
 
 /**
  * Reusable notebook picker bottom sheet.
- * Can be used from Chat (to attach notebooks) or from Notebook list (to start chat).
+ * Can be used from Chat (to attach notebooks) or from Stack list (to start chat).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun NotebookPickerBottomSheet(
-    viewModel: NotebookListViewModel,
-    onNotebookSelected: (String, String) -> Unit,
+fun StackPickerBottomSheet(
+    viewModel: StackListViewModel,
+    onStackSelected: (String, String) -> Unit,
     onDismiss: () -> Unit,
-    title: String = "Select Notebook",
+    title: String = "Select Stack",
     showChatAction: Boolean = false,
-    onChatWithNotebook: ((String, String) -> Unit)? = null,
+    onChatWithStack: ((String, String) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -72,13 +72,13 @@ fun NotebookPickerBottomSheet(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Notebook list
-            val filteredNotebooks = uiState.notebooks.filter {
+            // Stack list
+            val filteredStacks = uiState.notebooks.filter {
                 it.title.contains(searchQuery, ignoreCase = true) ||
                 it.preview.contains(searchQuery, ignoreCase = true)
             }
 
-            if (filteredNotebooks.isEmpty()) {
+            if (filteredStacks.isEmpty()) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -96,12 +96,12 @@ fun NotebookPickerBottomSheet(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.heightIn(max = 400.dp)
                 ) {
-                    items(filteredNotebooks, key = { it.id }) { notebook ->
-                        NotebookPickerItem(
+                    items(filteredStacks, key = { it.id }) { notebook ->
+                        StackPickerItem(
                             notebook = notebook,
-                            onSelect = { onNotebookSelected(notebook.id, notebook.title) },
+                            onSelect = { onStackSelected(notebook.id, notebook.title) },
                             showChatAction = showChatAction,
-                            onChat = { onChatWithNotebook?.invoke(notebook.id, notebook.title) }
+                            onChat = { onChatWithStack?.invoke(notebook.id, notebook.title) }
                         )
                     }
                 }
@@ -111,8 +111,8 @@ fun NotebookPickerBottomSheet(
 }
 
 @Composable
-private fun NotebookPickerItem(
-    notebook: NotebookSummary,
+private fun StackPickerItem(
+    notebook: StackSummary,
     onSelect: () -> Unit,
     showChatAction: Boolean,
     onChat: () -> Unit
@@ -168,16 +168,16 @@ private fun NotebookPickerItem(
  * Simple notebook picker dialog for attaching notebooks to chat.
  */
 @Composable
-fun NotebookPickerDialog(
-    viewModel: NotebookListViewModel,
-    onNotebookSelected: (String, String) -> Unit,
+fun StackPickerDialog(
+    viewModel: StackListViewModel,
+    onStackSelected: (String, String) -> Unit,
     onDismiss: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Attach Notebook") },
+        title = { Text("Attach Stack") },
         text = {
             if (uiState.notebooks.isEmpty()) {
                 Text("No notebooks available. Create one in the Think tab.")
@@ -187,7 +187,7 @@ fun NotebookPickerDialog(
                 ) {
                     items(uiState.notebooks, key = { it.id }) { notebook ->
                         TextButton(
-                            onClick = { onNotebookSelected(notebook.id, notebook.title) },
+                            onClick = { onStackSelected(notebook.id, notebook.title) },
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Row(

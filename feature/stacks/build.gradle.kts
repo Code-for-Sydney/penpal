@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "com.penpal.feature.notebooks"
+    namespace = "com.penpal.feature.stacks"
     compileSdk = 34
 
     compileOptions {
@@ -21,6 +21,7 @@ android {
 dependencies {
     api(project(":core:ai"))
     api(project(":core:data"))
+    api(project(":core:media"))
     api(project(":core:processing"))
     api(project(":core:ui"))
 

@@ -1,4 +1,4 @@
-package com.penpal.feature.notebooks
+package com.penpal.feature.stacks
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -13,18 +13,18 @@ import kotlinx.coroutines.launch
 /**
  * UI State for the notebook list screen
  */
-data class NotebookListUiState(
-    val notebooks: List<NotebookSummary> = emptyList(),
+data class StackListUiState(
+    val notebooks: List<StackSummary> = emptyList(),
     val isLoading: Boolean = false,
     val error: String? = null,
     val showDeleteDialog: Boolean = false,
-    val notebookToDelete: NotebookSummary? = null
+    val notebookToDelete: StackSummary? = null
 )
 
 /**
  * Summary of a notebook for list display
  */
-data class NotebookSummary(
+data class StackSummary(
     val id: String,
     val title: String,
     val preview: String,
@@ -35,12 +35,12 @@ data class NotebookSummary(
 /**
  * ViewModel for the notebook list screen
  */
-class NotebookListViewModel(
+class StackListViewModel(
     private val notebookDao: NotebookDao? = null
 ) : ViewModel() {
 
-    private val _uiState = MutableStateFlow(NotebookListUiState())
-    val uiState: StateFlow<NotebookListUiState> = _uiState.asStateFlow()
+    private val _uiState = MutableStateFlow(StackListUiState())
+    val uiState: StateFlow<StackListUiState> = _uiState.asStateFlow()
 
     init {
         loadNotebooks()
@@ -55,7 +55,7 @@ class NotebookListViewModel(
             try {
                 notebookDao?.getAllNotebooks()?.collect { entities ->
                     val summaries = entities.map { entity ->
-                        NotebookSummary(
+                        StackSummary(
                             id = entity.id,
                             title = entity.title,
                             preview = extractPreview(entity.blocksJson),
@@ -85,7 +85,7 @@ class NotebookListViewModel(
     /**
      * Shows delete confirmation dialog
      */
-    fun showDeleteConfirmation(notebook: NotebookSummary) {
+    fun showDeleteConfirmation(notebook: StackSummary) {
         _uiState.update {
             it.copy(
                 showDeleteDialog = true,
