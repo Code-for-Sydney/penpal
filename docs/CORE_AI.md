@@ -124,6 +124,7 @@ The `InferenceBridge` is the primary contract for all LLM inference operations.
 - `isDownloading: StateFlow<Boolean>` — Model download active
 - `downloadProgress: StateFlow<DownloadProgress>` — Download progress tracking
 - `modelStatus: StateFlow<ModelStatus>` — Current model status (NOT_DOWNLOADED, DOWNLOADING, DOWNLOADED, ERROR)
+- `isUnloading: StateFlow<Boolean>` — Model unload in progress
 
 **Core Operations:**
 - `initialize(context, modelName, backend, onDone)` — Initialize model
@@ -138,6 +139,7 @@ The `InferenceBridge` is the primary contract for all LLM inference operations.
 - `runInferenceWithImageFlowParts(input, image): Flow<List<MessagePart>>` — Streaming multimodal with structured parts
 - `resetConversation()` — Clear conversation history
 - `stopInference()` — Cancel ongoing inference
+- `unloadModel()` — Release model resources while keeping model file on disk
 - `release()` — Free all resources
 
 **Data Classes:**
@@ -167,8 +169,9 @@ Implementation using **Google AI Edge LiteRT-LM** for on-device inference.
 **Backend Initialization:**
 - Default: GPU first, fallback to CPU
 - Configurable: GPU-only, CPU-only, or auto
-- EngineConfig: `maxNumImages=1`, `maxNumTokens=4096`
+- EngineConfig: `maxNumImages=1`, `maxNumTokens=8192`
 - SamplerConfig: `topK=64`, `topP=0.95`, `temperature=0.7`
+- Added `initialize()` guard to avoid re-initializing already loaded model
 
 **LiteRT-LM Kotlin API Usage Pattern:**
 ```kotlin
@@ -178,7 +181,7 @@ val engineConfig = EngineConfig(
     visionBackend = Backend.GPU(),
     audioBackend = Backend.CPU(),
     maxNumImages = 1,
-    maxNumTokens = 4096
+    maxNumTokens = 8192
 )
 val engine = Engine(engineConfig)
 engine.initialize()

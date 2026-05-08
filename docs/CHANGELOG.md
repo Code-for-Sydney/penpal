@@ -4,6 +4,69 @@ All notable changes to the Penpal project.
 
 ## [Unreleased]
 
+### Model Toggle Feature — Load/Unload via UI (May 2026)
+
+**Commits:** `67d7337` `44177db` `4c39197` `f025820` `e273106` `e61e20b` `636096c`
+
+#### InferenceBridge Interface Updates ✅
+
+**`core/ai/InferenceBridge.kt`**:
+- Added `isUnloading: StateFlow<Boolean>` — Tracks model unloading state
+- Added `unloadModel()` method — Releases model resources while keeping model file on disk
+  - Properly closes engine, conversation
+  - Sets `isReady=false`, `modelStatus=DOWNLOADED`
+  - Preserves downloaded model file for quick reload
+
+#### LiteRtInferenceBridge Implementation ✅
+
+**`core/ai/LiteRtInferenceBridge.kt`**:
+- Implemented `_isUnloading` StateFlow
+- Implemented `unloadModel()` method:
+  - Closes conversation if active
+  - Closes engine
+  - Resets `_isReady.value = false`
+  - Sets `_modelStatus.value = ModelStatus.DOWNLOADED`
+- Added guard in `initialize()` to skip initialization if model already loaded
+- Increased `maxNumTokens` from 4096 to 8192 in EngineConfig
+
+#### OllamaInferenceBridge Implementation ✅
+
+**`core/ai/OllamaInferenceBridge.kt`**:
+- Implemented `_isUnloading` StateFlow
+- Implemented `unloadModel()` method — Resets model state for clean unload/reload cycle
+
+#### ModelStatusIndicator Component ✅
+
+**`core/ui/ModelStatusIndicator.kt`** (NEW):
+- Reusable component displaying model status: ON, OFF, Loading, Unloading, ERR
+- Supports click to toggle model load/unload
+- Visual indicators: green (ready), orange (loading/unloading), gray (off), red (error)
+
+#### Shared Model Status Across Tabs ✅
+
+**`app/MainScreen.kt`**:
+- Collects `isModelReady`, `modelStatus`, `isModelUnloading` from inferenceBridge
+- Added `onToggleModel` handler that properly unloads (using `unloadModel()`) or loads model
+- Passed model status params to `ChatScreen`, `NotebookListScreen`, `SettingsScreen`
+- Made indicator clickable only when model is ready or downloaded
+
+#### ChatViewModel Toggle Simplification ✅
+
+**`feature/chat/ChatViewModel.kt`**:
+- Toggle handler moved to MainScreen level to avoid duplication
+- Centralized model toggle logic
+
+#### Module Status
+
+| Module | Status | Description |
+|--------|--------|-------------|
+| core:ai | ✅ Complete | isUnloading, unloadModel in InferenceBridge, LiteRt, Ollama |
+| core:ui | ✅ Complete | ModelStatusIndicator component |
+| app | ✅ Complete | Shared model status across tabs, toggle handler |
+| feature:chat | ✅ Complete | Simplified toggle handler |
+
+---
+
 ### Structured Message Parts Architecture — Opencode-Inspired (May 2026)
 
 **Commits:** `a1b2c3d` `e4f5g6h`
