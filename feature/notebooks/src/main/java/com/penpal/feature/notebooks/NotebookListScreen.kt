@@ -14,6 +14,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.penpal.core.ai.ModelStatus
+import com.penpal.core.ui.ModelStatusIndicator
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -27,6 +29,11 @@ fun NotebookListScreen(
     onNotebookSelected: (String) -> Unit,
     onCreateNew: () -> Unit,
     onChatWithNotebook: ((String) -> Unit)? = null,
+    isModelReady: Boolean = false,
+    isModelLoading: Boolean = false,
+    isModelUnloading: Boolean = false,
+    modelStatus: ModelStatus = ModelStatus.NOT_DOWNLOADED,
+    onToggleModel: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -37,7 +44,16 @@ fun NotebookListScreen(
                 title = { Text("Think") },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface
-                )
+                ),
+                actions = {
+                    ModelStatusIndicator(
+                        isReady = isModelReady,
+                        isLoading = isModelLoading,
+                        isUnloading = isModelUnloading,
+                        modelStatus = modelStatus,
+                        onToggleModel = if (modelStatus == ModelStatus.DOWNLOADED || isModelReady) onToggleModel else null
+                    )
+                }
             )
         },
         floatingActionButton = {
