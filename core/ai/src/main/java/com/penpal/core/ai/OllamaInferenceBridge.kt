@@ -277,6 +277,25 @@ class OllamaInferenceBridge(
     override fun runInferenceWithImageFlowParts(input: String, image: Bitmap): Flow<List<MessagePart>> =
         runInferenceFlowParts(input)
 
+    override fun runInferenceWithAudio(
+        input: String,
+        audioData: FloatArray,
+        resultListener: (partialResult: String, done: Boolean) -> Unit,
+        cleanUpListener: () -> Unit,
+        onError: (String) -> Unit
+    ) {
+        Log.w(TAG, "Audio inference not supported by Ollama backend, falling back to text")
+        runInference(input, { partial, done ->
+            resultListener(partial, done)
+        }, cleanUpListener, onError)
+    }
+
+    override fun runInferenceWithAudioFlow(input: String, audioData: FloatArray): Flow<String> =
+        runInferenceFlow(input)
+
+    override fun runInferenceWithAudioFlowParts(input: String, audioData: FloatArray): Flow<List<MessagePart>> =
+        runInferenceFlowParts(input)
+
     override fun resetConversation() {
         inferenceJob?.cancel()
     }

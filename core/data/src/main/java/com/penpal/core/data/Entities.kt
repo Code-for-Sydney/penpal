@@ -39,7 +39,9 @@ data class ChatMessageEntity(
 data class ChatConversationEntity(
     @PrimaryKey val id: String,
     val title: String,
+    val parentId: String? = null,  // For sub-chats (1 level only)
     val notebookIdsJson: String = "[]",
+    val systemPrompt: String = "",  // Per-conversation system prompt override
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )

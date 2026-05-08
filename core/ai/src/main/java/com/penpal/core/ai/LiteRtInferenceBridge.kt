@@ -4,6 +4,8 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.util.Log
 import com.google.ai.edge.litertlm.Backend
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import com.google.ai.edge.litertlm.Content
 import com.google.ai.edge.litertlm.Contents
 import com.google.ai.edge.litertlm.Conversation
@@ -891,6 +893,194 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
         }
     }.flowOn(Dispatchers.IO)
 
+    @OptIn(ExperimentalApi::class)
+    override fun runInferenceWithAudio(
+        input: String,
+        audioData: FloatArray,
+        resultListener: (partialResult: String, done: Boolean) -> Unit,
+        cleanUpListener: () -> Unit,
+        onError: (String) -> Unit
+    ) {
+        if (!_isReady.value || conversation == null) {
+            onError("Model not ready. Please load the model first.")
+            return
+        }
+
+        _isProcessing.value = true
+        val completed = AtomicBoolean(false)
+
+        scope.launch {
+            val timeoutJob = launch {
+                delay(120_000)
+                if (completed.compareAndSet(false, true)) {
+                    Log.w(TAG, "Audio inference timed out after 120s")
+                    conversation?.cancelProcess()
+                    _isProcessing.value = false
+                    onError("Inference timed out. The model may be stuck or the device may not have enough memory.")
+                }
+            }
+
+            try {
+                val conv = conversation!!
+                val audioBytes = floatArrayToLittleEndianBytes(audioData)
+                val content = Contents.of(
+                    Content.AudioBytes(audioBytes),
+                    Content.Text(input)
+                )
+                Log.d(TAG, "Sending audio message with ${input.length} chars, ${audioBytes.size} bytes")
+                val filter = StreamingTokenFilter()
+
+                conv.sendMessageAsync(content, object : MessageCallback {
+                    private var full = ""
+
+                    override fun onMessage(message: Message) {
+                        val text = conv.renderMessageIntoString(message)
+                        val result = filter.append(text)
+                        full += result.text
+                        if (result.text.isNotEmpty()) {
+                            resultListener(full, false)
+                        }
+                    }
+
+                    override fun onDone() {
+                        if (completed.compareAndSet(false, true)) {
+                            val result = filter.flush()
+                            full += result.text
+                            resultListener(full, true)
+                            _isProcessing.value = false
+                            cleanUpListener()
+                            timeoutJob.cancel()
+                        }
+                    }
+
+                    override fun onError(throwable: Throwable) {
+                        if (completed.compareAndSet(false, true)) {
+                            Log.e(TAG, "Audio onError: ${throwable.message}", throwable)
+                            _isProcessing.value = false
+                            onError(throwable.message ?: "Inference error")
+                            timeoutJob.cancel()
+                        }
+                    }
+                })
+            } catch (e: Exception) {
+                if (completed.compareAndSet(false, true)) {
+                    Log.e(TAG, "Audio inference exception: ${e.message}", e)
+                    _isProcessing.value = false
+                    onError("Inference error: ${e.message}")
+                }
+            } finally {
+                timeoutJob.cancel()
+            }
+        }
+    }
+
+    @OptIn(ExperimentalApi::class)
+    override fun runInferenceWithAudioFlow(input: String, audioData: FloatArray): Flow<String> = flow {
+        if (!_isReady.value || conversation == null) {
+            throw IllegalStateException("Model not ready. Please load the model first.")
+        }
+
+        _isProcessing.value = true
+        val filter = StreamingTokenFilter()
+        var accumulated = ""
+
+        try {
+            val conv = conversation!!
+            val audioBytes = floatArrayToLittleEndianBytes(audioData)
+            val content = Contents.of(
+                Content.AudioBytes(audioBytes),
+                Content.Text(input)
+            )
+            Log.d(TAG, "Sending audio via Flow with ${input.length} chars, ${audioBytes.size} bytes")
+
+            withTimeout(120_000) {
+                conv.sendMessageAsync(content)
+                    .catch { e ->
+                        Log.e(TAG, "Audio Flow error: ${e.message}", e)
+                        throw e
+                    }
+                    .collect { message ->
+                        val text = conv.renderMessageIntoString(message)
+                        if (text.isNotEmpty()) {
+                            val result = filter.append(text)
+                            if (result.text.isNotEmpty()) {
+                                accumulated += result.text
+                                emit(accumulated)
+                            }
+                        }
+                    }
+            }
+
+            val result = filter.flush()
+            if (result.text.isNotEmpty()) {
+                accumulated += result.text
+                emit(accumulated)
+            }
+        } catch (e: TimeoutCancellationException) {
+            Log.w(TAG, "Audio inference timed out after 120s")
+            conversation?.cancelProcess()
+            throw IllegalStateException("Inference timed out. The model may be stuck or the device may not have enough memory.")
+        } finally {
+            _isProcessing.value = false
+            filter.clear()
+        }
+    }.flowOn(Dispatchers.IO)
+
+    @OptIn(ExperimentalApi::class)
+    override fun runInferenceWithAudioFlowParts(input: String, audioData: FloatArray): Flow<List<MessagePart>> = flow {
+        if (!_isReady.value || conversation == null) {
+            throw IllegalStateException("Model not ready. Please load the model first.")
+        }
+
+        _isProcessing.value = true
+        val filter = StreamingTokenFilter()
+        val aggregator = MessagePartAggregator()
+
+        try {
+            val conv = conversation!!
+            val audioBytes = floatArrayToLittleEndianBytes(audioData)
+            val content = Contents.of(
+                Content.AudioBytes(audioBytes),
+                Content.Text(input)
+            )
+            Log.d(TAG, "Sending audio via FlowParts with ${input.length} chars, ${audioBytes.size} bytes")
+
+            withTimeout(120_000) {
+                conv.sendMessageAsync(content)
+                    .catch { e ->
+                        Log.e(TAG, "Audio FlowParts error: ${e.message}", e)
+                        throw e
+                    }
+                    .collect { message ->
+                        val text = conv.renderMessageIntoString(message)
+                        if (text.isNotEmpty()) {
+                            val result = filter.appendWithTransitions(text)
+                            if (result.text.isNotEmpty() || result.transitions.isNotEmpty()) {
+                                emit(aggregator.processChunk(result))
+                            }
+                        }
+                    }
+            }
+
+            val result = filter.flush()
+            if (result.text.isNotEmpty()) {
+                emit(aggregator.processChunk(
+                    FilteredChunkWithTransitions(result.text, result.mode, emptyList())
+                ))
+            }
+
+            emit(aggregator.finalize())
+        } catch (e: TimeoutCancellationException) {
+            Log.w(TAG, "Audio inference timed out after 120s")
+            conversation?.cancelProcess()
+            throw IllegalStateException("Inference timed out. The model may be stuck or the device may not have enough memory.")
+        } finally {
+            _isProcessing.value = false
+            filter.clear()
+            aggregator.reset()
+        }
+    }.flowOn(Dispatchers.IO)
+
     override fun resetConversation() {
         val currentEngine = engine ?: return
         scope.launch {
@@ -948,6 +1138,13 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
             _downloadProgress.value = DownloadProgress()
             Log.d(TAG, "Model released")
         }
+    }
+
+    private fun floatArrayToLittleEndianBytes(floatArray: FloatArray): ByteArray {
+        val buffer = ByteBuffer.allocate(floatArray.size * 4)
+        buffer.order(ByteOrder.LITTLE_ENDIAN)
+        for (f in floatArray) buffer.putFloat(f)
+        return buffer.array()
     }
 
     companion object {

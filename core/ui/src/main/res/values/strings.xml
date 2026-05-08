@@ -4,7 +4,7 @@
 
     <!-- Navigation -->
     <string name="tab_chat">Chat</string>
-    <string name="tab_notebooks">Notebooks</string>
+    <string name="tab_stacks">Stacks</string>
     <string name="tab_process">Process</string>
     <string name="tab_organize">Organize</string>
     <string name="tab_settings">Settings</string>

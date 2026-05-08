@@ -89,6 +89,9 @@ interface ChatConversationDao {
     @Query("UPDATE chat_conversations SET notebookIdsJson = :notebookIdsJson, updatedAt = :updatedAt WHERE id = :id")
     suspend fun updateNotebookIds(id: String, notebookIdsJson: String, updatedAt: Long)
 
+    @Query("UPDATE chat_conversations SET systemPrompt = :systemPrompt, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun updateSystemPrompt(id: String, systemPrompt: String, updatedAt: Long)
+
     @Query("DELETE FROM chat_conversations WHERE id = :id")
     suspend fun delete(id: String)
 }

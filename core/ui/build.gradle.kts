@@ -31,5 +31,6 @@ dependencies {
     api("androidx.compose.material3:material3")
     api("androidx.compose.material:material-icons-core")
     api("androidx.compose.material:material-icons-extended")
+    api(project(":core:ai"))
     debugApi("androidx.compose.ui:ui-tooling")
 }

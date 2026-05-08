@@ -126,6 +126,31 @@ interface InferenceBridge {
     fun runInferenceWithImageFlowParts(input: String, image: Bitmap): Flow<List<MessagePart>>
 
     /**
+     * Run inference with text and audio input.
+     * @param input The text prompt
+     * @param audioData 16kHz mono float32 PCM audio samples normalized to [-1, 1]
+     */
+    fun runInferenceWithAudio(
+        input: String,
+        audioData: FloatArray,
+        resultListener: (partialResult: String, done: Boolean) -> Unit,
+        cleanUpListener: () -> Unit,
+        onError: (String) -> Unit
+    )
+
+    /**
+     * Run inference with text and audio input, returning a Flow of partial results.
+     * @param input The text prompt
+     * @param audioData 16kHz mono float32 PCM audio samples normalized to [-1, 1]
+     */
+    fun runInferenceWithAudioFlow(input: String, audioData: FloatArray): Flow<String>
+
+    /**
+     * Run inference with text and audio input, returning a Flow of structured MessageParts.
+     */
+    fun runInferenceWithAudioFlowParts(input: String, audioData: FloatArray): Flow<List<MessagePart>>
+
+    /**
      * Reset conversation history.
      */
     fun resetConversation()

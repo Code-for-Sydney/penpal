@@ -13,8 +13,8 @@ import androidx.room.RoomDatabase
         GraphEdgeEntity::class,
         NotebookEntity::class,
     ],
-    version = 3,
-    exportSchema = true
+    version = 4,
+    exportSchema = false
 )
 abstract class PenpalDatabase : RoomDatabase() {
     abstract fun chunkDao(): ChunkDao
