@@ -14,6 +14,7 @@ interface InferenceBridge {
     val isReady: StateFlow<Boolean>
     val isProcessing: StateFlow<Boolean>
     val isDownloading: StateFlow<Boolean>
+    val isUnloading: StateFlow<Boolean>
     val downloadProgress: StateFlow<DownloadProgress>
     val modelStatus: StateFlow<ModelStatus>
 
@@ -138,6 +139,12 @@ interface InferenceBridge {
      * Release model resources.
      */
     fun release()
+
+    /**
+     * Unload the currently loaded model, releasing resources.
+     * Sets isReady to false but keeps the model file on disk.
+     */
+    fun unloadModel()
 
     /**
      * List all available models on the device.
