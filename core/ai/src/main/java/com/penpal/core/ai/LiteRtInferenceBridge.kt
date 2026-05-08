@@ -62,6 +62,9 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
     private val _isDownloading = MutableStateFlow(false)
     override val isDownloading: StateFlow<Boolean> = _isDownloading.asStateFlow()
 
+    private val _isUnloading = MutableStateFlow(false)
+    override val isUnloading: StateFlow<Boolean> = _isUnloading.asStateFlow()
+
     private val _downloadProgress = MutableStateFlow(DownloadProgress())
     override val downloadProgress: StateFlow<DownloadProgress> = _downloadProgress.asStateFlow()
 
@@ -76,6 +79,11 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
         backend: String?,
         onDone: (String) -> Unit
     ) {
+        // Check if already initialized
+        if (_isReady.value && engine != null) {
+            onDone("Model already loaded")
+            return
+        }
         scope.launch {
             try {
                 val modelPath = findModelFile(modelName)
@@ -186,7 +194,7 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
                             visionBackend = visionBackend,
                             audioBackend = Backend.CPU(),
                             maxNumImages = 1,
-                            maxNumTokens = 4096
+                            maxNumTokens = 8192
                         )
 
                         engine = Engine(engineConfig)
@@ -904,6 +912,27 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
         conversation?.cancelProcess()
         _isProcessing.value = false
         Log.d(TAG, "Inference stopped")
+    }
+
+    override fun unloadModel() {
+        _isUnloading.value = true
+        scope.launch {
+            try {
+                conversation?.close()
+                conversation = null
+                engine?.close()
+                engine = null
+                currentModelPath = null
+                _isReady.value = false
+                _isProcessing.value = false
+                _isDownloading.value = false
+                _downloadProgress.value = DownloadProgress()
+                _modelStatus.value = ModelStatus.DOWNLOADED
+                Log.d(TAG, "Model unloaded - resources released, file still on disk")
+            } finally {
+                _isUnloading.value = false
+            }
+        }
     }
 
     override fun release() {
