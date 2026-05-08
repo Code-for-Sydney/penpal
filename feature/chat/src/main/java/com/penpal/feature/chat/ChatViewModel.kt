@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.google.gson.Gson
 import com.penpal.core.ai.InferenceBridge
 import com.penpal.core.ai.MessagePart
+import com.penpal.core.ai.ModelStatus
 import com.penpal.core.ai.VectorStoreRepository
 import com.penpal.core.data.ChatConversationDao
 import com.penpal.core.data.ChatConversationEntity
@@ -33,14 +34,20 @@ data class ChatUiState(
     val error: String? = null,
     val retrievedContext: List<ChunkEntity> = emptyList(),
     val isModelReady: Boolean = false,
+    val modelStatus: ModelStatus = ModelStatus.NOT_DOWNLOADED,
     val needsTitleGeneration: Boolean = false,
+    // Retry functionality
+    val pendingRetryMessage: String? = null,
+    val pendingRetryError: String? = null,
     // Conversation history
     val conversations: List<ChatConversation> = emptyList(),
     val currentConversationId: String? = null,
     val currentConversationTitle: String = "New Chat",
     // Notebook attachments
     val attachedNotebooks: List<AttachedNotebook> = emptyList(),
-    val pinnedFiles: List<PinnedFile> = emptyList()
+    val pinnedFiles: List<PinnedFile> = emptyList(),
+    // System prompt (per-conversation override)
+    val systemPrompt: String = ""
 )
 
 data class ChatMessage(
@@ -55,6 +62,7 @@ data class ChatMessage(
 data class ChatConversation(
     val id: String,
     val title: String,
+    val parentId: String? = null,  // For sub-chats (1 level only)
     val messageCount: Int = 0,
     val updatedAt: Long = System.currentTimeMillis()
 )
@@ -78,8 +86,9 @@ sealed class ChatEvent {
     data object SendMessage : ChatEvent()
     data object ClearChat : ChatEvent()
     data object DismissError : ChatEvent()
+    data object RetryLastMessage : ChatEvent()
     // Conversation management
-    data class CreateConversation(val title: String = "New Chat") : ChatEvent()
+    data class CreateConversation(val title: String = "New Chat", val parentId: String? = null) : ChatEvent()
     data class LoadConversation(val conversationId: String) : ChatEvent()
     data class DeleteConversation(val conversationId: String) : ChatEvent()
     // Notebook attachment
@@ -88,11 +97,15 @@ sealed class ChatEvent {
     // File handling
     data class AddFile(val uri: Uri, val mimeType: String) : ChatEvent()
     data class RemovePinnedFile(val uri: String) : ChatEvent()
+    // System prompt
+    data class UpdateSystemPrompt(val prompt: String) : ChatEvent()
+    data object ToggleModel : ChatEvent()
 }
 
 class ChatViewModel(
     private val vectorStore: VectorStoreRepository,
     private val inferenceBridge: InferenceBridge,
+    private val application: android.app.Application,
     private val chatMessageDao: ChatMessageDao? = null,
     private val chatConversationDao: ChatConversationDao? = null,
     private val notebookDao: NotebookDao? = null,
@@ -109,11 +122,42 @@ class ChatViewModel(
     init {
         viewModelScope.launch {
             inferenceBridge.isReady.collect { isReady ->
+                val previousReady = _uiState.value.isModelReady
                 _uiState.update { it.copy(isModelReady = isReady) }
+
+                // Auto-retry when model becomes ready
+                if (isReady && !previousReady && _uiState.value.pendingRetryMessage != null) {
+                    Log.d("ChatViewModel", "Model became ready, auto-retrying pending message")
+                    retryLastMessage()
+                }
+            }
+        }
+
+        viewModelScope.launch {
+            // Collect current value first
+            _uiState.update { it.copy(modelStatus = inferenceBridge.modelStatus.value) }
+            // Then collect updates
+            inferenceBridge.modelStatus.collect { status ->
+                _uiState.update { it.copy(modelStatus = status) }
             }
         }
 
         loadConversations()
+    }
+
+    private fun retryLastMessage() {
+        val pendingMessage = _uiState.value.pendingRetryMessage
+        if (pendingMessage == null || !_uiState.value.isModelReady) {
+            Log.d("ChatViewModel", "retryLastMessage: no pending message or model not ready")
+            return
+        }
+
+        Log.d("ChatViewModel", "Retrying pending message: ${pendingMessage.take(50)}...")
+        _uiState.update { it.copy(pendingRetryMessage = null, pendingRetryError = null) }
+
+        // Set input to the pending message and trigger send
+        _uiState.update { it.copy(inputText = pendingMessage) }
+        sendMessage()
     }
 
     fun onEvent(event: ChatEvent) {
@@ -122,13 +166,28 @@ class ChatViewModel(
             is ChatEvent.SendMessage -> sendMessage()
             is ChatEvent.ClearChat -> clearChat()
             is ChatEvent.DismissError -> _uiState.update { it.copy(error = null) }
-            is ChatEvent.CreateConversation -> createNewConversation(event.title)
+            is ChatEvent.RetryLastMessage -> retryLastMessage()
+            is ChatEvent.CreateConversation -> createNewConversation(event.title, event.parentId)
             is ChatEvent.LoadConversation -> loadConversation(event.conversationId)
             is ChatEvent.DeleteConversation -> deleteConversation(event.conversationId)
             is ChatEvent.AttachNotebook -> attachNotebook(event.notebookId)
             is ChatEvent.DetachNotebook -> detachNotebook(event.notebookId)
             is ChatEvent.AddFile -> addFileToChat(event.uri, event.mimeType)
             is ChatEvent.RemovePinnedFile -> removePinnedFile(event.uri)
+            is ChatEvent.UpdateSystemPrompt -> {
+                _uiState.update { it.copy(systemPrompt = event.prompt) }
+                // Persist to database
+                viewModelScope.launch {
+                    _uiState.value.currentConversationId?.let { convId ->
+                        chatConversationDao?.updateSystemPrompt(convId, event.prompt, System.currentTimeMillis())
+                    }
+                }
+            }
+            is ChatEvent.ToggleModel -> {
+                // ToggleModel is handled at MainScreen level to avoid duplication
+                // The indicator in ChatTopBar uses onToggleModel directly from MainScreen
+                Log.d("ChatViewModel", "ToggleModel event received - handled by MainScreen")
+            }
         }
     }
 
@@ -140,6 +199,7 @@ class ChatViewModel(
                     ChatConversation(
                         id = entity.id,
                         title = entity.title,
+                        parentId = entity.parentId,
                         updatedAt = entity.updatedAt
                     )
                 }
@@ -153,13 +213,14 @@ class ChatViewModel(
         }
     }
 
-    private fun createNewConversation(title: String) {
+    private fun createNewConversation(title: String, parentId: String? = null) {
         chatConversationDao ?: return
         viewModelScope.launch {
             val conversationId = UUID.randomUUID().toString()
             val conversation = ChatConversationEntity(
                 id = conversationId,
-                title = title
+                title = title,
+                parentId = parentId
             )
             chatConversationDao.insert(conversation)
             _uiState.update {
@@ -197,7 +258,8 @@ class ChatViewModel(
                         currentConversationId = conversationId,
                         currentConversationTitle = conversation.title,
                         attachedNotebooks = attachedNotebooks,
-                        messages = emptyList()
+                        messages = emptyList(),
+                        systemPrompt = conversation.systemPrompt
                     )
                 }
 
@@ -491,10 +553,17 @@ class ChatViewModel(
                 if (!inferenceBridge.isReady.value) {
                     Log.w("ChatViewModel", "Model not ready, cannot run inference")
                     updateLastAssistantMessage(
-                        listOf(MessagePart.TextPart("The AI model is not ready. Please download and load a model in Settings first.")),
+                        listOf(MessagePart.TextPart("The AI model is not ready. Please download and load a model in Settings first. Tap to retry once model is loaded.")),
                         sourceIds
                     )
-                    _uiState.update { it.copy(isLoading = false, retrievedContext = emptyList()) }
+                    _uiState.update {
+                        it.copy(
+                            isLoading = false,
+                            retrievedContext = emptyList(),
+                            pendingRetryMessage = currentInput,
+                            pendingRetryError = "Model not ready"
+                        )
+                    }
                     return@launch
                 }
 
