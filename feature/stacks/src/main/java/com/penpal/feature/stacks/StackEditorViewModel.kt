@@ -421,17 +421,17 @@ document = StackDocument(
                     val ctx = context ?: throw Exception("Context not available")
                     val bitmap = loadBitmapFromUri(ctx, block.sourceUri)
                     if (bitmap != null) {
-                        var accumulatedProgress = 10
+                        var accumulatedText = ""
                         bridge.runInferenceWithImageFlow(prompt, bitmap).collect { result ->
-                            accumulatedProgress = minOf(accumulatedProgress + 5, 90)
+                            accumulatedText = result
                             _uiState.update { state ->
                                 state.copy(
                                     document = state.document.copy(
                                         blocks = state.document.blocks.map {
                                             if (it.id == blockId) block.copy(
-                                                status = ProcessStatus.DONE,
-                                                progress = 100,
-                                                extractedText = result
+                                                status = ProcessStatus.RUNNING,
+                                                progress = 80,
+                                                extractedText = accumulatedText
                                             ) else it
                                         },
                                         updatedAt = System.currentTimeMillis()
@@ -439,6 +439,19 @@ document = StackDocument(
                                     isDirty = true
                                 )
                             }
+                        }
+                        // Mark as done after streaming completes
+                        _uiState.update { state ->
+                            state.copy(
+                                document = state.document.copy(
+                                    blocks = state.document.blocks.map {
+                                        if (it.id == blockId) block.copy(
+                                            status = ProcessStatus.DONE,
+                                            progress = 100
+                                        ) else it
+                                    }
+                                )
+                            )
                         }
                     } else {
                         throw Exception("Failed to load image")
@@ -450,17 +463,17 @@ document = StackDocument(
                         decodeAudioToFloat32Pcm(ctx, block.sourceUri)
                     }
                     if (audioSamples != null) {
-                        var accumulatedProgress = 10
+                        var accumulatedText = ""
                         bridge.runInferenceWithAudioFlow(prompt, audioSamples).collect { result ->
-                            accumulatedProgress = minOf(accumulatedProgress + 5, 90)
+                            accumulatedText = result
                             _uiState.update { state ->
                                 state.copy(
                                     document = state.document.copy(
                                         blocks = state.document.blocks.map {
                                             if (it.id == blockId) block.copy(
-                                                status = ProcessStatus.DONE,
-                                                progress = 100,
-                                                extractedText = result
+                                                status = ProcessStatus.RUNNING,
+                                                progress = 80,
+                                                extractedText = accumulatedText
                                             ) else it
                                         },
                                         updatedAt = System.currentTimeMillis()
@@ -468,6 +481,18 @@ document = StackDocument(
                                     isDirty = true
                                 )
                             }
+                        }
+                        _uiState.update { state ->
+                            state.copy(
+                                document = state.document.copy(
+                                    blocks = state.document.blocks.map {
+                                        if (it.id == blockId) block.copy(
+                                            status = ProcessStatus.DONE,
+                                            progress = 100
+                                        ) else it
+                                    }
+                                )
+                            )
                         }
                     } else {
                         throw Exception("Failed to decode audio file. Ensure it is a valid audio format.")
@@ -478,7 +503,7 @@ document = StackDocument(
                     val duration = getVideoDuration(ctx, block.sourceUri)
                     val montage = extractVideoMontage(ctx, block.sourceUri, duration)
                     val durationSec = duration / 1000
-                    
+
                     val sequencePrompt = """
                         |$prompt
                         |
@@ -487,17 +512,17 @@ document = StackDocument(
                     """.trimMargin()
 
                     if (montage != null) {
-                        var accumulatedProgress = 10
+                        var accumulatedText = ""
                         bridge.runInferenceWithImageFlow(sequencePrompt, montage).collect { result ->
-                            accumulatedProgress = minOf(accumulatedProgress + 5, 90)
+                            accumulatedText = "Video (${durationSec}s):\n$result"
                             _uiState.update { state ->
                                 state.copy(
                                     document = state.document.copy(
                                         blocks = state.document.blocks.map {
                                             if (it.id == blockId) block.copy(
-                                                status = ProcessStatus.DONE,
-                                                progress = 100,
-                                                extractedText = "Video (${durationSec}s):\n$result"
+                                                status = ProcessStatus.RUNNING,
+                                                progress = 80,
+                                                extractedText = accumulatedText
                                             ) else it
                                         },
                                         updatedAt = System.currentTimeMillis()
@@ -505,6 +530,18 @@ document = StackDocument(
                                     isDirty = true
                                 )
                             }
+                        }
+                        _uiState.update { state ->
+                            state.copy(
+                                document = state.document.copy(
+                                    blocks = state.document.blocks.map {
+                                        if (it.id == blockId) block.copy(
+                                            status = ProcessStatus.DONE,
+                                            progress = 100
+                                        ) else it
+                                    }
+                                )
+                            )
                         }
                     } else {
                         throw Exception("Failed to extract video frames")
@@ -521,7 +558,7 @@ document = StackDocument(
                             null
                         }
                     }
-                    
+
                     val finalPrompt = if (textContent != null) {
                         // Build prompt with the actual text content instead of the URI
                         buildAIProcessingPrompt(block.copy(extractedText = textContent), false)
@@ -529,17 +566,17 @@ document = StackDocument(
                         prompt
                     }
 
-                    var accumulatedProgress = 10
+                    var accumulatedText = ""
                     bridge.runInferenceFlow(finalPrompt).collect { result ->
-                        accumulatedProgress = minOf(accumulatedProgress + 5, 90)
+                        accumulatedText = result
                         _uiState.update { state ->
                             state.copy(
                                 document = state.document.copy(
                                     blocks = state.document.blocks.map {
                                         if (it.id == blockId) block.copy(
-                                            status = ProcessStatus.DONE,
-                                            progress = 100,
-                                            extractedText = result
+                                            status = ProcessStatus.RUNNING,
+                                            progress = 80,
+                                            extractedText = accumulatedText
                                         ) else it
                                     },
                                     updatedAt = System.currentTimeMillis()
@@ -548,19 +585,31 @@ document = StackDocument(
                             )
                         }
                     }
+                    _uiState.update { state ->
+                        state.copy(
+                            document = state.document.copy(
+                                blocks = state.document.blocks.map {
+                                    if (it.id == blockId) block.copy(
+                                        status = ProcessStatus.DONE,
+                                        progress = 100
+                                    ) else it
+                                }
+                            )
+                        )
+                    }
                 } else {
                     // For other types, use text-based inference
-                    var accumulatedProgress = 10
+                    var accumulatedText = ""
                     bridge.runInferenceFlow(prompt).collect { result ->
-                        accumulatedProgress = minOf(accumulatedProgress + 5, 90)
+                        accumulatedText = result
                         _uiState.update { state ->
                             state.copy(
                                 document = state.document.copy(
                                     blocks = state.document.blocks.map {
                                         if (it.id == blockId) block.copy(
-                                            status = ProcessStatus.DONE,
-                                            progress = 100,
-                                            extractedText = result
+                                            status = ProcessStatus.RUNNING,
+                                            progress = 80,
+                                            extractedText = accumulatedText
                                         ) else it
                                     },
                                     updatedAt = System.currentTimeMillis()
@@ -568,6 +617,18 @@ document = StackDocument(
                                 isDirty = true
                             )
                         }
+                    }
+                    _uiState.update { state ->
+                        state.copy(
+                            document = state.document.copy(
+                                blocks = state.document.blocks.map {
+                                    if (it.id == blockId) block.copy(
+                                        status = ProcessStatus.DONE,
+                                        progress = 100
+                                    ) else it
+                                }
+                            )
+                        )
                     }
                 }
             } catch (e: Exception) {
