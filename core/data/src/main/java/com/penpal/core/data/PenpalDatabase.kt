@@ -13,7 +13,7 @@ import androidx.room.RoomDatabase
         GraphEdgeEntity::class,
         StackEntity::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class PenpalDatabase : RoomDatabase() {
