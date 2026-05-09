@@ -134,6 +134,8 @@ interface StackDao {
     suspend fun updateTitle(id: String, title: String, updatedAt: Long)
     @Query("UPDATE stacks SET blocksJson = :blocksJson, updatedAt = :updatedAt WHERE id = :id")
     suspend fun updateBlocks(id: String, blocksJson: String, updatedAt: Long)
+    @Query("UPDATE stacks SET systemPrompt = :systemPrompt, agentPrompt = :agentPrompt, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun updatePrompts(id: String, systemPrompt: String, agentPrompt: String, updatedAt: Long)
     @Query("DELETE FROM stacks WHERE id = :id")
     suspend fun delete(id: String)
     @Query("DELETE FROM stacks")

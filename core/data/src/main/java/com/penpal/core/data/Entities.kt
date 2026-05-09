@@ -42,6 +42,7 @@ data class ChatConversationEntity(
     val parentId: String? = null,  // For sub-chats (1 level only)
     val stackIdsJson: String = "[]",
     val systemPrompt: String = "",  // Per-conversation system prompt override
+    val agentPrompt: String = "",  // Per-conversation agent prompt
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )
@@ -73,6 +74,8 @@ data class StackEntity(
     @PrimaryKey val id: String,
     val title: String,
     val blocksJson: String,  // JSON serialized blocks
+    val systemPrompt: String = "",   // Defines the overall goal for processing
+    val agentPrompt: String = "",    // Guides the thinking/processing approach
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )
