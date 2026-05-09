@@ -7,13 +7,17 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.draganddrop.dragAndDropTarget
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -84,6 +88,12 @@ fun ChatScreen(
     var showStackPicker by remember { mutableStateOf(false) }
     var showSpeechInput by remember { mutableStateOf(false) }
 
+    // Over-drag panel for system prompt
+    var isPanelExpanded by remember { mutableStateOf(false) }
+    var dragOffset by remember { mutableFloatStateOf(0f) }
+    var isAtTop by remember { mutableStateOf(true) }
+    val panelHeight = if (isPanelExpanded) 200 else 0
+
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
 
@@ -128,6 +138,18 @@ fun ChatScreen(
                 .fillMaxSize()
                 .background(MaterialTheme.colorScheme.background)
         ) {
+            // Hidden panel (revealed by over-drag)
+            if (panelHeight > 0) {
+                ChatPromptsPanel(
+                    systemPrompt = uiState.systemPrompt,
+                    onSystemPromptChange = { onEvent(ChatEvent.UpdateSystemPrompt(it)) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(panelHeight.dp)
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f))
+                )
+            }
+
             // Top bar with drawer toggle and context toggle
             ChatTopBar(
                 title = uiState.currentConversationTitle,
@@ -183,8 +205,29 @@ fun ChatScreen(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
+                    .padding(top = if (panelHeight > 0) (panelHeight.dp) else 0.dp)
                     .pointerInput(Unit) {
                         detectTapGestures(onTap = { menuMessageId = null })
+                    }
+                    .pointerInput(isAtTop) {
+                        if (isAtTop) {
+                            detectVerticalDragGestures(
+                                onDragStart = { dragOffset = 0f },
+                                onDragEnd = {
+                                    if (dragOffset > 120) {
+                                        isPanelExpanded = true
+                                    } else {
+                                        isPanelExpanded = false
+                                    }
+                                    dragOffset = 0f
+                                },
+                                onDragCancel = { dragOffset = 0f },
+                                onVerticalDrag = { change, dragAmount ->
+                                    dragOffset += dragAmount
+                                    change.consume()
+                                }
+                            )
+                        }
                     },
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -948,6 +991,46 @@ private fun ErrorBanner(
                 Text("Dismiss")
             }
         }
+    }
+}
+
+@Composable
+private fun ChatPromptsPanel(
+    systemPrompt: String,
+    onSystemPromptChange: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .padding(16.dp)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text(
+            text = "System Prompt",
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        Text(
+            text = "This overrides the default system prompt for this conversation",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        OutlinedTextField(
+            value = systemPrompt,
+            onValueChange = onSystemPromptChange,
+            label = { Text("System Prompt") },
+            placeholder = { Text("You are a helpful AI assistant...") },
+            modifier = Modifier.fillMaxWidth(),
+            minLines = 2,
+            maxLines = 4,
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                unfocusedBorderColor = MaterialTheme.colorScheme.outline
+            )
+        )
     }
 }
 

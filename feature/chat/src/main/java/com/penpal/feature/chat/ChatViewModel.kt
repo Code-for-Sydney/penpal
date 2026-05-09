@@ -46,8 +46,9 @@ data class ChatUiState(
     // Stack attachments
     val attachedStacks: List<AttachedStack> = emptyList(),
     val pinnedFiles: List<PinnedFile> = emptyList(),
-    // System prompt (per-conversation override)
-    val systemPrompt: String = ""
+    // System prompt (per-conversation override + default)
+    val systemPrompt: String = "",
+    val defaultSystemPrompt: String = ""
 )
 
 data class ChatMessage(
@@ -121,6 +122,11 @@ class ChatViewModel(
 
     init {
         viewModelScope.launch {
+            // Load default system prompt from SharedPreferences
+            val prefs = application.getSharedPreferences("penpal_app_prefs", android.content.Context.MODE_PRIVATE)
+            val defaultSystemPrompt = prefs.getString("default_system_prompt", "") ?: ""
+            _uiState.update { it.copy(defaultSystemPrompt = defaultSystemPrompt, systemPrompt = defaultSystemPrompt) }
+
             inferenceBridge.isReady.collect { isReady ->
                 val previousReady = _uiState.value.isModelReady
                 _uiState.update { it.copy(isModelReady = isReady) }
@@ -738,12 +744,21 @@ class ChatViewModel(
     }
 
     private fun buildPrompt(userMessage: String, context: List<ChunkEntity>): String {
+        // Get effective system prompt (per-conversation override takes priority over default)
+        val effectiveSystemPrompt = _uiState.value.systemPrompt.ifBlank { _uiState.value.defaultSystemPrompt }
+
+        val systemPromptPrefix = if (effectiveSystemPrompt.isNotBlank()) {
+            "$effectiveSystemPrompt\n\n"
+        } else {
+            ""
+        }
+
         return if (context.isNotEmpty()) {
             val contextItems = context.joinToString("\n\n") { chunk ->
                 "[Document: ${chunk.sourceId}]\n${chunk.text}"
             }
             """
-            Use the following context to answer the question. If the context doesn't contain relevant information, say so.
+            ${systemPromptPrefix}Use the following context to answer the question. If the context doesn't contain relevant information, say so.
 
             Context:
             $contextItems
@@ -751,7 +766,7 @@ class ChatViewModel(
             Question: $userMessage
             """.trimIndent()
         } else {
-            userMessage
+            "${systemPromptPrefix}$userMessage"
         }
     }
 }
