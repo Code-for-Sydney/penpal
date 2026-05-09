@@ -35,7 +35,7 @@ class AudioPlayer(private val context: Context) {
      * Play a WAV file
      */
     fun play(file: File): Boolean {
-        Log.d(TAG, "Playing: ${file.absolutePath}, size: ${file.length()} bytes")
+        Log.d(TAG, "Playing: ${file.name}, size: ${file.length()} bytes")
 
         if (!file.exists()) {
             Log.e(TAG, "File does not exist: ${file.absolutePath}")
@@ -94,7 +94,6 @@ class AudioPlayer(private val context: Context) {
                 prepareAsync()
             }
             currentFile = file
-            Log.d(TAG, "prepareAsync called for playback")
             return true
         } catch (e: Exception) {
             Log.e(TAG, "Error creating MediaPlayer: ${e.message}", e)
@@ -124,7 +123,6 @@ class AudioPlayer(private val context: Context) {
                 return false
             }
 
-            Log.d(TAG, "WAV header validated: RIFF/WAVE found")
             true
         } catch (e: Exception) {
             Log.e(TAG, "Error validating WAV header: ${e.message}")

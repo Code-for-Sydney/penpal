@@ -20,10 +20,10 @@ import androidx.navigation.compose.rememberNavController
 import com.penpal.feature.chat.ChatEvent
 import com.penpal.feature.chat.ChatScreen
 import com.penpal.feature.chat.ChatViewModel
-import com.penpal.feature.notebooks.NotebookEditorViewModel
-import com.penpal.feature.notebooks.NotebookScreen
-import com.penpal.feature.notebooks.NotebookListScreen
-import com.penpal.feature.notebooks.NotebookListViewModel
+import com.penpal.feature.stacks.StackEditorViewModel
+import com.penpal.feature.stacks.StackScreen
+import com.penpal.feature.stacks.StackListScreen
+import com.penpal.feature.stacks.StackListViewModel
 import com.penpal.feature.settings.SettingsScreen
 import com.penpal.feature.settings.SettingsViewModel
 import com.penpal.core.ai.ModelStatus
@@ -38,7 +38,7 @@ sealed class Screen(
     val icon: ImageVector
 ) {
     data object Chat : Screen("chat", "Chat", Icons.AutoMirrored.Filled.Chat)
-    data object Notebooks : Screen("notebooks", "Think", Icons.Default.AutoAwesome)
+    data object Stacks : Screen("stacks", "Think", Icons.Default.AutoAwesome)
     data object Settings : Screen("settings", "Settings", Icons.Default.Settings)
 }
 
@@ -47,33 +47,33 @@ sealed class Screen(
  */
 val bottomNavScreens = listOf(
     Screen.Chat,
-    Screen.Notebooks,
+    Screen.Stacks,
     Screen.Settings
 )
 
 /**
  * Sub-routes for nested navigation within tabs.
  */
-object NotebookRoutes {
-    const val LIST = "notebooks/list"
-    const val EDITOR = "notebooks/editor"
-    const val EDITOR_WITH_ID = "notebooks/editor/{notebookId}"
+object StackRoutes {
+    const val LIST = "stacks/list"
+    const val EDITOR = "stacks/editor"
+    const val EDITOR_WITH_ID = "stacks/editor/{stackId}"
 
-    fun editorRoute(notebookId: String) = "notebooks/editor/$notebookId"
+    fun editorRoute(stackId: String) = "stacks/editor/$stackId"
 }
 
 object ChatRoutes {
     const val CHAT = "chat"
-    const val CHAT_WITH_NOTEBOOK = "chat/{notebookId}"
+    const val CHAT_WITH_STACK = "chat/{stackId}"
 
-    fun chatWithNotebookRoute(notebookId: String) = "chat/$notebookId"
+    fun chatWithStackRoute(stackId: String) = "chat/$stackId"
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(
-    onNavigateToNotebook: (Long) -> Unit = {},
-    onNavigateToNotebooks: () -> Unit = {}
+    onNavigateToStack: (Long) -> Unit = {},
+    onNavigateToStacks: () -> Unit = {}
 ) {
     val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
@@ -82,14 +82,23 @@ fun MainScreen(
     val app = LocalContext.current.applicationContext as PenpalApplication
     val database = remember { com.penpal.core.data.PenpalDatabase.getInstance(app) }
 
-    // Shared notebook list view model for picker
-    val notebookListViewModel = remember {
-        NotebookListViewModel(notebookDao = database.notebookDao())
+    // Shared stack list view model for picker
+    val stackListViewModel = remember {
+        StackListViewModel(stackDao = database.stackDao())
     }
 
     // Shared model status across all tabs
     val isModelReady by app.inferenceBridge.isReady.collectAsState()
-    val modelStatus by app.inferenceBridge.modelStatus.collectAsState()
+    val rawModelStatus by app.inferenceBridge.modelStatus.collectAsState()
+    val modelStatus = remember(rawModelStatus) {
+        // If model file exists but status shows NOT_DOWNLOADED, treat as DOWNLOADED
+        if (rawModelStatus == ModelStatus.NOT_DOWNLOADED) {
+            val modelPath = com.penpal.core.ai.ModelManager.findExistingModel(app)
+            if (modelPath != null) ModelStatus.DOWNLOADED else rawModelStatus
+        } else {
+            rawModelStatus
+        }
+    }
     val isModelUnloading by app.inferenceBridge.isUnloading.collectAsState()
 
     // Toggle model handler - load/unload
@@ -97,7 +106,8 @@ fun MainScreen(
         val bridge = app.inferenceBridge
         if (isModelReady) {
             bridge.unloadModel()
-        } else if (modelStatus == ModelStatus.DOWNLOADED) {
+        } else if (modelStatus == ModelStatus.DOWNLOADED || modelStatus == ModelStatus.READY) {
+            // Model is downloaded but not loaded - load it
             val modelPath = com.penpal.core.ai.ModelManager.findExistingModel(app)
             if (modelPath != null) {
                 bridge.loadModel(app, modelPath) { }
@@ -145,7 +155,7 @@ fun MainScreen(
                         application = app,
                         chatMessageDao = database.chatMessageDao(),
                         chatConversationDao = database.chatConversationDao(),
-                        notebookDao = database.notebookDao(),
+                        stackDao = database.stackDao(),
                         workerLauncher = app.workerLauncher
                     )
                 }
@@ -153,24 +163,24 @@ fun MainScreen(
                 ChatScreen(
                     uiState = uiState,
                     onEvent = viewModel::onEvent,
-                    onNavigateToNotebooks = {
-                        navController.navigate(Screen.Notebooks.route)
+                    onNavigateToStacks = {
+                        navController.navigate(Screen.Stacks.route)
                     },
-                    onNavigateToChatWithNotebook = { notebookId ->
-                        navController.navigate(ChatRoutes.chatWithNotebookRoute(notebookId))
+                    onNavigateToChatWithStack = { stackId ->
+                        navController.navigate(ChatRoutes.chatWithStackRoute(stackId))
                     },
-                    notebookListViewModel = notebookListViewModel,
+                    stackListViewModel = stackListViewModel,
                     isModelReady = isModelReady,
-                    isModelLoading = modelStatus == ModelStatus.DOWNLOADING,
+                    isModelLoading = modelStatus == ModelStatus.DOWNLOADING || modelStatus == ModelStatus.LOADING,
                     isModelUnloading = isModelUnloading,
                     modelStatus = modelStatus,
-                    onToggleModel = if (modelStatus == ModelStatus.DOWNLOADED || isModelReady) onToggleModel else null
+                    onToggleModel = if (modelStatus == ModelStatus.DOWNLOADED || modelStatus == ModelStatus.READY) onToggleModel else null
                 )
             }
 
-            // Chat with pre-attached notebook
-            composable(ChatRoutes.CHAT_WITH_NOTEBOOK) { backStackEntry ->
-                val notebookId = backStackEntry.arguments?.getString("notebookId")
+            // Chat with pre-attached stack
+            composable(ChatRoutes.CHAT_WITH_STACK) { backStackEntry ->
+                val stackId = backStackEntry.arguments?.getString("stackId")
                 val viewModel = remember {
                     ChatViewModel(
                         vectorStore = app.vectorStore,
@@ -178,77 +188,79 @@ fun MainScreen(
                         application = app,
                         chatMessageDao = database.chatMessageDao(),
                         chatConversationDao = database.chatConversationDao(),
-                        notebookDao = database.notebookDao(),
+                        stackDao = database.stackDao(),
                         workerLauncher = app.workerLauncher
                     )
                 }
                 val uiState by viewModel.uiState.collectAsState()
 
-                // Auto-attach notebook when entering this route
-                LaunchedEffect(notebookId) {
-                    notebookId?.let { id ->
-                        viewModel.onEvent(ChatEvent.AttachNotebook(id))
+                // Auto-attach stack when entering this route
+                LaunchedEffect(stackId) {
+                    stackId?.let { id ->
+                        viewModel.onEvent(ChatEvent.AttachStack(id))
                     }
                 }
 
                 ChatScreen(
                     uiState = uiState,
                     onEvent = viewModel::onEvent,
-                    onNavigateToNotebooks = {
-                        navController.navigate(Screen.Notebooks.route)
+                    onNavigateToStacks = {
+                        navController.navigate(Screen.Stacks.route)
                     },
-                    onNavigateToChatWithNotebook = { navNotebookId ->
-                        navController.navigate(ChatRoutes.chatWithNotebookRoute(navNotebookId))
+                    onNavigateToChatWithStack = { navStackId ->
+                        navController.navigate(ChatRoutes.chatWithStackRoute(navStackId))
                     },
-                    notebookListViewModel = notebookListViewModel,
+                    stackListViewModel = stackListViewModel,
                     isModelReady = isModelReady,
-                    isModelLoading = modelStatus == ModelStatus.DOWNLOADING,
+                    isModelLoading = modelStatus == ModelStatus.DOWNLOADING || modelStatus == ModelStatus.LOADING,
                     isModelUnloading = isModelUnloading,
                     modelStatus = modelStatus,
-                    onToggleModel = if (modelStatus == ModelStatus.DOWNLOADED || isModelReady) onToggleModel else null
+                    onToggleModel = if (modelStatus == ModelStatus.DOWNLOADED || modelStatus == ModelStatus.READY) onToggleModel else null
                 )
             }
 
             // ──────────────────────────────────────────────────────────────
-            // Think Tab (Notebooks)
+            // Think Tab (Stacks)
             // ──────────────────────────────────────────────────────────────
-            composable(Screen.Notebooks.route) {
-                NotebookListScreen(
-                    viewModel = notebookListViewModel,
-                    onNotebookSelected = { notebookId ->
-                        navController.navigate(NotebookRoutes.editorRoute(notebookId))
+            composable(Screen.Stacks.route) {
+                StackListScreen(
+                    viewModel = stackListViewModel,
+                    onStackSelected = { stackId ->
+                        navController.navigate(StackRoutes.editorRoute(stackId))
                     },
                     onCreateNew = {
-                        navController.navigate(NotebookRoutes.EDITOR)
+                        navController.navigate(StackRoutes.EDITOR)
                     },
-                    onChatWithNotebook = { notebookId ->
-                        navController.navigate(ChatRoutes.chatWithNotebookRoute(notebookId)) {
+                    onChatWithStack = { stackId ->
+                        navController.navigate(ChatRoutes.chatWithStackRoute(stackId)) {
                             popUpTo(Screen.Chat.route) { inclusive = true }
                             launchSingleTop = true
                         }
                     },
                     isModelReady = isModelReady,
-                    isModelLoading = modelStatus == ModelStatus.DOWNLOADING,
+                    isModelLoading = modelStatus == ModelStatus.DOWNLOADING || modelStatus == ModelStatus.LOADING,
                     isModelUnloading = isModelUnloading,
                     modelStatus = modelStatus,
-                    onToggleModel = if (modelStatus == ModelStatus.DOWNLOADED || isModelReady) onToggleModel else null,
+                    onToggleModel = if (modelStatus == ModelStatus.DOWNLOADED || modelStatus == ModelStatus.READY) onToggleModel else null,
                     modifier = Modifier.fillMaxSize()
                 )
             }
 
-            // Notebook editor (nested route)
-            composable(NotebookRoutes.EDITOR) {
+            // Stack editor (nested route)
+            composable(StackRoutes.EDITOR) {
                 val viewModel = remember {
-                    NotebookEditorViewModel(
-                        notebookDao = database.notebookDao(),
-                        workerLauncher = app.workerLauncher
+                    StackEditorViewModel(
+                        context = app,
+                        stackDao = database.stackDao(),
+                        workerLauncher = app.workerLauncher,
+                        inferenceBridge = app.inferenceBridge
                     )
                 }
-                NotebookScreen(
+                StackScreen(
                     viewModel = viewModel,
                     onNavigateBack = { navController.popBackStack() },
                     onNavigateToHome = {
-                        navController.navigate(Screen.Chat.route) {
+                        navController.navigate(Screen.Stacks.route) {
                             popUpTo(navController.graph.findStartDestination().id) {
                                 saveState = true
                             }
@@ -256,38 +268,45 @@ fun MainScreen(
                             restoreState = true
                         }
                     },
-                    onChatWithNotebook = { notebookId ->
-                        navController.navigate(ChatRoutes.chatWithNotebookRoute(notebookId)) {
+                    onChatWithStack = { stackId ->
+                        navController.navigate(ChatRoutes.chatWithStackRoute(stackId)) {
                             popUpTo(Screen.Chat.route) { inclusive = true }
                             launchSingleTop = true
                         }
                     },
+                    isModelReady = isModelReady,
+                    isModelLoading = modelStatus == ModelStatus.DOWNLOADING || modelStatus == ModelStatus.LOADING,
+                    isModelUnloading = isModelUnloading,
+                    modelStatus = modelStatus,
+                    onToggleModel = if (modelStatus == ModelStatus.DOWNLOADED || modelStatus == ModelStatus.READY) onToggleModel else null,
                     modifier = Modifier.fillMaxSize()
                 )
             }
 
-            // Notebook editor with ID (load existing notebook)
-            composable(NotebookRoutes.EDITOR_WITH_ID) { backStackEntry ->
-                val notebookId = backStackEntry.arguments?.getString("notebookId")
+            // Stack editor with ID (load existing stack)
+            composable(StackRoutes.EDITOR_WITH_ID) { backStackEntry ->
+                val stackId = backStackEntry.arguments?.getString("stackId")
                 val viewModel = remember {
-                    NotebookEditorViewModel(
-                        notebookDao = database.notebookDao(),
-                        workerLauncher = app.workerLauncher
+                    StackEditorViewModel(
+                        context = app,
+                        stackDao = database.stackDao(),
+                        workerLauncher = app.workerLauncher,
+                        inferenceBridge = app.inferenceBridge
                     )
                 }
 
-                // Load notebook by ID if provided
-                LaunchedEffect(notebookId) {
-                    notebookId?.let { id ->
+                // Load stack by ID if provided
+                LaunchedEffect(stackId) {
+                    stackId?.let { id ->
                         viewModel.loadFromDatabase(id)
                     }
                 }
 
-                NotebookScreen(
+                StackScreen(
                     viewModel = viewModel,
                     onNavigateBack = { navController.popBackStack() },
                     onNavigateToHome = {
-                        navController.navigate(Screen.Chat.route) {
+                        navController.navigate(Screen.Stacks.route) {
                             popUpTo(navController.graph.findStartDestination().id) {
                                 saveState = true
                             }
@@ -295,12 +314,17 @@ fun MainScreen(
                             restoreState = true
                         }
                     },
-                    onChatWithNotebook = { navNotebookId ->
-                        navController.navigate(ChatRoutes.chatWithNotebookRoute(navNotebookId)) {
+                    onChatWithStack = { navStackId ->
+                        navController.navigate(ChatRoutes.chatWithStackRoute(navStackId)) {
                             popUpTo(Screen.Chat.route) { inclusive = true }
                             launchSingleTop = true
                         }
                     },
+                    isModelReady = isModelReady,
+                    isModelLoading = modelStatus == ModelStatus.DOWNLOADING || modelStatus == ModelStatus.LOADING,
+                    isModelUnloading = isModelUnloading,
+                    modelStatus = modelStatus,
+                    onToggleModel = if (modelStatus == ModelStatus.DOWNLOADED || modelStatus == ModelStatus.READY) onToggleModel else null,
                     modifier = Modifier.fillMaxSize()
                 )
             }
@@ -320,10 +344,10 @@ fun MainScreen(
                     uiState = uiState,
                     onEvent = viewModel::onEvent,
                     isModelReady = isModelReady,
-                    isModelLoading = modelStatus == ModelStatus.DOWNLOADING,
+                    isModelLoading = modelStatus == ModelStatus.DOWNLOADING || modelStatus == ModelStatus.LOADING,
                     isModelUnloading = isModelUnloading,
                     modelStatus = modelStatus,
-                    onToggleModel = if (modelStatus == ModelStatus.DOWNLOADED || isModelReady) onToggleModel else null
+                    onToggleModel = if (modelStatus == ModelStatus.DOWNLOADED || modelStatus == ModelStatus.READY) onToggleModel else null
                 )
             }
         }

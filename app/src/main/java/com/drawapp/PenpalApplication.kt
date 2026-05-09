@@ -25,6 +25,10 @@ class PenpalApplication : Application() {
     lateinit var notificationHelper: NotificationHelper
         private set
 
+    val appPrefs by lazy {
+        getSharedPreferences("penpal_app_prefs", MODE_PRIVATE)
+    }
+
     private val TAG = "PenpalApp"
 
     override fun onCreate() {

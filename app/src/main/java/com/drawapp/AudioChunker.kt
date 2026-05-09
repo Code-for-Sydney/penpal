@@ -80,7 +80,7 @@ class AudioChunker {
      * Returns list of chunk files and metadata.
      */
     fun chunkAudioFile(wavFile: File): ChunkingResult {
-        Log.d(TAG, "Chunking audio file: ${wavFile.absolutePath}")
+        Log.d(TAG, "Chunking audio file: ${wavFile.name}")
 
         // Read WAV data
         val audioData = readWavData(wavFile) ?: return ChunkingResult(
@@ -90,12 +90,8 @@ class AudioChunker {
         val totalSamples = audioData.size.toLong()
         val totalDurationMs = (totalSamples * 1000L) / SAMPLE_RATE
 
-        Log.d(TAG, "Audio: $totalSamples samples, ${totalDurationMs}ms duration")
-
         // Detect speech segments
         val segments = detectSpeechSegments(audioData)
-
-        Log.d(TAG, "Found ${segments.size} speech segments")
 
         // Create chunk files
         val chunks = createChunks(wavFile, audioData, segments)
@@ -303,8 +299,6 @@ class AudioChunker {
         // Create chunk file
         val chunkFile = File(outputDir, "chunk_$chunkIndex.wav")
         writeWavChunk(chunkFile, audioData, startSample.toInt(), actualEnd.toInt())
-
-        Log.d(TAG, "Created chunk $chunkIndex: ${durationMs}ms (${startMs}-${endMs}ms)")
 
         chunks.add(ChunkResult(
             file = chunkFile,

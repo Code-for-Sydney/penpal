@@ -44,10 +44,7 @@ class AudioRecorder(private val context: Context) {
         if (it <= 0) {
             Log.e(TAG, "Invalid buffer size: $it, using 4096")
             4096
-        } else {
-            Log.d(TAG, "AudioRecord buffer size: $it")
-            it
-        }
+        } else it
     }.coerceAtLeast(4096)
 
     // Recording state
@@ -81,12 +78,10 @@ class AudioRecorder(private val context: Context) {
      * Check if microphone permission is granted
      */
     fun hasPermission(): Boolean {
-        val granted = ActivityCompat.checkSelfPermission(
+        return ActivityCompat.checkSelfPermission(
             context,
             Manifest.permission.RECORD_AUDIO
         ) == PackageManager.PERMISSION_GRANTED
-        Log.d(TAG, "hasPermission: $granted")
-        return granted
     }
 
     /**
@@ -95,7 +90,6 @@ class AudioRecorder(private val context: Context) {
      * @return true if recording started successfully
      */
     fun startRecording(fileName: String): Boolean {
-        Log.d(TAG, "startRecording called with fileName: $fileName")
 
         if (!hasPermission()) {
             Log.e(TAG, "Microphone permission not granted")
@@ -112,7 +106,6 @@ class AudioRecorder(private val context: Context) {
             // Create output file
             val recordingsDir = File(context.filesDir, RECORDINGS_DIR).apply { mkdirs() }
             outputFile = File(recordingsDir, "$fileName.wav")
-            Log.d(TAG, "Output file: ${outputFile?.absolutePath}")
 
             // Create output stream and write WAV header placeholder
             outputStream = FileOutputStream(outputFile)
@@ -137,12 +130,9 @@ class AudioRecorder(private val context: Context) {
                 return false
             }
 
-            Log.d(TAG, "AudioRecord initialized successfully")
-
             // Start recording
             recordingActive = true
             audioRecord?.startRecording()
-            Log.d(TAG, "Recording started")
 
             // Start recording thread
             recordingThread = Thread { recordingLoop() }
@@ -168,7 +158,6 @@ class AudioRecorder(private val context: Context) {
      * Main recording loop - reads audio data and writes to file
      */
     private fun recordingLoop() {
-        Log.d(TAG, "Recording loop started")
         val buffer = ShortArray(bufferSize / 2)
         val byteBuffer = ByteArray(buffer.size * 2)
 
@@ -182,7 +171,6 @@ class AudioRecorder(private val context: Context) {
 
                 mainHandler.post {
                     onAmplitudeUpdate?.invoke(rmsDb)
-                    Log.v(TAG, "Audio level - RMS: ${rms.toInt()}, dB: ${rmsDb.toInt()}")
                 }
 
                 // Convert shorts to bytes and write to file
@@ -205,8 +193,6 @@ class AudioRecorder(private val context: Context) {
                 break
             }
         }
-
-        Log.d(TAG, "Recording loop ended")
     }
 
     /**
@@ -214,7 +200,6 @@ class AudioRecorder(private val context: Context) {
      * @return The recorded file, or null if recording failed
      */
     fun stopRecording(): File? {
-        Log.d(TAG, "stopRecording called, isRecording=$recordingActive")
 
         if (!recordingActive) {
             Log.w(TAG, "Not recording, nothing to stop")
@@ -230,7 +215,6 @@ class AudioRecorder(private val context: Context) {
         // Stop and release AudioRecord
         try {
             audioRecord?.stop()
-            Log.d(TAG, "AudioRecord stopped")
         } catch (e: Exception) {
             Log.e(TAG, "Error stopping AudioRecord: ${e.message}")
         }
@@ -242,7 +226,6 @@ class AudioRecorder(private val context: Context) {
             outputStream?.flush()
             outputStream?.close()
             outputStream = null
-            Log.d(TAG, "File stream closed, total bytes: $totalBytesWritten")
 
             // Update WAV header with actual file size
             outputFile?.let { file ->
@@ -257,7 +240,6 @@ class AudioRecorder(private val context: Context) {
 
         mainHandler.post { onRecordingStopped?.invoke(resultFile) }
 
-        Log.d(TAG, "Recording stopped, file: ${resultFile?.absolutePath}")
         return resultFile
     }
 
@@ -265,7 +247,6 @@ class AudioRecorder(private val context: Context) {
      * Cancel recording and delete the output file
      */
     fun cancelRecording() {
-        Log.d(TAG, "cancelRecording called")
         recordingActive = false
         recordingThread?.join(500)
         recordingThread = null
@@ -284,8 +265,6 @@ class AudioRecorder(private val context: Context) {
         // Delete the incomplete file
         outputFile?.delete()
         outputFile = null
-
-        Log.d(TAG, "Recording cancelled and file deleted")
     }
 
     /**
@@ -398,7 +377,7 @@ class AudioRecorder(private val context: Context) {
                 raf.seek(40)
                 raf.write(intToByteArray(dataSize))
             }
-            Log.d(TAG, "WAV header updated with data size: $dataSize")
+            Log.i(TAG, "WAV header updated with data size: $dataSize")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to update WAV header: ${e.message}")
         }
