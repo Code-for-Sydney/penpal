@@ -59,6 +59,7 @@ This document provides an in-depth look at the system architecture, component re
 | Phase 5.6: Text Structure Fix | ✅ Complete | Smart spacing, whitespace handling, lastEmittedChar tracking |
 | Phase 5.7: Structured Message Parts | ✅ Complete | Opencode-inspired parts architecture with rich UI rendering |
 | Phase 5.8: Chat Model Response Fix | ✅ Complete | getContents() fix, conversation history in prompts, FAB navigation |
+| Phase 5.9: UI Polish & Chat Improvements | ✅ Complete | FAB positioning (80dp margin), pinned TopBar, AI message alignment (fillMaxWidth) |
 
 ### Key Inference Components
 
@@ -1149,12 +1150,14 @@ class ProcessViewModel @Inject constructor(
 
 | Tab | Route | Icon | Screen |
 |-----|-------|------|--------|
+| Notebooks | `notebooks` | Book | NotebooksScreen |
 | Think | `stacks` | AutoAwesome | StackListScreen → StackScreen |
 | Settings | `settings` | Settings | SettingsScreen |
 | Chat | `chat` | AutoMirrored.Chat | ChatScreen (via FAB) |
 
 **Navigation Behavior:**
-- Chat FAB shows on Stacks and Settings tabs
+- Chat FAB shows on Stacks, Notebooks, and Settings tabs
+- FAB positioned with 80dp bottom margin on Stacks/Notebooks screens to avoid overlapping other FABs
 - FAB hides when user is in Chat screen
 - FAB reappears after exiting Chat (via X button or tab click)
 - Clicking a tab while in Chat triggers `popBackStack()` to close chat
@@ -1165,10 +1168,11 @@ class ProcessViewModel @Inject constructor(
 | Tab | ViewModel | UI Status | Backend Status |
 |-----|-----------|-----------|----------------|
 | Chat | ChatViewModel | ✅ Functional | ✅ RAG via InferenceBridge, structured MessageParts (via FAB) |
+| Notebooks | — | ✅ Functional | — |
 | Think | StackEditorViewModel | ✅ Functional | ✅ Room persistence + auto-processing |
 | Settings | SettingsViewModel | ✅ Functional | ✅ Model download, inference status |
 
-**Note:** MainScreen shows 2 tabs (Think, Settings) in bottom nav. Chat is accessible via FAB in bottom-right corner.
+**Note:** MainScreen shows 3 tabs (Notebooks, Think, Settings) in bottom nav. Chat is accessible via FAB in bottom-right corner.
 
 ### Module Dependencies
 

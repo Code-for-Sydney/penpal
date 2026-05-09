@@ -31,6 +31,12 @@ User types → ChatViewModel.sendMessage() → launch(Default)
 - Clicking tabs while in Chat closes it via `popBackStack()`
 - Consistent exit behavior via X button or tab selection
 
+**UI Layout:**
+- **TopBar**: Fixed/pinned - does not collapse on scroll (`scrolledContainerColor` set to surface color)
+- **AI messages**: Extend to right edge of screen (`fillMaxWidth()`)
+- **User messages**: Constrained to 300dp max width (`widthIn(max = 300.dp)`)
+- **Chat FAB**: Positioned with 80dp bottom margin on Stacks/Notebooks screens to avoid overlapping other FABs
+
 **Current Issue — Text Splitting After Special Characters:**
 After implementing `StreamingTokenFilter`, chat text is split into separate lines after each special token occurrence. The Gemma 4 chat template includes structural newlines around turn tokens (e.g., `<|turn>model\n...\n<turn|>`), which remain after token removal.
 

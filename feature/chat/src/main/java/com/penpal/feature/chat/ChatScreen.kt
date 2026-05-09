@@ -357,7 +357,8 @@ private fun ChatTopBar(
             }
         },
         colors = TopAppBarDefaults.topAppBarColors(
-            containerColor = MaterialTheme.colorScheme.surface
+            containerColor = MaterialTheme.colorScheme.surface,
+            scrolledContainerColor = MaterialTheme.colorScheme.surface
         )
     )
 }
@@ -658,7 +659,7 @@ private fun MessageBubble(
         Column {
             Row(
                 modifier = Modifier
-                    .widthIn(max = 300.dp)
+                    .then(if (isAssistant) Modifier.fillMaxWidth() else Modifier.widthIn(max = 300.dp))
                     .clip(
                         RoundedCornerShape(
                             topStart = 16.dp,

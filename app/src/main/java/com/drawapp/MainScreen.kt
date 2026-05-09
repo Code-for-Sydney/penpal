@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Book
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -17,42 +18,31 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.penpal.core.ai.ModelStatus
 import com.penpal.feature.chat.ChatEvent
 import com.penpal.feature.chat.ChatScreen
 import com.penpal.feature.chat.ChatViewModel
-import com.penpal.feature.stacks.StackEditorViewModel
-import com.penpal.feature.stacks.StackScreen
-import com.penpal.feature.stacks.StackListScreen
-import com.penpal.feature.stacks.StackListViewModel
 import com.penpal.feature.settings.SettingsScreen
 import com.penpal.feature.settings.SettingsViewModel
-import com.penpal.core.ai.ModelStatus
+import com.penpal.feature.stacks.StackEditorViewModel
+import com.penpal.feature.stacks.StackListScreen
+import com.penpal.feature.stacks.StackListViewModel
+import com.penpal.feature.stacks.StackScreen
 
-/**
- * Screen routes for bottom navigation.
- * Ordered as: Chat, Think, Settings
- */
-sealed class Screen(
-    val route: String,
-    val label: String,
-    val icon: ImageVector
-) {
+import com.drawapp.NotebooksScreen
+
+/** Screen routes for bottom navigation. Ordered as: Chat, Think, Settings */
+sealed class Screen(val route: String, val label: String, val icon: ImageVector) {
     data object Chat : Screen("chat", "Chat", Icons.AutoMirrored.Filled.Chat)
     data object Stacks : Screen("stacks", "Think", Icons.Default.AutoAwesome)
+    data object Notebooks : Screen("notebooks", "Notebooks", Icons.Default.Book)
     data object Settings : Screen("settings", "Settings", Icons.Default.Settings)
 }
 
-/**
- * Ordered list of bottom navigation tabs.
- */
-val bottomNavScreens = listOf(
-    Screen.Stacks,
-    Screen.Settings
-)
+/** Ordered list of bottom navigation tabs. */
+val bottomNavScreens = listOf(Screen.Notebooks, Screen.Stacks, Screen.Settings)
 
-/**
- * Sub-routes for nested navigation within tabs.
- */
+/** Sub-routes for nested navigation within tabs. */
 object StackRoutes {
     const val LIST = "stacks/list"
     const val EDITOR = "stacks/editor"
@@ -70,37 +60,33 @@ object ChatRoutes {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainScreen(
-    onNavigateToStack: (Long) -> Unit = {},
-    onNavigateToStacks: () -> Unit = {}
-) {
-val navController = rememberNavController()
+fun MainScreen(onNavigateToStack: (Long) -> Unit = {}, onNavigateToStacks: () -> Unit = {}) {
+    val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination
-    
+
     // Track if user has ever opened chat via FAB (to show FAB on tabs after first use)
     var hasOpenedChatViaFab by remember { mutableStateOf(false) }
-    
+
     val app = LocalContext.current.applicationContext as PenpalApplication
     val database = remember { com.penpal.core.data.PenpalDatabase.getInstance(app) }
 
     // Shared stack list view model for picker
-    val stackListViewModel = remember {
-        StackListViewModel(stackDao = database.stackDao())
-    }
+    val stackListViewModel = remember { StackListViewModel(stackDao = database.stackDao()) }
 
     // Shared model status across all tabs
     val isModelReady by app.inferenceBridge.isReady.collectAsState()
     val rawModelStatus by app.inferenceBridge.modelStatus.collectAsState()
-    val modelStatus = remember(rawModelStatus) {
-        // If model file exists but status shows NOT_DOWNLOADED, treat as DOWNLOADED
-        if (rawModelStatus == ModelStatus.NOT_DOWNLOADED) {
-            val modelPath = com.penpal.core.ai.ModelManager.findExistingModel(app)
-            if (modelPath != null) ModelStatus.DOWNLOADED else rawModelStatus
-        } else {
-            rawModelStatus
-        }
-    }
+    val modelStatus =
+            remember(rawModelStatus) {
+                // If model file exists but status shows NOT_DOWNLOADED, treat as DOWNLOADED
+                if (rawModelStatus == ModelStatus.NOT_DOWNLOADED) {
+                    val modelPath = com.penpal.core.ai.ModelManager.findExistingModel(app)
+                    if (modelPath != null) ModelStatus.DOWNLOADED else rawModelStatus
+                } else {
+                    rawModelStatus
+                }
+            }
     val isModelUnloading by app.inferenceBridge.isUnloading.collectAsState()
 
     // Toggle model handler - load/unload
@@ -112,66 +98,70 @@ val navController = rememberNavController()
             // Model is downloaded but not loaded - load it
             val modelPath = com.penpal.core.ai.ModelManager.findExistingModel(app)
             if (modelPath != null) {
-                bridge.loadModel(app, modelPath) { }
+                bridge.loadModel(app, modelPath) {}
             }
         }
     }
 
     Scaffold(
-        bottomBar = {
-            NavigationBar {
-                bottomNavScreens.forEach { screen ->
-                    NavigationBarItem(
-                        icon = { Icon(screen.icon, contentDescription = screen.label) },
-                        label = { Text(screen.label) },
-                        selected = currentDestination?.hierarchy?.any { it.route == screen.route } == true,
-                        onClick = {
-                            // If in chat, pop back first (same as X button), then navigate
-                            val isInChat = currentDestination?.route == Screen.Chat.route || 
-                                currentDestination?.route?.startsWith("chat/") == true
-                            if (isInChat) {
-                                // Pop back to close chat properly (same as X button)
-                                navController.popBackStack()
-                            }
-                            // Then navigate to the tab
-                            navController.navigate(screen.route) {
-                                popUpTo(navController.graph.findStartDestination().id) {
-                                    saveState = true
+            bottomBar = {
+                NavigationBar {
+                    bottomNavScreens.forEach { screen ->
+                        NavigationBarItem(
+                                icon = { Icon(screen.icon, contentDescription = screen.label) },
+                                label = { Text(screen.label) },
+                                selected =
+                                        currentDestination?.hierarchy?.any {
+                                            it.route == screen.route
+                                        } == true,
+                                onClick = {
+                                    // If in chat, pop back first (same as X button), then navigate
+                                    val isInChat =
+                                            currentDestination?.route == Screen.Chat.route ||
+                                                    currentDestination?.route?.startsWith(
+                                                            "chat/"
+                                                    ) == true
+                                    if (isInChat) {
+                                        // Pop back to close chat properly (same as X button)
+                                        navController.popBackStack()
+                                    }
+                                    // Then navigate to the tab
+                                    navController.navigate(screen.route) {
+                                        popUpTo(navController.graph.findStartDestination().id) {
+                                            saveState = true
+                                        }
+                                        launchSingleTop = true
+                                        restoreState = true
+                                    }
                                 }
-                                launchSingleTop = true
-                                restoreState = true
-                            }
-                        }
-                    )
+                        )
+                    }
+                }
+            },
+            floatingActionButton = {
+                val route = currentDestination?.route
+                val isChatRoute = route == Screen.Chat.route || route?.startsWith("chat/") == true
+
+                // Show FAB when:
+                // 1. On tabs AND (first time OR user has opened chat before) - allows entering chat
+                // 2. Never show FAB when in chat
+                if (!isChatRoute) {
+                    val hasOtherFab = route == Screen.Stacks.route || route?.startsWith("stacks/") == true || route == Screen.Notebooks.route
+                    FloatingActionButton(
+                            onClick = {
+                                hasOpenedChatViaFab = true
+                                navController.navigate(Screen.Chat.route)
+                            },
+                            modifier = if (hasOtherFab) Modifier.padding(bottom = 80.dp) else Modifier,
+                            containerColor = MaterialTheme.colorScheme.primary
+                    ) { Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = "Chat") }
                 }
             }
-        },
-        floatingActionButton = {
-            val route = currentDestination?.route
-            val isChatRoute = route == Screen.Chat.route || route?.startsWith("chat/") == true
-            
-            // Show FAB when:
-            // 1. On tabs AND (first time OR user has opened chat before) - allows entering chat
-            // 2. Never show FAB when in chat
-            if (!isChatRoute) {
-                FloatingActionButton(
-                    onClick = { 
-                        hasOpenedChatViaFab = true
-                        navController.navigate(Screen.Chat.route)
-                    },
-                    containerColor = MaterialTheme.colorScheme.primary
-                ) {
-                    Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = "Chat")
-                }
-            }
-        }
     ) { innerPadding ->
         NavHost(
-            navController = navController,
-            startDestination = Screen.Stacks.route,
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
+                navController = navController,
+                startDestination = Screen.Notebooks.route,
+                modifier = Modifier.fillMaxSize().padding(innerPadding)
         ) {
             // ──────────────────────────────────────────────────────────────
             // Chat Tab
@@ -179,33 +169,38 @@ val navController = rememberNavController()
             composable(Screen.Chat.route) {
                 val viewModel = remember {
                     ChatViewModel(
-                        vectorStore = app.vectorStore,
-                        inferenceBridge = app.inferenceBridge,
-                        application = app,
-                        chatMessageDao = database.chatMessageDao(),
-                        chatConversationDao = database.chatConversationDao(),
-                        stackDao = database.stackDao(),
-                        workerLauncher = app.workerLauncher,
-                        onLoadModel = { onToggleModel?.invoke() }
+                            vectorStore = app.vectorStore,
+                            inferenceBridge = app.inferenceBridge,
+                            application = app,
+                            chatMessageDao = database.chatMessageDao(),
+                            chatConversationDao = database.chatConversationDao(),
+                            stackDao = database.stackDao(),
+                            workerLauncher = app.workerLauncher,
+                            onLoadModel = { onToggleModel?.invoke() }
                     )
                 }
                 val uiState by viewModel.uiState.collectAsState()
                 ChatScreen(
-                    uiState = uiState,
-                    onEvent = viewModel::onEvent,
-                    onNavigateBack = { navController.popBackStack() },
-                    onNavigateToStacks = {
-                        navController.navigate(Screen.Stacks.route)
-                    },
-                    onNavigateToChatWithStack = { stackId ->
-                        navController.navigate(ChatRoutes.chatWithStackRoute(stackId))
-                    },
-                    stackListViewModel = stackListViewModel,
-                    isModelReady = isModelReady,
-                    isModelLoading = modelStatus == ModelStatus.DOWNLOADING || modelStatus == ModelStatus.LOADING,
-                    isModelUnloading = isModelUnloading,
-                    modelStatus = modelStatus,
-                    onToggleModel = if (modelStatus == ModelStatus.DOWNLOADED || modelStatus == ModelStatus.READY) onToggleModel else null
+                        uiState = uiState,
+                        onEvent = viewModel::onEvent,
+                        onNavigateBack = { navController.popBackStack() },
+                        onNavigateToStacks = { navController.navigate(Screen.Stacks.route) },
+                        onNavigateToChatWithStack = { stackId ->
+                            navController.navigate(ChatRoutes.chatWithStackRoute(stackId))
+                        },
+                        stackListViewModel = stackListViewModel,
+                        isModelReady = isModelReady,
+                        isModelLoading =
+                                modelStatus == ModelStatus.DOWNLOADING ||
+                                        modelStatus == ModelStatus.LOADING,
+                        isModelUnloading = isModelUnloading,
+                        modelStatus = modelStatus,
+                        onToggleModel =
+                                if (modelStatus == ModelStatus.DOWNLOADED ||
+                                                modelStatus == ModelStatus.READY
+                                )
+                                        onToggleModel
+                                else null
                 )
             }
 
@@ -214,41 +209,44 @@ val navController = rememberNavController()
                 val stackId = backStackEntry.arguments?.getString("stackId")
                 val viewModel = remember {
                     ChatViewModel(
-                        vectorStore = app.vectorStore,
-                        inferenceBridge = app.inferenceBridge,
-                        application = app,
-                        chatMessageDao = database.chatMessageDao(),
-                        chatConversationDao = database.chatConversationDao(),
-                        stackDao = database.stackDao(),
-                        workerLauncher = app.workerLauncher,
-                        onLoadModel = { onToggleModel?.invoke() }
+                            vectorStore = app.vectorStore,
+                            inferenceBridge = app.inferenceBridge,
+                            application = app,
+                            chatMessageDao = database.chatMessageDao(),
+                            chatConversationDao = database.chatConversationDao(),
+                            stackDao = database.stackDao(),
+                            workerLauncher = app.workerLauncher,
+                            onLoadModel = { onToggleModel?.invoke() }
                     )
                 }
                 val uiState by viewModel.uiState.collectAsState()
 
                 // Auto-attach stack when entering this route
                 LaunchedEffect(stackId) {
-                    stackId?.let { id ->
-                        viewModel.onEvent(ChatEvent.AttachStack(id))
-                    }
+                    stackId?.let { id -> viewModel.onEvent(ChatEvent.AttachStack(id)) }
                 }
 
                 ChatScreen(
-                    uiState = uiState,
-                    onEvent = viewModel::onEvent,
-                    onNavigateBack = { navController.popBackStack() },
-                    onNavigateToStacks = {
-                        navController.navigate(Screen.Stacks.route)
-                    },
-                    onNavigateToChatWithStack = { navStackId ->
-                        navController.navigate(ChatRoutes.chatWithStackRoute(navStackId))
-                    },
-                    stackListViewModel = stackListViewModel,
-                    isModelReady = isModelReady,
-                    isModelLoading = modelStatus == ModelStatus.DOWNLOADING || modelStatus == ModelStatus.LOADING,
-                    isModelUnloading = isModelUnloading,
-                    modelStatus = modelStatus,
-                    onToggleModel = if (modelStatus == ModelStatus.DOWNLOADED || modelStatus == ModelStatus.READY) onToggleModel else null
+                        uiState = uiState,
+                        onEvent = viewModel::onEvent,
+                        onNavigateBack = { navController.popBackStack() },
+                        onNavigateToStacks = { navController.navigate(Screen.Stacks.route) },
+                        onNavigateToChatWithStack = { navStackId ->
+                            navController.navigate(ChatRoutes.chatWithStackRoute(navStackId))
+                        },
+                        stackListViewModel = stackListViewModel,
+                        isModelReady = isModelReady,
+                        isModelLoading =
+                                modelStatus == ModelStatus.DOWNLOADING ||
+                                        modelStatus == ModelStatus.LOADING,
+                        isModelUnloading = isModelUnloading,
+                        modelStatus = modelStatus,
+                        onToggleModel =
+                                if (modelStatus == ModelStatus.DOWNLOADED ||
+                                                modelStatus == ModelStatus.READY
+                                )
+                                        onToggleModel
+                                else null
                 )
             }
 
@@ -257,25 +255,30 @@ val navController = rememberNavController()
             // ──────────────────────────────────────────────────────────────
             composable(Screen.Stacks.route) {
                 StackListScreen(
-                    viewModel = stackListViewModel,
-                    onStackSelected = { stackId ->
-                        navController.navigate(StackRoutes.editorRoute(stackId))
-                    },
-                    onCreateNew = {
-                        navController.navigate(StackRoutes.EDITOR)
-                    },
-                    onChatWithStack = { stackId ->
-                        navController.navigate(ChatRoutes.chatWithStackRoute(stackId)) {
-                            popUpTo(Screen.Chat.route) { inclusive = true }
-                            launchSingleTop = true
-                        }
-                    },
-                    isModelReady = isModelReady,
-                    isModelLoading = modelStatus == ModelStatus.DOWNLOADING || modelStatus == ModelStatus.LOADING,
-                    isModelUnloading = isModelUnloading,
-                    modelStatus = modelStatus,
-                    onToggleModel = if (modelStatus == ModelStatus.DOWNLOADED || modelStatus == ModelStatus.READY) onToggleModel else null,
-                    modifier = Modifier.fillMaxSize()
+                        viewModel = stackListViewModel,
+                        onStackSelected = { stackId ->
+                            navController.navigate(StackRoutes.editorRoute(stackId))
+                        },
+                        onCreateNew = { navController.navigate(StackRoutes.EDITOR) },
+                        onChatWithStack = { stackId ->
+                            navController.navigate(ChatRoutes.chatWithStackRoute(stackId)) {
+                                popUpTo(Screen.Chat.route) { inclusive = true }
+                                launchSingleTop = true
+                            }
+                        },
+                        isModelReady = isModelReady,
+                        isModelLoading =
+                                modelStatus == ModelStatus.DOWNLOADING ||
+                                        modelStatus == ModelStatus.LOADING,
+                        isModelUnloading = isModelUnloading,
+                        modelStatus = modelStatus,
+                        onToggleModel =
+                                if (modelStatus == ModelStatus.DOWNLOADED ||
+                                                modelStatus == ModelStatus.READY
+                                )
+                                        onToggleModel
+                                else null,
+                        modifier = Modifier.fillMaxSize()
                 )
             }
 
@@ -283,29 +286,36 @@ val navController = rememberNavController()
             composable(StackRoutes.EDITOR) {
                 val viewModel = remember {
                     StackEditorViewModel(
-                        context = app,
-                        stackDao = database.stackDao(),
-                        workerLauncher = app.workerLauncher,
-                        inferenceBridge = app.inferenceBridge,
-                        onLoadModel = { onToggleModel?.invoke() }
+                            context = app,
+                            stackDao = database.stackDao(),
+                            workerLauncher = app.workerLauncher,
+                            inferenceBridge = app.inferenceBridge,
+                            onLoadModel = { onToggleModel?.invoke() }
                     )
                 }
                 StackScreen(
-                    viewModel = viewModel,
-                    onNavigateBack = { navController.popBackStack() },
-                    onNavigateToHome = { navController.popBackStack() },
-                    onChatWithStack = { stackId ->
-                        navController.navigate(ChatRoutes.chatWithStackRoute(stackId)) {
-                            popUpTo(Screen.Chat.route) { inclusive = true }
-                            launchSingleTop = true
-                        }
-                    },
-                    isModelReady = isModelReady,
-                    isModelLoading = modelStatus == ModelStatus.DOWNLOADING || modelStatus == ModelStatus.LOADING,
-                    isModelUnloading = isModelUnloading,
-                    modelStatus = modelStatus,
-                    onToggleModel = if (modelStatus == ModelStatus.DOWNLOADED || modelStatus == ModelStatus.READY) onToggleModel else null,
-                    modifier = Modifier.fillMaxSize()
+                        viewModel = viewModel,
+                        onNavigateBack = { navController.popBackStack() },
+                        onNavigateToHome = { navController.popBackStack() },
+                        onChatWithStack = { stackId ->
+                            navController.navigate(ChatRoutes.chatWithStackRoute(stackId)) {
+                                popUpTo(Screen.Chat.route) { inclusive = true }
+                                launchSingleTop = true
+                            }
+                        },
+                        isModelReady = isModelReady,
+                        isModelLoading =
+                                modelStatus == ModelStatus.DOWNLOADING ||
+                                        modelStatus == ModelStatus.LOADING,
+                        isModelUnloading = isModelUnloading,
+                        modelStatus = modelStatus,
+                        onToggleModel =
+                                if (modelStatus == ModelStatus.DOWNLOADED ||
+                                                modelStatus == ModelStatus.READY
+                                )
+                                        onToggleModel
+                                else null,
+                        modifier = Modifier.fillMaxSize()
                 )
             }
 
@@ -314,58 +324,71 @@ val navController = rememberNavController()
                 val stackId = backStackEntry.arguments?.getString("stackId")
                 val viewModel = remember {
                     StackEditorViewModel(
-                        context = app,
-                        stackDao = database.stackDao(),
-                        workerLauncher = app.workerLauncher,
-                        inferenceBridge = app.inferenceBridge,
-                        onLoadModel = { onToggleModel?.invoke() }
+                            context = app,
+                            stackDao = database.stackDao(),
+                            workerLauncher = app.workerLauncher,
+                            inferenceBridge = app.inferenceBridge,
+                            onLoadModel = { onToggleModel?.invoke() }
                     )
                 }
 
                 // Load stack by ID if provided
-                LaunchedEffect(stackId) {
-                    stackId?.let { id ->
-                        viewModel.loadFromDatabase(id)
-                    }
-                }
+                LaunchedEffect(stackId) { stackId?.let { id -> viewModel.loadFromDatabase(id) } }
 
                 StackScreen(
-                    viewModel = viewModel,
-                    onNavigateBack = { navController.popBackStack() },
-                    onNavigateToHome = { navController.popBackStack() },
-                    onChatWithStack = { navStackId ->
-                        navController.navigate(ChatRoutes.chatWithStackRoute(navStackId)) {
-                            popUpTo(Screen.Chat.route) { inclusive = true }
-                            launchSingleTop = true
-                        }
-                    },
-                    isModelReady = isModelReady,
-                    isModelLoading = modelStatus == ModelStatus.DOWNLOADING || modelStatus == ModelStatus.LOADING,
-                    isModelUnloading = isModelUnloading,
-                    modelStatus = modelStatus,
-                    onToggleModel = if (modelStatus == ModelStatus.DOWNLOADED || modelStatus == ModelStatus.READY) onToggleModel else null,
-                    modifier = Modifier.fillMaxSize()
+                        viewModel = viewModel,
+                        onNavigateBack = { navController.popBackStack() },
+                        onNavigateToHome = { navController.popBackStack() },
+                        onChatWithStack = { navStackId ->
+                            navController.navigate(ChatRoutes.chatWithStackRoute(navStackId)) {
+                                popUpTo(Screen.Chat.route) { inclusive = true }
+                                launchSingleTop = true
+                            }
+                        },
+                        isModelReady = isModelReady,
+                        isModelLoading =
+                                modelStatus == ModelStatus.DOWNLOADING ||
+                                        modelStatus == ModelStatus.LOADING,
+                        isModelUnloading = isModelUnloading,
+                        modelStatus = modelStatus,
+                        onToggleModel =
+                                if (modelStatus == ModelStatus.DOWNLOADED ||
+                                                modelStatus == ModelStatus.READY
+                                )
+                                        onToggleModel
+                                else null,
+                        modifier = Modifier.fillMaxSize()
                 )
+            }
+
+            // Notebooks Tab
+            // ──────────────────────────────────────────────────────────────
+            composable(Screen.Notebooks.route) {
+                NotebooksScreen(modifier = Modifier.fillMaxSize())
             }
 
             // Settings Tab
             // ──────────────────────────────────────────────────────────────
             composable(Screen.Settings.route) {
                 val viewModel = remember {
-                    SettingsViewModel(
-                        application = app,
-                        inferenceBridge = app.inferenceBridge
-                    )
+                    SettingsViewModel(application = app, inferenceBridge = app.inferenceBridge)
                 }
                 val uiState by viewModel.uiState.collectAsState()
                 SettingsScreen(
-                    uiState = uiState,
-                    onEvent = viewModel::onEvent,
-                    isModelReady = isModelReady,
-                    isModelLoading = modelStatus == ModelStatus.DOWNLOADING || modelStatus == ModelStatus.LOADING,
-                    isModelUnloading = isModelUnloading,
-                    modelStatus = modelStatus,
-                    onToggleModel = if (modelStatus == ModelStatus.DOWNLOADED || modelStatus == ModelStatus.READY) onToggleModel else null
+                        uiState = uiState,
+                        onEvent = viewModel::onEvent,
+                        isModelReady = isModelReady,
+                        isModelLoading =
+                                modelStatus == ModelStatus.DOWNLOADING ||
+                                        modelStatus == ModelStatus.LOADING,
+                        isModelUnloading = isModelUnloading,
+                        modelStatus = modelStatus,
+                        onToggleModel =
+                                if (modelStatus == ModelStatus.DOWNLOADED ||
+                                                modelStatus == ModelStatus.READY
+                                )
+                                        onToggleModel
+                                else null
                 )
             }
         }

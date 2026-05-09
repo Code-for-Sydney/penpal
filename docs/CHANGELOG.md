@@ -4,6 +4,39 @@ All notable changes to the Penpal project.
 
 ## [Unreleased]
 
+### UI Polish & Chat Improvements (May 2026)
+
+#### Chat FAB Positioning Fix ✅
+
+**`app/MainScreen.kt`**:
+- Adjusted Chat FAB positioning to avoid overlapping other FABs on screen
+- Added 80dp bottom margin (`Modifier.padding(bottom = 80.dp)`) when on Stacks or Notebooks screens where other FABs exist
+- Detection: `route == Screen.Stacks.route || route?.startsWith("stacks/") == true || route == Screen.Notebooks.route`
+
+#### Chat TopBar Pinned ✅
+
+**`feature/chat/ChatScreen.kt`**:
+- Chat TopBar is now fixed/pinned - it no longer collapses on scroll
+- Added `scrolledContainerColor = MaterialTheme.colorScheme.surface` to `TopAppBarDefaults.topAppBarColors()`
+- Ensures TopBar remains static during chat scroll
+
+#### AI Message Alignment Fix ✅
+
+**`feature/chat/ChatScreen.kt`**:
+- AI/model messages now extend to the right edge of the screen using `fillMaxWidth()`
+- User messages remain constrained to 300dp max width (`widthIn(max = 300.dp)`)
+- Changed from fixed 300dp to conditional modifier: `if (isAssistant) Modifier.fillMaxWidth() else Modifier.widthIn(max = 300.dp)`
+
+#### Bottom Navigation Enhancement ✅
+
+**`app/MainScreen.kt`**:
+- Added new Notebooks tab (`Screen.Notebooks`) with Book icon
+- Updated `bottomNavScreens` order: Notebooks, Stacks, Settings
+- Updated start destination from `Screen.Stacks.route` to `Screen.Notebooks.route`
+- Added `NotebooksScreen` composable route
+
+---
+
 ### Chat Model Response & Navigation Fixes (May 2026)
 
 #### LiteRtInferenceBridge API Fix ✅
