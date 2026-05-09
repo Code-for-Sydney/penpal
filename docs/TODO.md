@@ -92,25 +92,25 @@
 - [x] Simplified ToggleModel handler in ChatViewModel
 
 ### Step 5: Global System Prompt in Settings
-- [ ] Add "Default System Prompt" section in Settings screen
-- [ ] Store in SharedPreferences
+- [x] Add "Default System Prompt" section in Settings screen
+- [x] Store in SharedPreferences
 
 ### Step 6: Over-Drag Hidden Panel (Chat)
 - [x] Add `systemPrompt: String` to `ChatUiState` and `ChatConversationEntity`
 - [x] Add `UpdateSystemPrompt` event in Chat
 - [x] Implement over-drag pattern above message list
-- [ ] Add system prompt field in panel
-- [ ] Prepend system prompt in `sendMessage()` (global default + per-conversation override)
+- [x] Add system prompt field in panel
+- [x] Prepend system prompt in `sendMessage()` (global default + per-conversation override)
 
 ### Step 7: Wire Agent Prompt to Processing Pipeline
-- [ ] Add `agentPrompt` parameter to `WorkerLauncher.enqueue()`
-- [ ] Pass agent prompt through to processing workers
+- [x] Add `agentPrompt` parameter to `WorkerLauncher.enqueue()`
+- [x] Pass agent prompt through to processing workers
 - [ ] Modify extraction logic to consider agent prompt (e.g., "Focus on equations" changes parsing)
 
 ### Step 8: Database Schema Updates
-- [ ] Add `systemPrompt`, `agentPrompt` columns to `StackEntity`
-- [ ] Add `systemPrompt` column to `ChatConversationEntity`
-- [ ] Update DAOs if needed
+- [x] Add `systemPrompt`, `agentPrompt` columns to `StackEntity`
+- [x] Add `systemPrompt`, `agentPrompt` columns to `ChatConversationEntity`
+- [x] Update DAOs if needed
 
 ## Current Sprint: Chat Bubble Features
 
