@@ -94,7 +94,8 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
                     ModelManager.saveModelPath(context, modelPath)
                     val success = initializeEngine(modelPath, backend)
                     if (success) {
-                        _modelStatus.value = ModelStatus.DOWNLOADED
+                        _modelStatus.value = ModelStatus.READY
+                        _isReady.value = true
                         onDone("Model loaded: $modelName")
                     } else {
                         onDone("Failed to initialize model")
@@ -194,8 +195,6 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
                             modelPath = modelPath,
                             backend = backend,
                             visionBackend = visionBackend,
-                            audioBackend = Backend.CPU(),
-                            maxNumImages = 1,
                             maxNumTokens = 8192
                         )
 
@@ -433,6 +432,8 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
                     return@launch
                 }
 
+                _modelStatus.value = ModelStatus.LOADING
+
                 // Track this model as recently used
                 val file = File(modelPath)
                 ModelManager.trackModel(
@@ -447,13 +448,16 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
 
                 val success = initializeEngine(modelPath, backend)
                 if (success) {
-                    _modelStatus.value = ModelStatus.DOWNLOADED
+                    _modelStatus.value = ModelStatus.READY
+                    _isReady.value = true
                     onDone("Model loaded: ${file.name}")
                 } else {
+                    _modelStatus.value = ModelStatus.ERROR
                     onDone("Failed to initialize model")
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Load model failed", e)
+                _modelStatus.value = ModelStatus.ERROR
                 onDone("Error: ${e.message}")
             }
         }
@@ -513,7 +517,7 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
                     private var lastMode = ContentMode.REGULAR
 
                     override fun onMessage(message: Message) {
-                        val text = conv.renderMessageIntoString(message)
+                        val text = try { message.javaClass.getMethod("getContent").invoke(message) as? String ?: "" } catch (e: Exception) { "" }
                         Log.d(TAG, "onMessage: textLength=${text.length}, accumulated=${full.length + text.length}")
                         
                         val result = filter.append(text)
@@ -610,7 +614,7 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
                     private var lastMode = ContentMode.REGULAR
 
                     override fun onMessage(message: Message) {
-                        val text = conv.renderMessageIntoString(message)
+                        val text = try { message.javaClass.getMethod("getContent").invoke(message) as? String ?: "" } catch (e: Exception) { "" }
                         Log.d(TAG, "onMessage: textLength=${text.length}, accumulated=${full.length + text.length}")
                         
                         val result = filter.append(text)
@@ -684,7 +688,7 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
                         throw e
                     }
                     .collect { message ->
-                        val text = conv.renderMessageIntoString(message)
+                        val text = try { message.javaClass.getMethod("getContent").invoke(message) as? String ?: "" } catch (e: Exception) { "" }
                         if (text.isNotEmpty()) {
                             val result = filter.append(text)
                             if (result.text.isNotEmpty()) {
@@ -740,7 +744,7 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
                         throw e
                     }
                     .collect { message ->
-                        val text = conv.renderMessageIntoString(message)
+                        val text = try { message.javaClass.getMethod("getContent").invoke(message) as? String ?: "" } catch (e: Exception) { "" }
                         if (text.isNotEmpty()) {
                             val result = filter.append(text)
                             if (result.text.isNotEmpty()) {
@@ -789,7 +793,7 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
                         throw e
                     }
                     .collect { message ->
-                        val text = conv.renderMessageIntoString(message)
+                        val text = try { message.javaClass.getMethod("getContent").invoke(message) as? String ?: "" } catch (e: Exception) { "" }
                         if (text.isNotEmpty()) {
                             val result = filter.appendWithTransitions(text)
                             if (result.text.isNotEmpty() || result.transitions.isNotEmpty()) {
@@ -857,7 +861,7 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
                         throw e
                     }
                     .collect { message ->
-                        val text = conv.renderMessageIntoString(message)
+                        val text = try { message.javaClass.getMethod("getContent").invoke(message) as? String ?: "" } catch (e: Exception) { "" }
                         Log.d(TAG, "Raw model output: '${text.take(100)}'")
                         if (text.isNotEmpty()) {
                             val result = filter.appendWithTransitions(text)
@@ -934,7 +938,7 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
                     private var full = ""
 
                     override fun onMessage(message: Message) {
-                        val text = conv.renderMessageIntoString(message)
+                        val text = try { message.javaClass.getMethod("getContent").invoke(message) as? String ?: "" } catch (e: Exception) { "" }
                         val result = filter.append(text)
                         full += result.text
                         if (result.text.isNotEmpty()) {
@@ -1000,7 +1004,7 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
                         throw e
                     }
                     .collect { message ->
-                        val text = conv.renderMessageIntoString(message)
+                        val text = try { message.javaClass.getMethod("getContent").invoke(message) as? String ?: "" } catch (e: Exception) { "" }
                         if (text.isNotEmpty()) {
                             val result = filter.append(text)
                             if (result.text.isNotEmpty()) {
@@ -1052,7 +1056,7 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
                         throw e
                     }
                     .collect { message ->
-                        val text = conv.renderMessageIntoString(message)
+                        val text = try { message.javaClass.getMethod("getContent").invoke(message) as? String ?: "" } catch (e: Exception) { "" }
                         if (text.isNotEmpty()) {
                             val result = filter.appendWithTransitions(text)
                             if (result.text.isNotEmpty() || result.transitions.isNotEmpty()) {

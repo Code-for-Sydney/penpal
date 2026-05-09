@@ -104,8 +104,6 @@ class LmEngineManager(private val context: Context) {
                                 modelPath = modelPath,
                                 backend = backend,
                                 visionBackend = visionBackend,
-                                audioBackend = Backend.CPU(),
-                                maxNumImages = 1,
                                 maxNumTokens = config.maxTokens
                             )
 

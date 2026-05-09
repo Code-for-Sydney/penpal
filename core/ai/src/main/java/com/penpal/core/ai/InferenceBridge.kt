@@ -211,6 +211,8 @@ enum class ModelStatus {
     NOT_DOWNLOADED,
     DOWNLOADING,
     DOWNLOADED,
+    LOADING,
+    READY,
     ERROR
 }
 

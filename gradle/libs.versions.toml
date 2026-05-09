@@ -16,7 +16,7 @@ coroutines = "1.8.1"
 gson = "2.11.0"
 pdfbox = "3.0.2"
 okhttp = "4.12.0"
-# LiteRT-LM - using latest.release like main branch
+# LiteRT-LM
 litertlm = "latest.release"
 jsoup = "1.17.2"
 mlkit-text-recognition = "16.0.1"
