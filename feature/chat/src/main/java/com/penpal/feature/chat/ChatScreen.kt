@@ -8,6 +8,10 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.draganddrop.dragAndDropTarget
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -24,7 +28,12 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Book
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.History
@@ -37,11 +46,16 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.*
 import com.penpal.core.ai.MessagePart
+import com.penpal.core.ai.ModelStatus
 import com.penpal.core.ai.ToolStatus
+import com.penpal.core.ui.ModelStatusIndicator
 import com.penpal.core.ui.PenpalTheme
 
 /**
@@ -52,15 +66,22 @@ import com.penpal.core.ui.PenpalTheme
 fun ChatScreen(
     uiState: ChatUiState,
     onEvent: (ChatEvent) -> Unit,
-    onNavigateToNotebooks: () -> Unit = {},
-    onNavigateToChatWithNotebook: (String) -> Unit = {},
-    notebookListViewModel: com.penpal.feature.notebooks.NotebookListViewModel? = null,
+    onNavigateToStacks: () -> Unit = {},
+    onNavigateToChatWithStack: (String) -> Unit = {},
+    stackListViewModel: com.penpal.feature.stacks.StackListViewModel? = null,
+    onStartSubChat: ((String) -> Unit)? = null,
+    // Shared model status from MainScreen
+    isModelReady: Boolean = uiState.isModelReady,
+    isModelLoading: Boolean = false,
+    isModelUnloading: Boolean = false,
+    modelStatus: com.penpal.core.ai.ModelStatus = uiState.modelStatus,
+    onToggleModel: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
     var showContext by remember { mutableStateOf(false) }
     var showHistory by remember { mutableStateOf(false) }
-    var showNotebookPicker by remember { mutableStateOf(false) }
+    var showStackPicker by remember { mutableStateOf(false) }
     var showSpeechInput by remember { mutableStateOf(false) }
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
@@ -114,7 +135,12 @@ fun ChatScreen(
                 showContext = showContext,
                 onToggleContext = { showContext = !showContext },
                 onOpenDrawer = { scope.launch { drawerState.open() } },
-                onClearChat = { onEvent(ChatEvent.ClearChat) }
+                onClearChat = { onEvent(ChatEvent.ClearChat) },
+                isModelReady = isModelReady,
+                isModelLoading = isModelLoading,
+                isModelUnloading = isModelUnloading,
+                modelStatus = modelStatus,
+                onToggleModel = onToggleModel
             )
 
             // Context panel (collapsible)
@@ -127,11 +153,11 @@ fun ChatScreen(
                 )
             }
 
-            // Attached notebooks panel
-            if (uiState.attachedNotebooks.isNotEmpty()) {
-                AttachedNotebooksPanel(
-                    notebooks = uiState.attachedNotebooks,
-                    onDetach = { onEvent(ChatEvent.DetachNotebook(it)) },
+            // Attached stacks panel
+            if (uiState.attachedStacks.isNotEmpty()) {
+                AttachedStacksPanel(
+                    stacks = uiState.attachedStacks,
+                    onDetach = { onEvent(ChatEvent.DetachStack(it)) },
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 8.dp, vertical = 4.dp)
@@ -150,11 +176,16 @@ fun ChatScreen(
             }
 
             // Message list
+            var menuMessageId by remember { mutableStateOf<String?>(null) }
+
             LazyColumn(
                 state = listState,
                 modifier = Modifier
                     .weight(1f)
-                    .fillMaxWidth(),
+                    .fillMaxWidth()
+                    .pointerInput(Unit) {
+                        detectTapGestures(onTap = { menuMessageId = null })
+                    },
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
@@ -162,7 +193,8 @@ fun ChatScreen(
                     Log.d("ChatScreen", "MessageBubble: id=${message.id.take(8)}, role=${message.role}, contentLength=${message.content.length}")
                     MessageBubble(
                         message = message,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth(),
+                        onStartSubChat = onStartSubChat
                     )
                 }
 
@@ -194,7 +226,7 @@ fun ChatScreen(
                 onTextChange = { onEvent(ChatEvent.UpdateInput(it)) },
                 onSend = { onEvent(ChatEvent.SendMessage) },
                 onAttachFile = { filePickerLauncher.launch("*/*") },
-                onAttachNotebook = { showNotebookPicker = true },
+                onAttachStack = { showStackPicker = true },
                 onSpeechInput = { showSpeechInput = true },
                 isLoading = uiState.isLoading,
                 modifier = Modifier
@@ -204,15 +236,15 @@ fun ChatScreen(
         }
     }
 
-    // Notebook picker dialog
-    if (showNotebookPicker && notebookListViewModel != null) {
-        com.penpal.feature.notebooks.NotebookPickerDialog(
-            viewModel = notebookListViewModel,
-            onNotebookSelected = { notebookId, title ->
-                onEvent(ChatEvent.AttachNotebook(notebookId))
-                showNotebookPicker = false
+    // Stack picker dialog
+    if (showStackPicker && stackListViewModel != null) {
+        com.penpal.feature.stacks.StackPickerDialog(
+            viewModel = stackListViewModel,
+            onStackSelected = { stackId, title ->
+                onEvent(ChatEvent.AttachStack(stackId))
+                showStackPicker = false
             },
-            onDismiss = { showNotebookPicker = false }
+            onDismiss = { showStackPicker = false }
         )
     }
 
@@ -239,6 +271,11 @@ private fun ChatTopBar(
     onToggleContext: () -> Unit,
     onOpenDrawer: () -> Unit,
     onClearChat: () -> Unit,
+    isModelReady: Boolean = false,
+    isModelLoading: Boolean = false,
+    isModelUnloading: Boolean = false,
+    modelStatus: ModelStatus = ModelStatus.NOT_DOWNLOADED,
+    onToggleModel: (() -> Unit)? = null,
 ) {
     TopAppBar(
         title = { Text(title, maxLines = 1) },
@@ -251,6 +288,13 @@ private fun ChatTopBar(
             }
         },
         actions = {
+            ModelStatusIndicator(
+                isReady = isModelReady,
+                isLoading = isModelLoading,
+                isUnloading = isModelUnloading,
+                modelStatus = modelStatus,
+                onToggleModel = if (onToggleModel != null && (modelStatus == ModelStatus.DOWNLOADED || modelStatus == ModelStatus.READY)) onToggleModel else null
+            )
             if (hasContext) {
                 IconButton(onClick = onToggleContext) {
                     Icon(
@@ -369,8 +413,8 @@ private fun ConversationItem(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun AttachedNotebooksPanel(
-    notebooks: List<AttachedNotebook>,
+private fun AttachedStacksPanel(
+    stacks: List<AttachedStack>,
     onDetach: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -382,7 +426,7 @@ private fun AttachedNotebooksPanel(
     ) {
         Column(modifier = Modifier.padding(8.dp)) {
             Text(
-                text = "Attached Notebooks",
+                text = "Attached Stacks",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onTertiaryContainer
             )
@@ -391,11 +435,11 @@ private fun AttachedNotebooksPanel(
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                notebooks.forEach { notebook ->
+                stacks.forEach { stack ->
                     InputChip(
                         selected = true,
                         onClick = { },
-                        label = { Text(notebook.title, maxLines = 1) },
+                        label = { Text(stack.title, maxLines = 1) },
                         leadingIcon = {
                             Icon(
                                 Icons.Default.Book,
@@ -404,7 +448,7 @@ private fun AttachedNotebooksPanel(
                             )
                         },
                         trailingIcon = {
-                            IconButton(onClick = { onDetach(notebook.notebookId) }, modifier = Modifier.size(16.dp)) {
+                            IconButton(onClick = { onDetach(stack.stackId) }, modifier = Modifier.size(16.dp)) {
                                 Icon(Icons.Default.Close, contentDescription = "Detach", modifier = Modifier.size(12.dp))
                             }
                         }
@@ -516,87 +560,181 @@ private fun ContextPanel(
 @Composable
 private fun MessageBubble(
     message: ChatMessage,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onStartSubChat: ((String) -> Unit)? = null
 ) {
     val isUser = message.role == MessageRole.USER
+    val isAssistant = !isUser
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
+    val dateFormat = remember { SimpleDateFormat("MMM d, h:mm a", Locale.getDefault()) }
+
+    var showMenu by remember { mutableStateOf(false) }
+    var showTimestamp by remember { mutableStateOf(false) }
+    var offsetX by remember { mutableFloatStateOf(0f) }
+
+    val contentText = remember(message) {
+        if (isUser || message.parts.isEmpty()) {
+            message.content
+        } else {
+            message.parts.filterIsInstance<MessagePart.TextPart>().joinToString("\n") { it.text }
+        }
+    }
 
     Row(
-        modifier = modifier,
-        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
-    ) {
-        Column(
-            modifier = Modifier
-                .widthIn(max = 300.dp)
-                .clip(
-                    RoundedCornerShape(
-                        topStart = 16.dp,
-                        topEnd = 16.dp,
-                        bottomStart = if (isUser) 16.dp else 4.dp,
-                        bottomEnd = if (isUser) 4.dp else 16.dp
-                    )
-                )
-                .background(
-                    if (isUser) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.surfaceVariant
-                )
-                .padding(12.dp)
-        ) {
-            if (isUser || message.parts.isEmpty()) {
-                // User messages or legacy messages without parts
-                Text(
-                    text = message.content,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (isUser) MaterialTheme.colorScheme.onPrimary
-                    else MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            } else {
-                // Assistant message with structured parts
-                message.parts.forEach { part ->
-                    when (part) {
-                        is MessagePart.TextPart -> {
-                            MarkdownText(
-                                text = part.text,
-                                modifier = Modifier.fillMaxWidth(),
-                                style = MaterialTheme.typography.bodyMedium.copy(
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            )
-                        }
-                        is MessagePart.ReasoningPart -> {
-                            ReasoningBlock(part = part)
-                        }
-                        is MessagePart.ToolCallPart -> {
-                            ToolCallBlock(part = part)
-                        }
-                        is MessagePart.ToolResponsePart -> {
-                            ToolResponseBlock(part = part)
-                        }
-                        is MessagePart.ImagePart -> {
-                            Text(
-                                text = "[Image: ${part.description.take(100)}]",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                            )
-                        }
-                        is MessagePart.AudioPart -> {
-                            Text(
-                                text = "[Audio: ${part.transcription.take(100)}]",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                            )
+        modifier = modifier
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onLongPress = {
+                        if (isAssistant) {
+                            showMenu = true
                         }
                     }
-                    Spacer(modifier = Modifier.height(4.dp))
+                )
+            }
+            .pointerInput(Unit) {
+                detectHorizontalDragGestures(
+                    onDragEnd = {
+                        if (offsetX < -50f) {
+                            showTimestamp = true
+                        } else if (offsetX > 50f) {
+                            showTimestamp = false
+                        }
+                        offsetX = 0f
+                    },
+                    onHorizontalDrag = { _, dragAmount ->
+                        offsetX += dragAmount
+                    }
+                )
+            },
+        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
+    ) {
+        Column {
+            Row(
+                modifier = Modifier
+                    .widthIn(max = 300.dp)
+                    .clip(
+                        RoundedCornerShape(
+                            topStart = 16.dp,
+                            topEnd = 16.dp,
+                            bottomStart = if (isUser) 16.dp else 4.dp,
+                            bottomEnd = if (isUser) 4.dp else 16.dp
+                        )
+                    )
+                    .background(
+                        if (isUser) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.surfaceVariant
+                    )
+                    .padding(12.dp)
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    if (isUser || message.parts.isEmpty()) {
+                        SelectionContainer {
+                            Text(
+                                text = message.content,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (isUser) MaterialTheme.colorScheme.onPrimary
+                                else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    } else {
+                        message.parts.forEach { part ->
+                            when (part) {
+                                is MessagePart.TextPart -> {
+                                    MarkdownText(
+                                        text = part.text,
+                                        modifier = Modifier.fillMaxWidth(),
+                                        style = MaterialTheme.typography.bodyMedium.copy(
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    )
+                                }
+                                is MessagePart.ReasoningPart -> {
+                                    ReasoningBlock(part = part)
+                                }
+                                is MessagePart.ToolCallPart -> {
+                                    ToolCallBlock(part = part)
+                                }
+                                is MessagePart.ToolResponsePart -> {
+                                    ToolResponseBlock(part = part)
+                                }
+                                is MessagePart.ImagePart -> {
+                                    Text(
+                                        text = "[Image: ${part.description.take(100)}]",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                    )
+                                }
+                                is MessagePart.AudioPart -> {
+                                    Text(
+                                        text = "[Audio: ${part.transcription.take(100)}]",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                        }
+                    }
+
+                    if (message.sources.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "${message.sources.size} sources",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (isUser) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.7f)
+                            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        )
+                    }
+                }
+
+                if (isAssistant) {
+                    Box {
+                        DropdownMenu(
+                            expanded = showMenu,
+                            onDismissRequest = { showMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Copy") },
+                                onClick = {
+                                    clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(contentText))
+                                    showMenu = false
+                                },
+                                leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Share") },
+                                onClick = {
+                                    val shareIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                                        type = "text/plain"
+                                        putExtra(android.content.Intent.EXTRA_TEXT, contentText)
+                                    }
+                                    context.startActivity(android.content.Intent.createChooser(shareIntent, "Share message"))
+                                    showMenu = false
+                                },
+                                leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) }
+                            )
+                            if (onStartSubChat != null) {
+                                DropdownMenuItem(
+                                    text = { Text("Start sub-chat") },
+                                    onClick = {
+                                        onStartSubChat(message.content)
+                                        showMenu = false
+                                    },
+                                    leadingIcon = { Icon(Icons.Default.Menu, contentDescription = null) }
+                                )
+                            }
+                        }
+                    }
                 }
             }
 
-            if (message.sources.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(4.dp))
+            if (showTimestamp) {
                 Text(
-                    text = "${message.sources.size} sources",
+                    text = dateFormat.format(java.util.Date(message.timestamp)),
                     style = MaterialTheme.typography.labelSmall,
-                    color = if (isUser) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.7f)
-                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                    modifier = Modifier.padding(top = 2.dp, start = 8.dp)
                 )
             }
         }
@@ -819,7 +957,7 @@ private fun ChatInputArea(
     onTextChange: (String) -> Unit,
     onSend: () -> Unit,
     onAttachFile: () -> Unit,
-    onAttachNotebook: () -> Unit,
+    onAttachStack: () -> Unit,
     onSpeechInput: () -> Unit,
     isLoading: Boolean,
     modifier: Modifier = Modifier
@@ -836,10 +974,10 @@ private fun ChatInputArea(
             )
         }
 
-        IconButton(onClick = onAttachNotebook) {
+        IconButton(onClick = onAttachStack) {
             Icon(
                 imageVector = Icons.Default.Book,
-                contentDescription = "Attach notebook"
+                contentDescription = "Attach stack"
             )
         }
 

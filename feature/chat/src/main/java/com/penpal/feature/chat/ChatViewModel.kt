@@ -14,8 +14,8 @@ import com.penpal.core.data.ChatConversationEntity
 import com.penpal.core.data.ChatMessageDao
 import com.penpal.core.data.ChatMessageEntity
 import com.penpal.core.data.ChunkEntity
-import com.penpal.core.data.NotebookDao
-import com.penpal.core.data.NotebookEntity
+import com.penpal.core.data.StackDao
+import com.penpal.core.data.StackEntity
 import com.penpal.core.processing.WorkerLauncher
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -43,8 +43,8 @@ data class ChatUiState(
     val conversations: List<ChatConversation> = emptyList(),
     val currentConversationId: String? = null,
     val currentConversationTitle: String = "New Chat",
-    // Notebook attachments
-    val attachedNotebooks: List<AttachedNotebook> = emptyList(),
+    // Stack attachments
+    val attachedStacks: List<AttachedStack> = emptyList(),
     val pinnedFiles: List<PinnedFile> = emptyList(),
     // System prompt (per-conversation override)
     val systemPrompt: String = ""
@@ -67,8 +67,8 @@ data class ChatConversation(
     val updatedAt: Long = System.currentTimeMillis()
 )
 
-data class AttachedNotebook(
-    val notebookId: String,
+data class AttachedStack(
+    val stackId: String,
     val title: String
 )
 
@@ -91,9 +91,9 @@ sealed class ChatEvent {
     data class CreateConversation(val title: String = "New Chat", val parentId: String? = null) : ChatEvent()
     data class LoadConversation(val conversationId: String) : ChatEvent()
     data class DeleteConversation(val conversationId: String) : ChatEvent()
-    // Notebook attachment
-    data class AttachNotebook(val notebookId: String) : ChatEvent()
-    data class DetachNotebook(val notebookId: String) : ChatEvent()
+    // Stack attachment
+    data class AttachStack(val stackId: String) : ChatEvent()
+    data class DetachStack(val stackId: String) : ChatEvent()
     // File handling
     data class AddFile(val uri: Uri, val mimeType: String) : ChatEvent()
     data class RemovePinnedFile(val uri: String) : ChatEvent()
@@ -108,7 +108,7 @@ class ChatViewModel(
     private val application: android.app.Application,
     private val chatMessageDao: ChatMessageDao? = null,
     private val chatConversationDao: ChatConversationDao? = null,
-    private val notebookDao: NotebookDao? = null,
+    private val stackDao: StackDao? = null,
     private val workerLauncher: WorkerLauncher? = null
 ) : ViewModel() {
 
@@ -170,8 +170,8 @@ class ChatViewModel(
             is ChatEvent.CreateConversation -> createNewConversation(event.title, event.parentId)
             is ChatEvent.LoadConversation -> loadConversation(event.conversationId)
             is ChatEvent.DeleteConversation -> deleteConversation(event.conversationId)
-            is ChatEvent.AttachNotebook -> attachNotebook(event.notebookId)
-            is ChatEvent.DetachNotebook -> detachNotebook(event.notebookId)
+            is ChatEvent.AttachStack -> attachStack(event.stackId)
+            is ChatEvent.DetachStack -> detachStack(event.stackId)
             is ChatEvent.AddFile -> addFileToChat(event.uri, event.mimeType)
             is ChatEvent.RemovePinnedFile -> removePinnedFile(event.uri)
             is ChatEvent.UpdateSystemPrompt -> {
@@ -228,7 +228,7 @@ class ChatViewModel(
                     currentConversationId = conversationId,
                     currentConversationTitle = title,
                     messages = emptyList(),
-                    attachedNotebooks = emptyList(),
+                    attachedStacks = emptyList(),
                     pinnedFiles = emptyList()
                 )
             }
@@ -240,16 +240,16 @@ class ChatViewModel(
         viewModelScope.launch {
             val conversation = chatConversationDao.getConversation(conversationId)
             if (conversation != null) {
-                // Load attached notebooks
-                val notebookIds = try {
-                    gson.fromJson(conversation.notebookIdsJson, Array<String>::class.java).toList()
+                // Load attached stacks
+                val stackIds = try {
+                    gson.fromJson(conversation.stackIdsJson, Array<String>::class.java).toList()
                 } catch (_: Exception) {
                     emptyList()
                 }
 
-                val attachedNotebooks = notebookIds.mapNotNull { notebookId ->
-                    notebookDao?.getNotebook(notebookId)?.let { entity ->
-                        AttachedNotebook(notebookId = entity.id, title = entity.title)
+                val attachedStacks = stackIds.mapNotNull { stackId ->
+                    stackDao?.getStack(stackId)?.let { entity ->
+                        AttachedStack(stackId = entity.id, title = entity.title)
                     }
                 }
 
@@ -257,7 +257,7 @@ class ChatViewModel(
                     state.copy(
                         currentConversationId = conversationId,
                         currentConversationTitle = conversation.title,
-                        attachedNotebooks = attachedNotebooks,
+                        attachedStacks = attachedStacks,
                         messages = emptyList(),
                         systemPrompt = conversation.systemPrompt
                     )
@@ -309,67 +309,67 @@ class ChatViewModel(
         }
     }
 
-    private fun attachNotebook(notebookId: String) {
-        notebookDao ?: return
+    private fun attachStack(stackId: String) {
+        stackDao ?: return
         chatConversationDao ?: return
         viewModelScope.launch {
-            val notebook = notebookDao.getNotebook(notebookId) ?: return@launch
+            val notebook = stackDao.getStack(stackId) ?: return@launch
             val currentId = _uiState.value.currentConversationId ?: return@launch
 
             val conversation = chatConversationDao.getConversation(currentId)
             if (conversation != null) {
                 val currentIds = try {
-                    gson.fromJson(conversation.notebookIdsJson, Array<String>::class.java).toList()
+                    gson.fromJson(conversation.stackIdsJson, Array<String>::class.java).toList()
                 } catch (_: Exception) {
                     emptyList()
                 }
 
-                if (!currentIds.contains(notebookId)) {
-                    val newIds = currentIds + notebookId
-                    chatConversationDao.updateNotebookIds(
+                if (!currentIds.contains(stackId)) {
+                    val newIds = currentIds + stackId
+                    chatConversationDao.updateStackIds(
                         currentId,
                         gson.toJson(newIds),
                         System.currentTimeMillis()
                     )
 
-                    val updatedAttached = _uiState.value.attachedNotebooks + AttachedNotebook(
-                        notebookId = notebook.id,
+                    val updatedAttached = _uiState.value.attachedStacks + AttachedStack(
+                        stackId = notebook.id,
                         title = notebook.title
                     )
-                    _uiState.update { it.copy(attachedNotebooks = updatedAttached) }
+                    _uiState.update { it.copy(attachedStacks = updatedAttached) }
                 }
             }
         }
     }
 
-    private fun detachNotebook(notebookId: String) {
+    private fun detachStack(stackId: String) {
         chatConversationDao ?: return
         viewModelScope.launch {
             val currentId = _uiState.value.currentConversationId ?: return@launch
             val conversation = chatConversationDao.getConversation(currentId) ?: return@launch
 
             val currentIds = try {
-                gson.fromJson(conversation.notebookIdsJson, Array<String>::class.java).toList()
+                gson.fromJson(conversation.stackIdsJson, Array<String>::class.java).toList()
             } catch (_: Exception) {
                 emptyList()
             }
 
-            val newIds = currentIds.filter { it != notebookId }
-            chatConversationDao.updateNotebookIds(
+            val newIds = currentIds.filter { it != stackId }
+            chatConversationDao.updateStackIds(
                 currentId,
                 gson.toJson(newIds),
                 System.currentTimeMillis()
             )
 
             _uiState.update { state ->
-                state.copy(attachedNotebooks = state.attachedNotebooks.filter { it.notebookId != notebookId })
+                state.copy(attachedStacks = state.attachedStacks.filter { it.stackId != stackId })
             }
         }
     }
 
     private fun addFileToChat(uri: Uri, mimeType: String) {
         workerLauncher ?: return
-        notebookDao ?: return
+        stackDao ?: return
         chatConversationDao ?: return
 
         viewModelScope.launch {
@@ -380,31 +380,31 @@ class ChatViewModel(
             val conversation = chatConversationDao.getConversation(currentId)
             val notebookId = conversation?.let { conv ->
                 try {
-                    gson.fromJson(conv.notebookIdsJson, Array<String>::class.java).firstOrNull()
+                    gson.fromJson(conv.stackIdsJson, Array<String>::class.java).firstOrNull()
                 } catch (_: Exception) {
                     null
                 }
             } ?: UUID.randomUUID().toString()
 
-            // Check if notebook exists
-            val existingNotebook = notebookDao.getNotebook(notebookId)
+            // Check if stack exists
+            val existingNotebook = stackDao.getStack(notebookId)
             if (existingNotebook == null) {
-                val notebook = NotebookEntity(
+                val notebook = StackEntity(
                     id = notebookId,
                     title = "Chat Files: ${_uiState.value.currentConversationTitle}",
                     blocksJson = "[]"
                 )
-                notebookDao.insert(notebook)
+                stackDao.insert(notebook)
 
-                chatConversationDao.updateNotebookIds(
+                chatConversationDao.updateStackIds(
                     currentId,
                     gson.toJson(listOf(notebookId)),
                     System.currentTimeMillis()
                 )
             }
 
-            // Add file as process block to notebook
-            val notebook = notebookDao.getNotebook(notebookId)
+            // Add file as process block to stack
+            val notebook = stackDao.getStack(notebookId)
             if (notebook != null) {
                 val blocks = try {
                     val type = object : com.google.gson.reflect.TypeToken<List<Map<String, Any>>>() {}.type
@@ -430,7 +430,7 @@ class ChatViewModel(
                 )
 
                 val updatedBlocks = blocks + newBlock
-                notebookDao.updateBlocks(notebookId, gson.toJson(updatedBlocks), System.currentTimeMillis())
+                stackDao.updateBlocks(notebookId, gson.toJson(updatedBlocks), System.currentTimeMillis())
 
                 // Enqueue processing
                 val processMimeType = when {
@@ -528,16 +528,16 @@ class ChatViewModel(
                 val relevantChunks = vectorStore.similaritySearch(currentInput, topK = 6)
                 Log.d("ChatViewModel", "Found ${relevantChunks.size} relevant chunks")
 
-                // Also retrieve from attached notebooks
-                val attachedNotebookChunks = mutableListOf<ChunkEntity>()
-                _uiState.value.attachedNotebooks.forEach { notebook ->
-                    val chunks = vectorStore.getChunksForSource(notebook.notebookId)
-                    attachedNotebookChunks.addAll(chunks)
+                // Also retrieve from attached stacks
+                val attachedStackChunks = mutableListOf<ChunkEntity>()
+                _uiState.value.attachedStacks.forEach { stack ->
+                    val chunks = vectorStore.getChunksForSource(stack.stackId)
+                    attachedStackChunks.addAll(chunks)
                 }
-                Log.d("ChatViewModel", "Found ${attachedNotebookChunks.size} chunks from attached notebooks")
+                Log.d("ChatViewModel", "Found ${attachedStackChunks.size} chunks from attached stacks")
 
                 // Combine and deduplicate
-                val allChunks = (relevantChunks + attachedNotebookChunks)
+                val allChunks = (relevantChunks + attachedStackChunks)
                     .distinctBy { it.id }
                     .sortedByDescending { chunk ->
                         chunk.text.length

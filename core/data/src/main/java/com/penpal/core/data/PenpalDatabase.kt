@@ -11,9 +11,9 @@ import androidx.room.RoomDatabase
         ChatConversationEntity::class,
         GraphNodeEntity::class,
         GraphEdgeEntity::class,
-        NotebookEntity::class,
+        StackEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class PenpalDatabase : RoomDatabase() {
@@ -22,7 +22,7 @@ abstract class PenpalDatabase : RoomDatabase() {
     abstract fun chatMessageDao(): ChatMessageDao
     abstract fun chatConversationDao(): ChatConversationDao
     abstract fun graphDao(): GraphDao
-    abstract fun notebookDao(): NotebookDao
+    abstract fun stackDao(): StackDao
 
     companion object {
         @Volatile

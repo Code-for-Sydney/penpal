@@ -40,7 +40,7 @@ data class ChatConversationEntity(
     @PrimaryKey val id: String,
     val title: String,
     val parentId: String? = null,  // For sub-chats (1 level only)
-    val notebookIdsJson: String = "[]",
+    val stackIdsJson: String = "[]",
     val systemPrompt: String = "",  // Per-conversation system prompt override
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
@@ -51,7 +51,7 @@ data class GraphNodeEntity(
     @PrimaryKey val id: String,
     val label: String,
     val type: String,
-    val notebookId: String?,
+    val stackId: String?,
     val posX: Float = 0f,
     val posY: Float = 0f,
     val posZ: Float = 0f
@@ -66,10 +66,10 @@ data class GraphEdgeEntity(
 )
 
 /**
- * Entity for saved notebooks
+ * Entity for saved stacks
  */
-@Entity(tableName = "notebooks")
-data class NotebookEntity(
+@Entity(tableName = "stacks")
+data class StackEntity(
     @PrimaryKey val id: String,
     val title: String,
     val blocksJson: String,  // JSON serialized blocks

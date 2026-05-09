@@ -2,8 +2,8 @@ package com.penpal.feature.stacks
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.penpal.core.data.NotebookDao
-import com.penpal.core.data.NotebookEntity
+import com.penpal.core.data.StackDao
+import com.penpal.core.data.StackEntity
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -14,11 +14,11 @@ import kotlinx.coroutines.launch
  * UI State for the notebook list screen
  */
 data class StackListUiState(
-    val notebooks: List<StackSummary> = emptyList(),
+    val stacks: List<StackSummary> = emptyList(),
     val isLoading: Boolean = false,
     val error: String? = null,
     val showDeleteDialog: Boolean = false,
-    val notebookToDelete: StackSummary? = null
+    val stackToDelete: StackSummary? = null
 )
 
 /**
@@ -36,24 +36,24 @@ data class StackSummary(
  * ViewModel for the notebook list screen
  */
 class StackListViewModel(
-    private val notebookDao: NotebookDao? = null
+    private val stackDao: StackDao? = null
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(StackListUiState())
     val uiState: StateFlow<StackListUiState> = _uiState.asStateFlow()
 
     init {
-        loadNotebooks()
+        loadStacks()
     }
 
     /**
-     * Loads all notebooks from the database
+     * Loads all stacks from the database
      */
-    fun loadNotebooks() {
+    fun loadStacks() {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true) }
             try {
-                notebookDao?.getAllNotebooks()?.collect { entities ->
+                stackDao?.getAllStacks()?.collect { entities ->
                     val summaries = entities.map { entity ->
                         StackSummary(
                             id = entity.id,
@@ -65,7 +65,7 @@ class StackListViewModel(
                     }
                     _uiState.update {
                         it.copy(
-                            notebooks = summaries,
+                            stacks = summaries,
                             isLoading = false,
                             error = null
                         )
@@ -75,7 +75,7 @@ class StackListViewModel(
                 _uiState.update {
                     it.copy(
                         isLoading = false,
-                        error = e.message ?: "Failed to load notebooks"
+                        error = e.message ?: "Failed to load stacks"
                     )
                 }
             }
@@ -85,11 +85,11 @@ class StackListViewModel(
     /**
      * Shows delete confirmation dialog
      */
-    fun showDeleteConfirmation(notebook: StackSummary) {
+    fun showDeleteConfirmation(stack: StackSummary) {
         _uiState.update {
             it.copy(
                 showDeleteDialog = true,
-                notebookToDelete = notebook
+                stackToDelete = stack
             )
         }
     }
@@ -101,26 +101,26 @@ class StackListViewModel(
         _uiState.update {
             it.copy(
                 showDeleteDialog = false,
-                notebookToDelete = null
+                stackToDelete = null
             )
         }
     }
 
     /**
-     * Deletes the selected notebook
+     * Deletes the selected stack
      */
-    fun deleteNotebook() {
+    fun deleteStack() {
         viewModelScope.launch {
-            val notebook = _uiState.value.notebookToDelete ?: return@launch
+            val stack = _uiState.value.stackToDelete ?: return@launch
             try {
-                notebookDao?.delete(notebook.id)
+                stackDao?.delete(stack.id)
                 dismissDeleteConfirmation()
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(
                         showDeleteDialog = false,
-                        notebookToDelete = null,
-                        error = e.message ?: "Failed to delete notebook"
+                        stackToDelete = null,
+                        error = e.message ?: "Failed to delete stack"
                     )
                 }
             }
@@ -153,7 +153,7 @@ class StackListViewModel(
                         "$nodeCount nodes"
                     }
                     "image" -> "Image"
-                    else -> "Empty notebook"
+                    else -> "Empty stack"
                 }
             }
         } catch (e: Exception) {

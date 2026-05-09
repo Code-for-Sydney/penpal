@@ -24,10 +24,12 @@ fun ModelStatusIndicator(
     modifier: Modifier = Modifier
 ) {
     val (dotColor, statusText) = when {
-        isReady -> Color(0xFF4CAF50) to "ON"
-        isLoading -> Color(0xFFFFC107) to "Loading..."
+        modelStatus == ModelStatus.READY || isReady -> Color(0xFF4CAF50) to "ON"
+        modelStatus == ModelStatus.LOADING || isLoading -> Color(0xFFFFC107) to "Loading..."
         isUnloading -> Color(0xFFFFC107) to "Unloading..."
+        modelStatus == ModelStatus.DOWNLOADING -> Color(0xFFFFC107) to "Downloading..."
         modelStatus == ModelStatus.ERROR -> Color(0xFFF44336) to "ERR"
+        modelStatus == ModelStatus.DOWNLOADED -> Color(0xFF9E9E9E) to "DL'd"
         else -> Color(0xFF9E9E9E) to "OFF"
     }
 

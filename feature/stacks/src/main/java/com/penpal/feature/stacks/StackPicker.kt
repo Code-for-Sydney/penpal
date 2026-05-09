@@ -66,14 +66,14 @@ fun StackPickerBottomSheet(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
                 modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("Search notebooks...") },
+                placeholder = { Text("Search stacks...") },
                 singleLine = true
             )
 
             Spacer(modifier = Modifier.height(16.dp))
 
             // Stack list
-            val filteredStacks = uiState.notebooks.filter {
+            val filteredStacks = uiState.stacks.filter {
                 it.title.contains(searchQuery, ignoreCase = true) ||
                 it.preview.contains(searchQuery, ignoreCase = true)
             }
@@ -86,7 +86,7 @@ fun StackPickerBottomSheet(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = if (uiState.notebooks.isEmpty()) "No notebooks yet" else "No matches",
+                        text = if (uiState.stacks.isEmpty()) "No stacks yet" else "No matches",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -96,12 +96,12 @@ fun StackPickerBottomSheet(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.heightIn(max = 400.dp)
                 ) {
-                    items(filteredStacks, key = { it.id }) { notebook ->
+                    items(filteredStacks, key = { it.id }) { stack ->
                         StackPickerItem(
-                            notebook = notebook,
-                            onSelect = { onStackSelected(notebook.id, notebook.title) },
+                            stack = stack,
+                            onSelect = { onStackSelected(stack.id, stack.title) },
                             showChatAction = showChatAction,
-                            onChat = { onChatWithStack?.invoke(notebook.id, notebook.title) }
+                            onChat = { onChatWithStack?.invoke(stack.id, stack.title) }
                         )
                     }
                 }
@@ -112,7 +112,7 @@ fun StackPickerBottomSheet(
 
 @Composable
 private fun StackPickerItem(
-    notebook: StackSummary,
+    stack: StackSummary,
     onSelect: () -> Unit,
     showChatAction: Boolean,
     onChat: () -> Unit
@@ -140,13 +140,13 @@ private fun StackPickerItem(
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = notebook.title,
+                    text = stack.title,
                     style = MaterialTheme.typography.bodyMedium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    text = "${notebook.blockCount} blocks",
+                    text = "${stack.blockCount} blocks",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -155,7 +155,7 @@ private fun StackPickerItem(
                 IconButton(onClick = onChat) {
                     Icon(
                         imageVector = Icons.Default.Chat,
-                        contentDescription = "Chat with notebook",
+                        contentDescription = "Chat with stack",
                         tint = MaterialTheme.colorScheme.primary
                     )
                 }
@@ -179,15 +179,15 @@ fun StackPickerDialog(
         onDismissRequest = onDismiss,
         title = { Text("Attach Stack") },
         text = {
-            if (uiState.notebooks.isEmpty()) {
-                Text("No notebooks available. Create one in the Think tab.")
+            if (uiState.stacks.isEmpty()) {
+                Text("No stacks available. Create one in the Think tab.")
             } else {
                 LazyColumn(
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    items(uiState.notebooks, key = { it.id }) { notebook ->
+                    items(uiState.stacks, key = { it.id }) { stack ->
                         TextButton(
-                            onClick = { onStackSelected(notebook.id, notebook.title) },
+                            onClick = { onStackSelected(stack.id, stack.title) },
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Row(
@@ -201,7 +201,7 @@ fun StackPickerDialog(
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
-                                    notebook.title,
+                                    stack.title,
                                     modifier = Modifier.weight(1f)
                                 )
                             }

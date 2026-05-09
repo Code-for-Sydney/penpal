@@ -10,8 +10,8 @@ import androidx.lifecycle.viewModelScope
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import com.penpal.core.ai.InferenceBridge
-import com.penpal.core.data.NotebookDao
-import com.penpal.core.data.NotebookEntity
+import com.penpal.core.data.StackDao
+import com.penpal.core.data.StackEntity
 import com.penpal.core.data.PenpalDatabase
 import kotlinx.coroutines.Dispatchers
 import androidx.compose.ui.geometry.Offset
@@ -32,7 +32,7 @@ import java.util.UUID
  */
 class StackEditorViewModel(
     private val context: Context? = null,
-    private val notebookDao: NotebookDao? = null,
+    private val stackDao: StackDao? = null,
     private val workerLauncher: com.penpal.core.processing.WorkerLauncher? = null,
     private val inferenceBridge: InferenceBridge? = null
 ) : ViewModel() {
@@ -147,14 +147,11 @@ document = StackDocument(
         }
     }
 
-    /**
-     * Loads a notebook from the database by ID
-     */
-    fun loadFromDatabase(notebookId: String) {
+    fun loadFromDatabase(stackId: String) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true) }
             try {
-                val entity = notebookDao?.getNotebook(notebookId)
+                val entity = stackDao?.getStack(stackId)
                 if (entity != null) {
                     val blocks = deserializeBlocks(entity.blocksJson)
                     val document = StackDocument(
@@ -169,7 +166,7 @@ document = StackDocument(
                     _uiState.update {
                         it.copy(
                             isLoading = false,
-                            error = "Notebook not found"
+                            error = "Stack not found"
                         )
                     }
                 }
@@ -177,7 +174,7 @@ document = StackDocument(
                 _uiState.update {
                     it.copy(
                         isLoading = false,
-                        error = e.message ?: "Failed to load notebook"
+                        error = e.message ?: "Failed to load stack"
                     )
                 }
             }
@@ -1095,6 +1092,14 @@ document = StackDocument(
                 isDirty = true
             )
         }
+        
+        // Auto-save title if it's not a new document
+        val docId = _uiState.value.document.id
+        if (docId.isNotBlank()) {
+            viewModelScope.launch {
+                stackDao?.updateTitle(docId, title, System.currentTimeMillis())
+            }
+        }
     }
 
     private fun updateSystemPrompt(prompt: String) {
@@ -1146,14 +1151,14 @@ document = StackDocument(
             try {
                 val document = _uiState.value.document
                 val blocksJson = serializeBlocks(document.blocks)
-                val entity = NotebookEntity(
+                val entity = StackEntity(
                     id = document.id,
                     title = document.title,
                     blocksJson = blocksJson,
                     createdAt = document.createdAt,
                     updatedAt = System.currentTimeMillis()
                 )
-                notebookDao?.insert(entity)
+                stackDao?.insert(entity)
                 _uiState.update {
                     it.copy(
                         isLoading = false,
@@ -1180,7 +1185,7 @@ document = StackDocument(
             val docId = _uiState.value.document.id
             _uiState.update { it.copy(isLoading = true) }
             try {
-                notebookDao?.delete(docId)
+                stackDao?.delete(docId)
                 createNewDocument() // Reset to new document
             } catch (e: Exception) {
                 _uiState.update {

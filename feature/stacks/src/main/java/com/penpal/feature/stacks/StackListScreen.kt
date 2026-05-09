@@ -6,6 +6,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -51,7 +52,7 @@ fun StackListScreen(
                         isLoading = isModelLoading,
                         isUnloading = isModelUnloading,
                         modelStatus = modelStatus,
-                        onToggleModel = if (modelStatus == ModelStatus.DOWNLOADED || isModelReady) onToggleModel else null
+                        onToggleModel = if (modelStatus == ModelStatus.DOWNLOADED || modelStatus == ModelStatus.READY) onToggleModel else null
                     )
                 }
             )
@@ -61,7 +62,7 @@ fun StackListScreen(
                 onClick = onCreateNew,
                 containerColor = MaterialTheme.colorScheme.primary
             ) {
-                Icon(Icons.Default.Add, contentDescription = "Create new notebook")
+                Icon(Icons.Default.Add, contentDescription = "Create new stack")
             }
         },
         modifier = modifier
@@ -75,7 +76,7 @@ fun StackListScreen(
             ) {
                 CircularProgressIndicator()
             }
-        } else if (uiState.notebooks.isEmpty()) {
+        } else if (uiState.stacks.isEmpty()) {
             // Empty state
             EmptyStacksState(
                 onCreateNew = onCreateNew,
@@ -92,14 +93,14 @@ fun StackListScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 items(
-                    items = uiState.notebooks,
+                    items = uiState.stacks,
                     key = { it.id }
-                ) { notebook ->
+                ) { stack ->
                     StackCard(
-                        notebook = notebook,
-                        onClick = { onStackSelected(notebook.id) },
-                        onDelete = { viewModel.showDeleteConfirmation(notebook) },
-                        onChat = onChatWithStack?.let { { it(notebook.id) } }
+                        stack = stack,
+                        onClick = { onStackSelected(stack.id) },
+                        onDelete = { viewModel.showDeleteConfirmation(stack) },
+                        onChat = onChatWithStack?.let { { it(stack.id) } }
                     )
                 }
             }
@@ -107,17 +108,17 @@ fun StackListScreen(
     }
 
     // Delete confirmation dialog
-    if (uiState.showDeleteDialog && uiState.notebookToDelete != null) {
+    if (uiState.showDeleteDialog && uiState.stackToDelete != null) {
         AlertDialog(
             onDismissRequest = { viewModel.dismissDeleteConfirmation() },
             icon = { Icon(Icons.Default.Delete, contentDescription = null) },
             title = { Text("Delete Stack?") },
             text = {
-                Text("Are you sure you want to delete \"${uiState.notebookToDelete!!.title}\"? This cannot be undone.")
+                Text("Are you sure you want to delete \"${uiState.stackToDelete!!.title}\"? This cannot be undone.")
             },
             confirmButton = {
                 TextButton(
-                    onClick = { viewModel.deleteNotebook() },
+                    onClick = { viewModel.deleteStack() },
                     colors = ButtonDefaults.textButtonColors(
                         contentColor = MaterialTheme.colorScheme.error
                     )
@@ -150,7 +151,7 @@ fun StackListScreen(
 
 @Composable
 private fun StackCard(
-    notebook: StackSummary,
+    stack: StackSummary,
     onClick: () -> Unit,
     onDelete: () -> Unit,
     onChat: (() -> Unit)? = null
@@ -176,14 +177,14 @@ private fun StackCard(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = notebook.title,
+                        text = stack.title,
                         style = MaterialTheme.typography.titleMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        text = "${notebook.blockCount} blocks • ${dateFormat.format(Date(notebook.updatedAt))}",
+                        text = "${stack.blockCount} blocks • ${dateFormat.format(Date(stack.updatedAt))}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -194,7 +195,7 @@ private fun StackCard(
                         modifier = Modifier.size(32.dp)
                     ) {
                         Icon(
-                            imageVector = Icons.Default.Chat,
+                            imageVector = Icons.AutoMirrored.Filled.Chat,
                             contentDescription = "Chat",
                             tint = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.size(20.dp)
@@ -214,10 +215,10 @@ private fun StackCard(
                 }
             }
 
-            if (notebook.preview.isNotEmpty()) {
+            if (stack.preview.isNotEmpty()) {
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    text = notebook.preview,
+                    text = stack.preview,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 2,
@@ -252,7 +253,7 @@ private fun EmptyStacksState(
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            text = "Start gathering your thoughts.\nTap + to create your first notebook.",
+            text = "Start gathering your thoughts.\nTap + to create your first stack.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = androidx.compose.ui.text.style.TextAlign.Center

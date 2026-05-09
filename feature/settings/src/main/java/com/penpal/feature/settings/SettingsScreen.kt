@@ -15,6 +15,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.penpal.core.ai.ModelManager
 import com.penpal.core.ai.ModelStatus
+import com.penpal.core.ui.ModelStatusIndicator
 
 /**
  * Settings Screen - Configure AI model and app preferences.
@@ -24,6 +25,11 @@ import com.penpal.core.ai.ModelStatus
 fun SettingsScreen(
     uiState: SettingsUiState,
     onEvent: (SettingsEvent) -> Unit,
+    isModelReady: Boolean = false,
+    isModelLoading: Boolean = false,
+    isModelUnloading: Boolean = false,
+    modelStatus: ModelStatus = ModelStatus.NOT_DOWNLOADED,
+    onToggleModel: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val scrollState = rememberScrollState()
@@ -37,7 +43,16 @@ fun SettingsScreen(
                 title = { Text("Settings") },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface
-                )
+                ),
+                actions = {
+                    ModelStatusIndicator(
+                        isReady = isModelReady,
+                        isLoading = isModelLoading,
+                        isUnloading = isModelUnloading,
+                        modelStatus = modelStatus,
+                        onToggleModel = onToggleModel
+                    )
+                }
             )
         },
         modifier = modifier
@@ -78,7 +93,7 @@ fun SettingsScreen(
                             subtitle = "Not downloaded"
                         )
                     }
-                    ModelStatus.DOWNLOADING -> {
+                    ModelStatus.DOWNLOADING, ModelStatus.LOADING -> {
                         SettingsRow(
                             icon = Icons.Default.Download,
                             title = "Status",
@@ -96,11 +111,11 @@ fun SettingsScreen(
                             )
                         }
                     }
-                    ModelStatus.DOWNLOADED -> {
+                    ModelStatus.DOWNLOADED, ModelStatus.READY -> {
                         SettingsRow(
                             icon = Icons.Default.CheckCircle,
                             title = "Status",
-                            subtitle = "Ready"
+                            subtitle = if (uiState.modelStatus == ModelStatus.READY) "Ready (loaded)" else "Downloaded"
                         )
                     }
                     ModelStatus.ERROR -> {
@@ -127,18 +142,18 @@ fun SettingsScreen(
                             Text("Download Model")
                         }
                     }
-                    ModelStatus.DOWNLOADING -> {
+                    ModelStatus.DOWNLOADING, ModelStatus.LOADING -> {
                         OutlinedButton(
-                            onClick = { /* Cancel download - TODO */ },
+                            onClick = { /* Cancel - not supported for loading */ },
                             modifier = Modifier.fillMaxWidth(),
-                            enabled = uiState.isDownloading
+                            enabled = false
                         ) {
                             Icon(Icons.Default.Close, contentDescription = null)
                             Spacer(Modifier.width(8.dp))
-                            Text("Cancel Download")
+                            Text("Loading...")
                         }
                     }
-                    ModelStatus.DOWNLOADED -> {
+                    ModelStatus.DOWNLOADED, ModelStatus.READY -> {
                         OutlinedButton(
                             onClick = { onEvent(SettingsEvent.ShowDeleteConfirmation) },
                             modifier = Modifier.fillMaxWidth(),
@@ -178,6 +193,44 @@ fun SettingsScreen(
                     onDelete = { path -> onEvent(SettingsEvent.DeleteSpecificModel(path)) },
                     onRefresh = { onEvent(SettingsEvent.RefreshModelList) }
                 )
+            }
+
+            // ──────────────────────────────────────────────────────────────
+            // Model Management Section
+            // ──────────────────────────────────────────────────────────────
+            SettingsSection(title = "Model Management") {
+                // Auto-unload timeout
+                Text(
+                    text = "Auto-unload after inactivity",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Text(
+                    text = "Unload model from memory after ${uiState.inactivityTimeoutMinutes} minutes of inactivity to save battery",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Off", style = MaterialTheme.typography.labelSmall)
+                    Slider(
+                        value = uiState.inactivityTimeoutMinutes.toFloat(),
+                        onValueChange = { onEvent(SettingsEvent.UpdateInactivityTimeout(it.toInt())) },
+                        valueRange = 0f..60f,
+                        steps = 11, // 0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60 (12 values = 11 steps)
+                        modifier = Modifier.weight(1f)
+                    )
+                    Text("60 min", style = MaterialTheme.typography.labelSmall)
+                }
+                if (uiState.inactivityTimeoutMinutes == 0) {
+                    Text(
+                        text = "Auto-unload disabled",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
             }
 
             // ──────────────────────────────────────────────────────────────

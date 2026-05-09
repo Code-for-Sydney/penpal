@@ -86,8 +86,8 @@ interface ChatConversationDao {
     @Query("UPDATE chat_conversations SET title = :title, updatedAt = :updatedAt WHERE id = :id")
     suspend fun updateTitle(id: String, title: String, updatedAt: Long)
 
-    @Query("UPDATE chat_conversations SET notebookIdsJson = :notebookIdsJson, updatedAt = :updatedAt WHERE id = :id")
-    suspend fun updateNotebookIds(id: String, notebookIdsJson: String, updatedAt: Long)
+    @Query("UPDATE chat_conversations SET stackIdsJson = :stackIdsJson, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun updateStackIds(id: String, stackIdsJson: String, updatedAt: Long)
 
     @Query("UPDATE chat_conversations SET systemPrompt = :systemPrompt, updatedAt = :updatedAt WHERE id = :id")
     suspend fun updateSystemPrompt(id: String, systemPrompt: String, updatedAt: Long)
@@ -101,8 +101,8 @@ interface GraphDao {
     @Query("SELECT * FROM graph_nodes")
     fun getAllNodes(): Flow<List<GraphNodeEntity>>
 
-    @Query("SELECT * FROM graph_nodes WHERE notebookId = :notebookId")
-    fun getNodesForNotebook(notebookId: String): Flow<List<GraphNodeEntity>>
+    @Query("SELECT * FROM graph_nodes WHERE stackId = :stackId")
+    fun getNodesForStack(stackId: String): Flow<List<GraphNodeEntity>>
 
     @Query("SELECT * FROM graph_edges")
     fun getAllEdges(): Flow<List<GraphEdgeEntity>>
@@ -121,31 +121,23 @@ interface GraphDao {
 }
 
 @Dao
-interface NotebookDao {
-    @Query("SELECT * FROM notebooks ORDER BY updatedAt DESC")
-    fun getAllNotebooks(): Flow<List<NotebookEntity>>
-
-    @Query("SELECT * FROM notebooks WHERE id = :id")
-    suspend fun getNotebook(id: String): NotebookEntity?
-
-    @Query("SELECT * FROM notebooks WHERE id = :id")
-    fun getNotebookFlow(id: String): Flow<NotebookEntity?>
-
+interface StackDao {
+    @Query("SELECT * FROM stacks ORDER BY updatedAt DESC")
+    fun getAllStacks(): Flow<List<StackEntity>>
+    @Query("SELECT * FROM stacks WHERE id = :id")
+    suspend fun getStack(id: String): StackEntity?
+    @Query("SELECT * FROM stacks WHERE id = :id")
+    fun getStackFlow(id: String): Flow<StackEntity?>
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insert(notebook: NotebookEntity)
-
-    @Query("UPDATE notebooks SET title = :title, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun insert(stack: StackEntity)
+    @Query("UPDATE stacks SET title = :title, updatedAt = :updatedAt WHERE id = :id")
     suspend fun updateTitle(id: String, title: String, updatedAt: Long)
-
-    @Query("UPDATE notebooks SET blocksJson = :blocksJson, updatedAt = :updatedAt WHERE id = :id")
+    @Query("UPDATE stacks SET blocksJson = :blocksJson, updatedAt = :updatedAt WHERE id = :id")
     suspend fun updateBlocks(id: String, blocksJson: String, updatedAt: Long)
-
-    @Query("DELETE FROM notebooks WHERE id = :id")
+    @Query("DELETE FROM stacks WHERE id = :id")
     suspend fun delete(id: String)
-
-    @Query("DELETE FROM notebooks")
+    @Query("DELETE FROM stacks")
     suspend fun deleteAll()
-
-    @Query("SELECT COUNT(*) FROM notebooks")
+    @Query("SELECT COUNT(*) FROM stacks")
     suspend fun getCount(): Int
 }

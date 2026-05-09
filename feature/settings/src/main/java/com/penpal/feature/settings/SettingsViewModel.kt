@@ -2,6 +2,7 @@ package com.penpal.feature.settings
 
 import android.app.Application
 import android.content.Context
+import android.content.Context.MODE_PRIVATE
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.penpal.core.ai.InferenceBridge
@@ -34,7 +35,8 @@ data class SettingsUiState(
     val message: String? = null,
     val availableModels: List<ModelManager.ModelInfo> = emptyList(),
     val isLoadingModels: Boolean = false,
-    val backendPreference: BackendPreference = BackendPreference.AUTO
+    val backendPreference: BackendPreference = BackendPreference.AUTO,
+    val inactivityTimeoutMinutes: Int = 10
 )
 
 enum class InferenceMode {
@@ -67,6 +69,11 @@ class SettingsViewModel(
     private fun loadSettings() {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true) }
+
+            // Load inactivity timeout setting
+            val timeoutMinutes = application.getSharedPreferences("penpal_app_prefs", MODE_PRIVATE)
+                .getInt("inactivity_timeout_minutes", 10)
+            _uiState.update { it.copy(inactivityTimeoutMinutes = timeoutMinutes) }
 
             // Check if model already exists
             val existingModel = ModelManager.findExistingModel(application)
@@ -126,11 +133,20 @@ class SettingsViewModel(
             is SettingsEvent.SelectModel -> selectModel(event.modelPath)
             is SettingsEvent.DeleteSpecificModel -> deleteSpecificModel(event.modelPath)
             is SettingsEvent.UpdateBackendPreference -> updateBackendPreference(event.preference)
+            is SettingsEvent.UpdateInactivityTimeout -> updateInactivityTimeout(event.minutes)
         }
     }
 
     private fun updateBackendPreference(preference: BackendPreference) {
         _uiState.update { it.copy(backendPreference = preference) }
+    }
+
+    private fun updateInactivityTimeout(minutes: Int) {
+        application.getSharedPreferences("penpal_app_prefs", MODE_PRIVATE)
+            .edit()
+            .putInt("inactivity_timeout_minutes", minutes)
+            .apply()
+        _uiState.update { it.copy(inactivityTimeoutMinutes = minutes) }
     }
 
     private fun showDownloadDialog() {
@@ -378,7 +394,7 @@ when (status.state) {
                     _uiState.update {
                         it.copy(
                             isLoading = false,
-                            modelStatus = if (success) ModelStatus.DOWNLOADED else ModelStatus.ERROR,
+                            modelStatus = if (success) ModelStatus.READY else ModelStatus.ERROR,
                             message = message,
                             error = if (success) null else message
                         )
@@ -420,4 +436,5 @@ sealed class SettingsEvent {
     data class SelectModel(val modelPath: String) : SettingsEvent()
     data class DeleteSpecificModel(val modelPath: String) : SettingsEvent()
     data class UpdateBackendPreference(val preference: BackendPreference) : SettingsEvent()
+    data class UpdateInactivityTimeout(val minutes: Int) : SettingsEvent()
 }
