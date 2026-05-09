@@ -10,7 +10,7 @@ This document provides an in-depth look at the system architecture, component re
 
 ### Central Architectural Concept: Inference
 
-**Inference is the central architectural component** in Penpal v2.x. All other features (Process, Chat, Notebooks) depend on the inference layer for AI capabilities:
+**Inference is the central architectural component** in Penpal v2.x. All other features (Process, Chat, Stacks) depend on the inference layer for AI capabilities:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -25,7 +25,7 @@ This document provides an in-depth look at the system architecture, component re
 │              │                     │                     │               │
 │              ▼                     ▼                     ▼               │
 │    ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐       │
-│    │   feature:chat │  │ feature:notebooks│  │ feature:process │       │
+│    │   feature:chat │  │ feature:stacks│  │ feature:process │       │
 │    │  (RAG queries)  │  │  (recognition)   │  │ (extraction)    │       │
 │    └────────┬───────┘  └────────┬─────────┘  └────────┬────────┘       │
 │             │                    │                     │                 │
@@ -52,8 +52,8 @@ This document provides an in-depth look at the system architecture, component re
 | Phase 3: Feature Modules | ✅ Complete | Chat, Process, Inference modules created |
 | Phase 3.5: Tab Wiring | ✅ Complete | ViewModels connected, MainScreen with 3 tabs (Chat, Think, Settings) |
 | Phase 4: Polish | ✅ Complete | WorkManager notifications, offline mode, network monitoring |
-| Phase 4.5: Notebooks | ✅ Complete | Think tab with block-based editor, GraphNodeCanvas, DrawingCanvas |
-| Phase 4.6: Notebooks Enhanced | ✅ Complete | Image picker, Coil integration, home navigation |
+| Phase 4.5: Stacks | ✅ Complete | Think tab with block-based editor, GraphNodeCanvas, DrawingCanvas |
+| Phase 4.6: Stacks Enhanced | ✅ Complete | Image picker, Coil integration, home navigation |
 | Phase 5: Real Parsers & Chat Persistence | ✅ Complete | Document parsing, vector persistence, chat enhancements |
 | Phase 5.5: Streaming Token Filter | ✅ Complete | Trie-based filter, Flow-based inference, 120s timeout |
 | Phase 5.6: Text Structure Fix | ✅ Complete | Smart spacing, whitespace handling, lastEmittedChar tracking |
@@ -272,7 +272,7 @@ PenpalApplication (Singleton)
 └── gemmaServer: GemmaServerClient
 
 PenpalDatabase (Singleton via getInstance())
-├── notebookDao()
+├── stackDao()
 ├── chunkDao()
 ├── extractionJobDao()
 ├── chatMessageDao()
@@ -286,7 +286,7 @@ PenpalDatabase (Singleton via getInstance())
 | Tab | ViewModel | UI Status | Backend Status |
 |-----|-----------|-----------|----------------|
 | Chat | ChatViewModel | ✅ Functional | ✅ RAG via InferenceBridge, structured MessageParts |
-| Think | NotebookEditorViewModel | ✅ Functional | ✅ Room persistence + auto-processing |
+| Think | StackEditorViewModel | ✅ Functional | ✅ Room persistence + auto-processing |
 | Settings | SettingsViewModel | ✅ Functional | ✅ Model download, inference status |
 
 **Note:** MainScreen currently shows 3 tabs. Process and Inference exist as feature modules but are not primary tabs.
@@ -303,7 +303,7 @@ penpal/
 │   ├── MainScreen.kt              # Compose NavHost + BottomNavigation (Chat, Think, Settings)
 │   ├── MainComposeActivity.kt     # Compose-based Activity entry point (Launcher)
 │   ├── PenpalApplication.kt       # Manual DI singleton
-│   └── (legacy activities: MainActivity, NotebookSelectionActivity, etc.)
+│   └── (legacy activities: MainActivity, StackSelectionActivity, etc.)
 ├── core/
 │   ├── ai/                        # ✅ Implemented
 │   │   ├── InferenceBridge.kt     # ML inference interface
@@ -339,7 +339,7 @@ penpal/
 │   ├── chat/                      # ✅ RAG chat with structured MessageParts
 │   ├── process/                   # ✅ Document extraction UI
 │   ├── inference/                 # ✅ Model management UI
-│   ├── notebooks/                 # ✅ Think tab - block editor
+│   ├── stacks/                 # ✅ Think tab - block editor
 │   └── settings/                  # ✅ App settings and configuration
 ├── build.gradle.kts              # Root with plugins
 ├── settings.gradle.kts           # Module includes
@@ -355,8 +355,8 @@ app ──> all core modules, all feature modules
 core:processing ──> core:ai, core:data
 core:ai ──> core:data              ← InferenceBridge is the core AI dependency
 core:media ──> (empty, no source files)
-feature:chat ──> core:ai, core:data, core:processing, core:ui, feature:notebooks
-feature:notebooks ──> core:ai, core:data, core:processing, core:ui
+feature:chat ──> core:ai, core:data, core:processing, core:ui, feature:stacks
+feature:stacks ──> core:ai, core:data, core:processing, core:ui
 feature:process ──> core:processing, core:ai, core:data, core:ui
 feature:inference ──> core:ai, core:data, core:ui ← Direct inference access
 feature:settings ──> core:ai, core:data, core:ui
@@ -594,7 +594,7 @@ class ExtractionWorker(
         ChatConversationEntity::class,
         GraphNodeEntity::class,
         GraphEdgeEntity::class,
-        NotebookEntity::class,
+        StackEntity::class,
     ],
     version = 3,
     exportSchema = true,
@@ -605,7 +605,7 @@ abstract class PenpalDatabase : RoomDatabase() {
     abstract fun chatMessageDao(): ChatMessageDao
     abstract fun chatConversationDao(): ChatConversationDao
     abstract fun graphDao(): GraphDao
-    abstract fun notebookDao(): NotebookDao
+    abstract fun stackDao(): StackDao
 }
 ```
 
@@ -705,17 +705,17 @@ class ExtractionWorker @AssistedInject constructor(
 
 ---
 
-## feature:notebooks Module
+## feature:stacks Module
 
-The Notebooks module provides a block-based editor for creating rich documents with text, images, drawings, graphs, and LaTeX. This implements the "Think" tab in the bottom navigation.
+The Stacks module provides a block-based editor for creating rich documents with text, images, drawings, graphs, and LaTeX. This implements the "Think" tab in the bottom navigation.
 
 ### Module Structure
 
 ```
-feature:notebooks/
-├── NotebookModels.kt        # Block sealed class, GraphNode, GraphEdge, NotebookEvent
-├── NotebookEditorViewModel.kt # Editor state management, setImageUri()
-├── NotebookScreen.kt        # Main screen composable, image picker, Coil integration
+feature:stacks/
+├── StackModels.kt        # Block sealed class, GraphNode, GraphEdge, StackEvent
+├── StackEditorViewModel.kt # Editor state management, setImageUri()
+├── StackScreen.kt        # Main screen composable, image picker, Coil integration
 ├── BlockRenderer.kt         # Block type rendering
 ├── GraphNodeCanvas.kt       # Node-based graph editor
 └── DrawingCanvas.kt         # Touch-based drawing
@@ -724,7 +724,7 @@ feature:notebooks/
 **Dependencies:**
 - `io.coil-kt:coil-compose:2.5.0` for async image loading in ImageBlockContent
 
-### Block Model (NotebookModels.kt)
+### Block Model (StackModels.kt)
 
 ```kotlin
 sealed class Block {
@@ -773,10 +773,10 @@ sealed class Block {
 enum class EmbedType { LINK, AUDIO, VIDEO, FILE }
 ```
 
-### NotebookEvent (NotebookModels.kt)
+### StackEvent (StackModels.kt)
 
 ```kotlin
-sealed class NotebookEvent {
+sealed class StackEvent {
     data class AddBlock(val block: Block, val afterBlockId: String? = null)
     data class RemoveBlock(val blockId: String)
     data class UpdateTextBlock(val blockId: String, val content: String)
@@ -878,23 +878,23 @@ fun DrawingCanvas(
 // Example: "0:FF000000:4:100,200,150,250;0:FF000000:4:300,400,350,450"
 ```
 
-### NotebookEditorViewModel
+### StackEditorViewModel
 
 ```kotlin
 @HiltViewModel
-class NotebookEditorViewModel @Inject constructor(
+class StackEditorViewModel @Inject constructor(
     // ...
 ) : ViewModel() {
 
-    val uiState: StateFlow<NotebookEditorState> = MutableStateFlow(NotebookEditorState())
+    val uiState: StateFlow<StackEditorState> = MutableStateFlow(StackEditorState())
 
-    fun onEvent(event: NotebookEvent) {
+    fun onEvent(event: StackEvent) {
         when (event) {
-            is NotebookEvent.AddBlock -> { /* ... */ }
-            is NotebookEvent.RemoveBlock -> { /* ... */ }
-            is NotebookEvent.SetImageUri -> updateBlock(blockId) { /* set uri */ }
-            is NotebookEvent.UpdateGraphNode -> { /* ... */ }
-            is NotebookEvent.AddGraphEdge -> { /* ... */ }
+            is StackEvent.AddBlock -> { /* ... */ }
+            is StackEvent.RemoveBlock -> { /* ... */ }
+            is StackEvent.SetImageUri -> updateBlock(blockId) { /* set uri */ }
+            is StackEvent.UpdateGraphNode -> { /* ... */ }
+            is StackEvent.AddGraphEdge -> { /* ... */ }
             // ...
         }
     }
@@ -905,11 +905,11 @@ class NotebookEditorViewModel @Inject constructor(
 }
 ```
 
-### NotebookScreen (Image Picker + Navigation)
+### StackScreen (Image Picker + Navigation)
 
 ```kotlin
 @Composable
-fun NotebookScreen(
+fun StackScreen(
     onNavigateToHome: () -> Unit = {},  // Navigate to Process tab
     // ...
 ) {
@@ -1147,7 +1147,7 @@ class ProcessViewModel @Inject constructor(
 | Tab | Route | Icon | Screen |
 |-----|-------|------|--------|
 | Chat | `chat` | AutoMirrored.Chat | ChatScreen |
-| Think | `notebooks` | AutoAwesome | NotebookListScreen → NotebookScreen |
+| Think | `stacks` | AutoAwesome | StackListScreen → StackScreen |
 | Settings | `settings` | Settings | SettingsScreen |
 
 ### Tab Implementation Status
@@ -1155,10 +1155,10 @@ class ProcessViewModel @Inject constructor(
 | Tab | ViewModel | UI Status | Backend Status |
 |-----|-----------|-----------|----------------|
 | Chat | ChatViewModel | ✅ Functional | ✅ RAG via InferenceBridge, structured MessageParts |
-| Think | NotebookEditorViewModel | ✅ Functional | ✅ Room persistence + auto-processing |
+| Think | StackEditorViewModel | ✅ Functional | ✅ Room persistence + auto-processing |
 | Settings | SettingsViewModel | ✅ Functional | ✅ Model download, inference status |
 
-**Note:** Process and Inference exist as feature modules but are not primary tabs in MainScreen. Process functionality is integrated into notebooks and chat flows. Inference status is shown in Settings.
+**Note:** Process and Inference exist as feature modules but are not primary tabs in MainScreen. Process functionality is integrated into stacks and chat flows. Inference status is shown in Settings.
 
 ### Module Dependencies
 
@@ -1167,8 +1167,8 @@ app ──> all core modules, all feature modules
 core:processing ──> core:ai, core:data
 core:ai ──> core:data              ← InferenceBridge is the core AI dependency
 core:media ──> (empty shell, no source files)
-feature:chat ──> core:ai, core:data, core:processing, core:ui, feature:notebooks
-feature:notebooks ──> core:ai, core:data, core:processing, core:ui
+feature:chat ──> core:ai, core:data, core:processing, core:ui, feature:stacks
+feature:stacks ──> core:ai, core:data, core:processing, core:ui
 feature:process ──> core:processing, core:ai, core:data, core:ui
 feature:inference ──> core:ai, core:data, core:ui
 feature:settings ──> core:ai, core:data, core:ui
@@ -1235,10 +1235,10 @@ feature:settings ──> core:ai, core:data, core:ui
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                      NotebookSelectionActivity                   │
+│                      StackSelectionActivity                   │
 │                           (Launcher)                             │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐  │
-│  │ Notebooks   │  │ Model       │  │ PDF Import              │  │
+│  │ Stacks   │  │ Model       │  │ PDF Import              │  │
 │  │ RecyclerView│  │ Manager     │  │ Activity                │  │
 │  └─────────────┘  └─────────────┘  └─────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘

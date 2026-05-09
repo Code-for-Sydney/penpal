@@ -4,9 +4,121 @@ All notable changes to the Penpal project.
 
 ## [Unreleased]
 
+### WIP Block Parsing & Stacks Migration (May 2026)
+
+**Commit:** `f29891d`
+
+#### Stacks Module Migration ✅
+
+- Renamed `feature/notebooks` → `feature/stacks`
+- Added `api(project(":core:media"))` dependency to `feature/stacks/build.gradle.kts`
+- Model status indicator added to `NotebookListScreen` TopBar
+- Updated `MainScreen` to navigate to `feature/stacks` module
+
+#### Block Parsing in Stacks
+
+- Enhanced `NotebookEditorViewModel` with block parsing capabilities
+- `NotebookScreen` now includes full block rendering and editing
+- Auto-processing: stacks process each block according to its type
+- Added toggle per-block to switch between original and parsed content
+
+#### Inference Bridge Updates
+
+**`core/ai/LiteRtInferenceBridge.kt`:**
+- Updated `maxNumTokens` from 4096 to 8192 in EngineConfig
+- Added guard to skip initialization if model already loaded
+
+**`core/ai/OllamaInferenceBridge.kt`:**
+- Added inference bridge implementation for Ollama backend
+
+**`core/ai/InferenceBridge.kt`:**
+- Added `runInferenceFlowParts()` and `runInferenceWithImageFlowParts()` for parts-based inference
+
+#### Audio Features
+
+**`core/media/AudioRecorder.kt` (NEW):**
+- AudioRecord-based 16kHz mono 16-bit PCM WAV recorder
+- Streams to disk in real-time for crash safety
+- Files saved to `context.filesDir/recordings/`
+- Permission checking for `RECORD_AUDIO`
+- WAV header management
+
+**`core/media/AudioAnalyzer.kt` (NEW):**
+- Real-time FFT spectrum analyzer
+- Cooley-Tukey radix-2 FFT with Hanning window
+- 12 log-spaced frequency bins (bass→treble), normalized 0..1f
+- Thread-safe API with callbacks
+
+#### UI Component
+
+**`core/ui/ModelStatusIndicator.kt` (NEW):**
+- Reusable component displaying model status: ON, OFF, Loading, Unloading, ERR
+- Supports click to toggle model load/unload
+- Visual indicators: green (ready), orange (loading/unloading), gray (off), red (error)
+
+#### Chat Enhancements
+
+- Updated `ChatScreen` with expanded message rendering
+- Retry mechanism when model becomes ready
+
+#### Module Status
+
+| Module | Status | Description |
+|--------|--------|-------------|
+| core:media | ✅ Complete | AudioRecorder, AudioAnalyzer |
+| core:ai | ✅ Complete | InferenceBridge updates, parts-based inference |
+| core:ui | ✅ Complete | ModelStatusIndicator |
+| feature:stacks | 🔄 WIP | Block parsing, stack editor |
+
+---
+
+### Audio Recording & Scrollable Toolbar (May 2026)
+
+**Files created:**
+- `core/media/src/main/java/com/penpal/core/media/AudioRecorder.kt` — AudioRecord-based 16kHz mono 16-bit PCM WAV recorder. Streams to disk in real-time for crash safety. Files saved to `context.filesDir/recordings/`. Callbacks for amplitude, PCM buffer, start/stop/error. Permission checking for `RECORD_AUDIO`. WAV header written on start, updated on stop.
+- `core/media/src/main/java/com/penpal/core/media/AudioAnalyzer.kt` — Real-time FFT spectrum analyzer using Cooley-Tukey radix-2 FFT with Hanning window. Outputs 12 log-spaced frequency bins (bass→treble) normalized 0..1f. API: `feedPcmData(buffer, length)`, `onSpectrumUpdate` callback.
+
+**Files modified:**
+
+`feature/notebooks/build.gradle.kts`:
+- Added `api(project(":core:media"))` dependency
+
+`feature/notebooks/NotebookScreen.kt`:
+- **Scrollable toolbar**: Wrapped toolbar `Row` in `Modifier.horizontalScroll(rememberScrollState())` so all 14+ icon buttons scroll horizontally
+- **Audio submenu**: Audio toolbar button shows a `DropdownMenu` with "Record Audio" and "Pick from Files" options. Added `showAudioMenu` state.
+- **Audio recording permission**: Added `audioPermissionLauncher` using `ActivityResultContracts.RequestPermission()` for `RECORD_AUDIO`
+- **Recording dialog**: New `AudioRecordingDialog` composable (`AlertDialog`) with 3 states:
+  - IDLE: Shows "Start Recording" button
+  - RECORDING: Shows elapsed timer (MM:SS), real-time FFT spectrum analyzer `Canvas` (12 green bars of varying height), "Stop Recording" button
+  - DONE: Shows file name + duration, "Use Recording" (auto-adds as `Block.ProcessBlock(MediaType.AUDIO)` with `sourceUri = file.toURI().toString()`) and "Discard" buttons
+- Imports: Added `AudioRecorder`, `AudioAnalyzer`, `Canvas`, `horizontalScroll`, `CircleShape`, `Size`, `Offset`, `SimpleDateFormat`, `File`
+
+**Other changes (previous session):**
+- Closed graph button now calls `onNavigateBack()` to return to notebook list
+- Model status parameters (`isModelReady`, `modelStatus`, etc.) passed to `NotebookScreen` in `MainScreen.kt`
+- Settings screen model status indicator moved into `TopAppBar` actions slot
+
+#### Module Status
+
+| Module | Status | Description |
+|--------|--------|-------------|
+| core:media | ✅ Complete | AudioRecorder (AudioRecord-based), AudioAnalyzer (FFT spectrum) |
+| core:ai | ✅ Complete | InferenceBridge, ModelStatus, VectorStore |
+| core:data | ✅ Complete | Room database, entities, DAOs |
+| core:processing | ✅ Complete | Document parsers, ExtractionWorker, WorkerLauncher |
+| core:ui | ✅ Complete | Material 3 Theme, ModelStatusIndicator |
+| app | ✅ Complete | MainScreen, model status across tabs, navigation |
+| feature:chat | ✅ Complete | Structured parts rendering, RAG chat |
+| feature:process | ✅ Complete | Document extraction UI |
+| feature:inference | ✅ Complete | Model management UI |
+| feature:notebooks | ✅ Complete | Audio recording, scrollable toolbar, spectrum analyzer |
+| feature:settings | ✅ Complete | App settings, model status in TopAppBar |
+
+---
+
 ### Model Toggle Feature — Load/Unload via UI (May 2026)
 
-**Commits:** `67d7337` `44177db` `4c39197` `f025820` `e273106` `e61e20b` `636096c`
+**Commits:** `730d7d7` `636096c` `e61e20b` `e273106` `f025820` `4c39197` `44177db`
 
 #### InferenceBridge Interface Updates ✅
 

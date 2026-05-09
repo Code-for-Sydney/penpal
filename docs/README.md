@@ -35,7 +35,7 @@ Penpal is a handwriting recognition and drawing application for Android that use
 - **Flow-Based Streaming**: Kotlin Flow-based inference with trie-based special token filtering
 - **RAG Chat**: Retrieval-Augmented Generation combining vector search with LLM inference
 - **Model Management**: Download Gemma 4 E2B-IT from HuggingFace/Kaggle via ModelManager
-- **Multi-page Notebooks**: Block-based editor with graphs, drawings, images
+- **Multi-page Stacks**: Block-based editor with graphs, drawings, images
 - **Whiteboard Mode**: Infinite canvas for brainstorming and sketching
 - **Document Processing**: Extract and index content from PDFs, URLs, audio, and images
 - **Vector Store**: Semantic similarity search across extracted content
@@ -43,6 +43,6 @@ Penpal is a handwriting recognition and drawing application for Android that use
 
 ### Current Focus
 
-- **Think Tab Navigation**: Home button to return to notebook list, X button to close notebook
+- **Think Tab Navigation**: Home button to return to stack list, X button to close stack
 - **Code Formatting**: Better syntax highlighting in chat markdown rendering
 - **Model Process Visualizer**: New tab for visualizing model inference steps

@@ -10,14 +10,14 @@ penpal/
 │   └── src/main/
 ├── feature/
 │   ├── chat/
-│   ├── notebooks/
+│   ├── stacks/
 │   ├── process/
 │   ├── inference/
 │   └── settings/
 ├── core/
 │   ├── ai/
 │   ├── data/
-│   ├── media/       # Empty shell (no source files)
+│   ├── media/       # AudioRecorder, AudioAnalyzer (AudioRecord + FFT)
 │   ├── processing/
 │   └── ui/
 ├── settings.gradle.kts
@@ -57,7 +57,7 @@ include(":core:ui")
 include(":feature:chat")
 include(":feature:process")
 include(":feature:inference")
-include(":feature:notebooks")
+include(":feature:stacks")
 include(":feature:settings")
 ```
 
@@ -99,7 +99,7 @@ class AndroidFeatureConventionPlugin : Plugin<Project> {
 |---|---|
 | `:core:ui` | — |
 | `:core:data` | — |
-| `:core:media` | `:core:data` |
+| `:core:media` | `:core:data` · `androidx.core:core-ktx` · `kotlinx-coroutines` |
 | `:core:ai` | `:core:data` |
 | `:core:processing` | `:core:ai` · `:core:media` · `:core:data` |
 | `:feature:*` | `:core:ui` · `:core:data` |

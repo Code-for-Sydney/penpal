@@ -178,33 +178,148 @@ fun observeJob(workId: UUID): Flow<ExtractionStatus> =
 
 ---
 
-## Audio pipeline — WAV 16kHz on IO dispatcher
+## Audio pipeline — AudioRecord-based 16kHz WAV on worker thread
+
+Recording runs on a dedicated native `Thread` (not a coroutine) because `AudioRecord.read()` is blocking. Callbacks are posted to the main `Handler` for UI safety. Spectrum analysis runs on a separate analyzer thread.
+
+### AudioRecorder — raw PCM capture to WAV
 
 ```kotlin
-// core/media/src/main/kotlin/media/AudioRecorder.kt
-class AudioRecorder(
-    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
-) {
-    suspend fun record(outputFile: File, durationMs: Long): Flow<Int> = flow {
-        val recorder = MediaRecorder().apply {
-            setAudioSource(MediaRecorder.AudioSource.MIC)
-            setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-            setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-            setAudioSamplingRate(16_000)
-            setAudioChannels(1)
-            setOutputFile(outputFile.absolutePath)
-            prepare()
-            start()
-        }
-        val start = SystemClock.elapsedRealtime()
-        while (SystemClock.elapsedRealtime() - start < durationMs) {
-            emit(recorder.maxAmplitude)
-            delay(100)
-        }
-        recorder.stop()
-        recorder.release()
-    }.flowOn(ioDispatcher)
+// core/media/src/main/java/com/penpal/core/media/AudioRecorder.kt
+class AudioRecorder(private val context: Context) {
+
+    companion object {
+        const val SAMPLE_RATE = 16000
+        private const val CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO
+        private const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
+    }
+
+    private var audioRecord: AudioRecord? = null
+    private var recordingThread: Thread? = null
+    private var outputStream: FileOutputStream? = null
+    private var recordingActive = false
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    // Callbacks (all invoked on main thread)
+    var onAmplitudeUpdate: ((Float) -> Unit)? = null
+    var onPcmBuffer: ((ShortArray, Int) -> Unit)? = null
+    var onRecordingStarted: (() -> Unit)? = null
+    var onRecordingStopped: ((File?) -> Unit)? = null
+    var onError: ((String) -> Unit)? = null
+
+    fun startRecording(fileName: String): Boolean {
+        // Creates 16kHz mono 16-bit PCM AudioRecord
+        // Writes WAV header on start, updates on stop
+        // Spawns recordingThread → recordingLoop()
+    }
+
+    private fun recordingLoop() {
+        // Blocking AudioRecord.read() into ShortArray buffer
+        // Calculates RMS amplitude → onAmplitudeUpdate
+        // Emits raw PCM → onPcmBuffer (for AudioAnalyzer)
+        // Converts to bytes → FileOutputStream (streaming to disk)
+    }
+
+    fun stopRecording(): File? {
+        // Stops thread, releases AudioRecord, closes stream, updates WAV header
+    }
+
+    fun getDurationMs(file: File): Long {
+        // Computes duration from file size: (fileSize - 44) / (SAMPLE_RATE * 2)
+    }
 }
+```
+
+**Thread model:**
+- `recordingThread`: native `Thread` (not coroutine) — blocking `AudioRecord.read()` loop
+- All callbacks posted to `mainHandler` (main thread) for UI-safe updates
+- `onPcmBuffer` fires on the recording thread — consumer must not block
+- WAV file written incrementally to disk — crash-safe (only header lost on crash)
+
+### AudioAnalyzer — real-time FFT spectrum
+
+```kotlin
+// core/media/src/main/java/com/penpal/core/media/AudioAnalyzer.kt
+class AudioAnalyzer {
+
+    companion object {
+        const val NUM_BINS = 12
+    }
+
+    var onSpectrumUpdate: ((FloatArray) -> Unit)? = null
+
+    private var specThread: Thread? = null
+    private var isAnalyzing = false
+    private var pendingBuffer: ShortArray? = null
+    private val lock = Any()
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    fun feedPcmData(buffer: ShortArray, length: Int) {
+        // Called from recording thread — thread-safe via synchronized(lock)
+        synchronized(lock) {
+            pendingBuffer = buffer.copyOf(length)
+            pendingLength = length
+        }
+    }
+
+    fun startAnalyzing() {
+        isAnalyzing = true
+        specThread = Thread { analysisLoop() }
+        specThread?.start()
+    }
+
+    private fun analysisLoop() {
+        while (isAnalyzing) {
+            // Polls pendingBuffer with synchronized(lock)
+            // Calls computeSpectrum() → onSpectrumUpdate (mainHandler)
+            Thread.sleep(80)  // ~12.5 FPS spectrum updates
+        }
+    }
+
+    fun computeSpectrum(buffer: ShortArray, length: Int): FloatArray {
+        // 1. Pad to next power of two
+        // 2. Apply Hanning window
+        // 3. Cooley-Tukey radix-2 FFT (in-place, real+imag arrays)
+        // 4. Compute magnitude spectrum
+        // 5. Aggregate into 12 log-spaced frequency bins
+        // 6. Normalize 0..1f
+    }
+}
+```
+
+**Thread model:**
+- `specThread`: native `Thread` — polls pending PCM data, runs FFT computation
+- `feedPcmData()` called from recording thread — `synchronized(lock)` for safe handoff
+- `onSpectrumUpdate` posted to `mainHandler` → Compose `Canvas` renders 12 green bars
+
+### Recording UI flow
+
+```
+User taps "Record Audio"
+  → AudioRecordingDialog (IDLE state)
+  → User taps "Start Recording"
+  → audioPermissionLauncher.launch(RECORD_AUDIO)  // ActivityResultContracts
+  → AudioRecorder.startRecording()
+  → AudioAnalyzer.startAnalyzing()
+       │
+       ▼
+  AudioRecorder.recordingLoop (Thread):
+    AudioRecord.read(buffer) → RMS calc (onAmplitudeUpdate)
+                              → feedPcmData(buffer) [→ AudioAnalyzer.thread]
+                              → write bytes to FileOutputStream
+       │
+       ▼
+  AudioAnalyzer.analysisLoop (Thread):
+    feedPcmData → synchronized(lock) → computeSpectrum → onSpectrumUpdate (mainHandler)
+       │
+       ▼
+  UI Canvas: 12 green bars update at ~12.5 FPS
+  
+User taps "Stop Recording"
+  → AudioRecorder.stopRecording() (stops thread, finalizes WAV)
+  → AudioAnalyzer.stop() (stops analysis thread)
+  → Dialog transitions to DONE state
+  → "Use Recording" → creates Block.ProcessBlock(MediaType.AUDIO, sourceUri=file.toURI())
 ```
 
 ---

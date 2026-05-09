@@ -1,6 +1,6 @@
 - [x] In the Chat Tab, conversations aren't persistent. There needs to be a history similar to 
-- [x] In the Chat Tab, conversations should be able to load notebooks into memory. 
-- [x] In the Chat Tab, adding a file to the chat would append the file to a new notebook or add it to an existing notebook if it is already loaded to the chat. Any files added to the chat should be pinned to the chat conversation.
+- [x] In the Chat Tab, conversations should be able to load stacks into memory. 
+- [x] In the Chat Tab, adding a file to the chat would append the file to a new stack or add it to an existing stack if it is already loaded to the chat. Any files added to the chat should be pinned to the chat conversation.
 - [x] In the Chat Tab, files should be able to be dragged and dropped into the conversation to load their content into the memory.
 - [x] In the Core AI, grab knowledge from it, simplify the setup, use reference material and start fresh
   - [x] CORE_AI.md — Comprehensive documentation with Gemma 4 specs, LiteRT-LM reference, model performance
@@ -12,11 +12,11 @@
     - MultiTokenPrediction: https://raw.githubusercontent.com/google-gemma/cookbook/refs/heads/main/docs/mtp/mtp.ipynb
     - Opencode (parts architecture): https://github.com/anomalyco/opencode
 - In the Chat Tab, the Programming languages should have better parsing capabilities and better color formatting
-- In the Think Tab, when Notebooks when opened have a home button this should go back to the list of notebooks.
-- In the Think Tab, Notebooks when opened have an "x" button - this closes the notebook (auto-saves).
-- In the Think Tab, notebook should be processed and the information should be presented per parser present in the notebook. If there is a list of images it should process each one of those in logical order unless specified by the user to make it parse in higher priority. Each result should be a separate block.
+- In the Think Tab, when Stacks when opened have a home button this should go back to the list of stacks.
+- In the Think Tab, Stacks when opened have an "x" button - this closes the stack (auto-saves).
+- In the Think Tab, stack should be processed and the information should be presented per parser present in the stack. If there is a list of images it should process each one of those in logical order unless specified by the user to make it parse in higher priority. Each result should be a separate block.
 - In the Think Tab, a toggle should be present that switches between the original content and the parsed content (per-block).
-- In the Think Tab, text could be setup as a system prompt to define an overall goal (drag from title bar for the notebook).
+- In the Think Tab, text could be setup as a system prompt to define an overall goal (drag from title bar for the stack).
 - In the Think Tab, the user could input an agent prompt to guide the thinking process (over-drag panel, wired to processing).
 - In the Chat Tab, add system prompt via over-drag panel (global default + per-conversation override).
 - In a NEW TAB for Model process visualizer, breaks down how the model would process
@@ -25,30 +25,67 @@
 - Future: More Parsers
 - In the Settings Tab, there should be a way to visualize the inputs and outputs of the model. 
 
-## Current Sprint: Think Tab Button Harness & Processing
+## Current Sprint: LiteRT API Fix & Bug Testing (May 2026)
 
-### Step 1: Fix Home Button Navigation
-- [x] Change `onNavigateToHome` in `MainScreen` to navigate to `Screen.Notebooks.route` instead of `Screen.Chat.route`
+### Build Fix ✅ (Completed)
+- [x] Reverted LiteRT version from 0.10.0 to `latest.release` in `gradle/libs.versions.toml`
+- [x] Fixed `LiteRtInferenceBridge.kt` - `renderMessageIntoString()` doesn't exist in current LiteRT API
+- [x] Added reflection-based fallback to get message content: `message.javaClass.getMethod("getContent").invoke(message)`
+- **Note**: Need to find proper LiteRT API method for extracting message text - current solution uses reflection
 
-### Step 2: Close Notebook Button + Auto-Save
-- [x] Add Close (X) button to `NotebookScreen` toolbar
-- [x] Wire `onCloseNotebook` callback to trigger `saveDocument()` then pop back stack
-- [x] Auto-save silently when closing (no confirmation dialog)
+### Model Status Toggle Fix ✅ (Completed)
+- [x] Added `LOADING` and `READY` states to `ModelStatus` enum in `InferenceBridge.kt`
+- [x] Updated `LiteRtInferenceBridge.loadModel()` to set `LOADING` → `READY` status
+- [x] Fixed `isModelLoading` check to include both `DOWNLOADING` and `LOADING` states
+- [x] Fixed `onToggleModel` condition to work with both `DOWNLOADED` and `READY` states
+- [x] Updated `ModelStatusIndicator` to show proper status text for all states
+- [x] Updated `SettingsScreen` to handle new `LOADING` and `READY` states
+- [x] Fixed `SettingsViewModel` to set `ModelStatus.READY` (not DOWNLOADED) on successful load
+- [x] Fixed `MainScreen.onToggleModel` to allow toggle when modelStatus is DOWNLOADED or READY
 
-### Step 3: Over-Drag Hidden Panel (Notebook)
-- [x] Add `systemPrompt: String` and `agentPrompt: String` to `NotebookDocument` model
-- [x] Add `UpdateSystemPrompt` and `UpdateAgentPrompt` events
-- [x] Implement over-drag detection on `LazyColumn` (detect when scrolled to top + drag down)
-- [x] Animate panel open/closed based on drag threshold
-- [x] Add two `OutlinedTextField`s for prompts in the panel
-- [x] Update serialization/deserialization to include prompts
+### Testing: Model Loading Crash
+- [ ] Test app on device to verify model loads correctly with the reflection fix
+- [ ] If still crashing, investigate model file compatibility
 
-### Step 4: Original ↔ Parsed Toggle (Per-Block)
-- [x] Add `showParsedContent: Boolean` to `Block.ProcessBlock`
-- [x] Add `ToggleProcessView` event
-- [x] Add segmented toggle button in `ProcessBlockContent` UI
-- [x] Show source (URI, type) vs parsed (extracted text) based on toggle
-- [x] Include in serialization/deserialization
+## Previous Sprint: Block Parsing & Stacks Enhancement (May 2026)
+
+### Audio Recording in Stacks ✅ (Completed)
+- [x] Created `AudioRecorder` in `core:media` — AudioRecord-based 16kHz mono 16-bit PCM WAV recorder
+  - [x] Streams to disk in real-time for crash safety
+  - [x] Files saved to `context.filesDir/recordings/`
+  - [x] Callbacks for amplitude, PCM buffer, start/stop/error
+  - [x] Permission checking for RECORD_AUDIO
+  - [x] WAV header written at start, updated on stop
+- [x] Created `AudioAnalyzer` in `core:media` — Real-time FFT spectrum analyzer
+  - [x] Cooley-Tukey radix-2 FFT with Hanning window
+  - [x] 12 log-spaced frequency bins (bass→treble) normalized 0..1f
+  - [x] `feedPcmData()` and `onSpectrumUpdate` callback API
+- [x] Added `api(project(":core:media"))` to `feature/stacks/build.gradle.kts`
+- [x] StackScreen scrollable toolbar (`Modifier.horizontalScroll`)
+- [x] Audio submenu in toolbar (DropdownMenu: "Record Audio" / "Pick from Files")
+- [x] Audio recording permission via `ActivityResultContracts.RequestPermission()`
+- [x] `AudioRecordingDialog` composable with 3 states: IDLE, RECORDING, DONE
+  - [x] RECORDING: elapsed timer (MM:SS), real-time FFT spectrum Canvas (12 green bars)
+  - [x] DONE: file name + duration, "Use Recording" (auto-adds as `Block.ProcessBlock`) and "Discard"
+- [x] Closed graph button now calls `onNavigateBack()` to return to stack list
+- [x] Model status parameters passed to `StackScreen` from `MainScreen`
+- [x] Settings screen model status indicator moved into `TopAppBar` actions slot
+
+### Stacks Migration & Block Parsing ✅ (Completed)
+- [x] Renamed `feature/notebooks` → `feature/stacks`
+- [x] Added `ModelStatusIndicator` to `NotebookListScreen` TopBar
+- [x] Updated `MainScreen` for stack module navigation
+- [x] Enhanced `NotebookEditorViewModel` with block parsing
+- [x] Auto-processing: stacks process each block according to type
+- [x] Per-block toggle: original vs parsed content view
+
+### Model Toggle Feature ✅ (Completed)
+- [x] Implemented `unloadModel()` in `LiteRtInferenceBridge`
+- [x] Implemented `unloadModel()` in `OllamaInferenceBridge`
+- [x] Added `isUnloading` StateFlow to InferenceBridge interface
+- [x] Created `ModelStatusIndicator` component in `core:ui`
+- [x] Added shared model status across all tabs in `MainScreen`
+- [x] Simplified ToggleModel handler in ChatViewModel
 
 ### Step 5: Global System Prompt in Settings
 - [ ] Add "Default System Prompt" section in Settings screen
@@ -61,23 +98,13 @@
 - [ ] Add system prompt field in panel
 - [ ] Prepend system prompt in `sendMessage()` (global default + per-conversation override)
 
-### Model Toggle Feature ✅
-- [x] Added `isUnloading: StateFlow<Boolean>` to `InferenceBridge` interface
-- [x] Added `unloadModel()` method to `InferenceBridge` interface
-- [x] Implemented `unloadModel()` in `LiteRtInferenceBridge` (closes engine, resets state to DOWNLOADED)
-- [x] Implemented `unloadModel()` in `OllamaInferenceBridge` (resets model state)
-- [x] Added `ModelStatusIndicator` reusable component in `core:ui`
-- [x] Added shared model status display in `MainScreen` across all tabs
-- [x] Added `onToggleModel` handler at MainScreen level to avoid duplication
-- [x] Increased `maxNumTokens` from 4096 to 8192 in EngineConfig
-
 ### Step 7: Wire Agent Prompt to Processing Pipeline
 - [ ] Add `agentPrompt` parameter to `WorkerLauncher.enqueue()`
 - [ ] Pass agent prompt through to processing workers
 - [ ] Modify extraction logic to consider agent prompt (e.g., "Focus on equations" changes parsing)
 
 ### Step 8: Database Schema Updates
-- [ ] Add `systemPrompt`, `agentPrompt` columns to `NotebookEntity`
+- [ ] Add `systemPrompt`, `agentPrompt` columns to `StackEntity`
 - [ ] Add `systemPrompt` column to `ChatConversationEntity`
 - [ ] Update DAOs if needed
 
@@ -107,7 +134,7 @@
 - [x] Migrate `ChatViewModel` from callback-based to Flow-based inference
 - [x] Add `AtomicBoolean` timeout guards to prevent hung inference
 - [x] Fix `loadConversation()` to preserve pending assistant message when `isLoading=true`
-- [x] **Fix text splitting after special character filtering**
+ - [x] **Fix text splitting after special character filtering**
   - [x] Remove `skipStructuralNewlines()` that was stripping all newlines after tokens
   - [x] Add `hasEmittedContent` tracking to detect tokens at start vs inline
   - [x] Tokens at start: strip following whitespace (e.g., `<|turn>model\nHello` → `Hello`)
