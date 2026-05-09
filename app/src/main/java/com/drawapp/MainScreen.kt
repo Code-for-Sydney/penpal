@@ -46,7 +46,6 @@ sealed class Screen(
  * Ordered list of bottom navigation tabs.
  */
 val bottomNavScreens = listOf(
-    Screen.Chat,
     Screen.Stacks,
     Screen.Settings
 )
@@ -75,10 +74,13 @@ fun MainScreen(
     onNavigateToStack: (Long) -> Unit = {},
     onNavigateToStacks: () -> Unit = {}
 ) {
-    val navController = rememberNavController()
+val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination
-
+    
+    // Track if user has ever opened chat via FAB (to show FAB on tabs after first use)
+    var hasOpenedChatViaFab by remember { mutableStateOf(false) }
+    
     val app = LocalContext.current.applicationContext as PenpalApplication
     val database = remember { com.penpal.core.data.PenpalDatabase.getInstance(app) }
 
@@ -124,6 +126,14 @@ fun MainScreen(
                         label = { Text(screen.label) },
                         selected = currentDestination?.hierarchy?.any { it.route == screen.route } == true,
                         onClick = {
+                            // If in chat, pop back first (same as X button), then navigate
+                            val isInChat = currentDestination?.route == Screen.Chat.route || 
+                                currentDestination?.route?.startsWith("chat/") == true
+                            if (isInChat) {
+                                // Pop back to close chat properly (same as X button)
+                                navController.popBackStack()
+                            }
+                            // Then navigate to the tab
                             navController.navigate(screen.route) {
                                 popUpTo(navController.graph.findStartDestination().id) {
                                     saveState = true
@@ -135,11 +145,30 @@ fun MainScreen(
                     )
                 }
             }
+        },
+        floatingActionButton = {
+            val route = currentDestination?.route
+            val isChatRoute = route == Screen.Chat.route || route?.startsWith("chat/") == true
+            
+            // Show FAB when:
+            // 1. On tabs AND (first time OR user has opened chat before) - allows entering chat
+            // 2. Never show FAB when in chat
+            if (!isChatRoute) {
+                FloatingActionButton(
+                    onClick = { 
+                        hasOpenedChatViaFab = true
+                        navController.navigate(Screen.Chat.route)
+                    },
+                    containerColor = MaterialTheme.colorScheme.primary
+                ) {
+                    Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = "Chat")
+                }
+            }
         }
     ) { innerPadding ->
         NavHost(
             navController = navController,
-            startDestination = Screen.Chat.route,
+            startDestination = Screen.Stacks.route,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
@@ -156,13 +185,15 @@ fun MainScreen(
                         chatMessageDao = database.chatMessageDao(),
                         chatConversationDao = database.chatConversationDao(),
                         stackDao = database.stackDao(),
-                        workerLauncher = app.workerLauncher
+                        workerLauncher = app.workerLauncher,
+                        onLoadModel = { onToggleModel?.invoke() }
                     )
                 }
                 val uiState by viewModel.uiState.collectAsState()
                 ChatScreen(
                     uiState = uiState,
                     onEvent = viewModel::onEvent,
+                    onNavigateBack = { navController.popBackStack() },
                     onNavigateToStacks = {
                         navController.navigate(Screen.Stacks.route)
                     },
@@ -189,7 +220,8 @@ fun MainScreen(
                         chatMessageDao = database.chatMessageDao(),
                         chatConversationDao = database.chatConversationDao(),
                         stackDao = database.stackDao(),
-                        workerLauncher = app.workerLauncher
+                        workerLauncher = app.workerLauncher,
+                        onLoadModel = { onToggleModel?.invoke() }
                     )
                 }
                 val uiState by viewModel.uiState.collectAsState()
@@ -204,6 +236,7 @@ fun MainScreen(
                 ChatScreen(
                     uiState = uiState,
                     onEvent = viewModel::onEvent,
+                    onNavigateBack = { navController.popBackStack() },
                     onNavigateToStacks = {
                         navController.navigate(Screen.Stacks.route)
                     },
@@ -253,21 +286,14 @@ fun MainScreen(
                         context = app,
                         stackDao = database.stackDao(),
                         workerLauncher = app.workerLauncher,
-                        inferenceBridge = app.inferenceBridge
+                        inferenceBridge = app.inferenceBridge,
+                        onLoadModel = { onToggleModel?.invoke() }
                     )
                 }
                 StackScreen(
                     viewModel = viewModel,
                     onNavigateBack = { navController.popBackStack() },
-                    onNavigateToHome = {
-                        navController.navigate(Screen.Stacks.route) {
-                            popUpTo(navController.graph.findStartDestination().id) {
-                                saveState = true
-                            }
-                            launchSingleTop = true
-                            restoreState = true
-                        }
-                    },
+                    onNavigateToHome = { navController.popBackStack() },
                     onChatWithStack = { stackId ->
                         navController.navigate(ChatRoutes.chatWithStackRoute(stackId)) {
                             popUpTo(Screen.Chat.route) { inclusive = true }
@@ -291,7 +317,8 @@ fun MainScreen(
                         context = app,
                         stackDao = database.stackDao(),
                         workerLauncher = app.workerLauncher,
-                        inferenceBridge = app.inferenceBridge
+                        inferenceBridge = app.inferenceBridge,
+                        onLoadModel = { onToggleModel?.invoke() }
                     )
                 }
 
@@ -305,15 +332,7 @@ fun MainScreen(
                 StackScreen(
                     viewModel = viewModel,
                     onNavigateBack = { navController.popBackStack() },
-                    onNavigateToHome = {
-                        navController.navigate(Screen.Stacks.route) {
-                            popUpTo(navController.graph.findStartDestination().id) {
-                                saveState = true
-                            }
-                            launchSingleTop = true
-                            restoreState = true
-                        }
-                    },
+                    onNavigateToHome = { navController.popBackStack() },
                     onChatWithStack = { navStackId ->
                         navController.navigate(ChatRoutes.chatWithStackRoute(navStackId)) {
                             popUpTo(Screen.Chat.route) { inclusive = true }
@@ -329,7 +348,6 @@ fun MainScreen(
                 )
             }
 
-            // ──────────────────────────────────────────────────────────────
             // Settings Tab
             // ──────────────────────────────────────────────────────────────
             composable(Screen.Settings.route) {

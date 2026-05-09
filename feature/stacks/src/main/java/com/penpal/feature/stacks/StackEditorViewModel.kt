@@ -34,7 +34,8 @@ class StackEditorViewModel(
     private val context: Context? = null,
     private val stackDao: StackDao? = null,
     private val workerLauncher: com.penpal.core.processing.WorkerLauncher? = null,
-    private val inferenceBridge: InferenceBridge? = null
+    private val inferenceBridge: InferenceBridge? = null,
+    private val onLoadModel: (() -> Unit)? = null
 ) : ViewModel() {
 
     private val gson = Gson()
@@ -366,7 +367,7 @@ document = StackDocument(
                 state.copy(
                     document = state.document.copy(
                         blocks = state.document.blocks.map {
-                            if (it.id == blockId) block.copy(
+                            if (it.id == blockId) (it as Block.ProcessBlock).copy(
                                 status = ProcessStatus.ERROR,
                                 errorMessage = "AI model not available"
                             ) else it
@@ -378,16 +379,20 @@ document = StackDocument(
         }
 
         if (!bridge.isReady.value) {
+            // Auto-load the model
+            onLoadModel?.invoke()
             _uiState.update { state ->
                 state.copy(
                     document = state.document.copy(
                         blocks = state.document.blocks.map {
-                            if (it.id == blockId) block.copy(
-                                status = ProcessStatus.ERROR,
-                                errorMessage = "Model not loaded. Please load the model first."
+                            if (it.id == blockId) (it as Block.ProcessBlock).copy(
+                                status = ProcessStatus.RUNNING,
+                                progress = 10,
+                                errorMessage = "Loading model..."
                             ) else it
                         }
-                    )
+                    ),
+                    isDirty = true
                 )
             }
             return
@@ -398,7 +403,7 @@ document = StackDocument(
             state.copy(
                 document = state.document.copy(
                     blocks = state.document.blocks.map {
-                        if (it.id == blockId) block.copy(
+                        if (it.id == blockId) (it as Block.ProcessBlock).copy(
                             status = ProcessStatus.RUNNING,
                             progress = 10
                         ) else it
@@ -422,18 +427,27 @@ document = StackDocument(
                     val bitmap = loadBitmapFromUri(ctx, block.sourceUri)
                     if (bitmap != null) {
                         var accumulatedText = ""
+                        var progress = 20
                         bridge.runInferenceWithImageFlow(prompt, bitmap).collect { result ->
                             accumulatedText = result
+                            // Update progress based on text length (simulate progress during streaming)
+                            progress = (20 + (accumulatedText.length.coerceAtMost(5000) * 70 / 5000)).coerceIn(20, 90)
+                            Log.d("StackEditorVM", "Image processing update: progress=$progress, textLength=${accumulatedText.length}, textPreview=${accumulatedText.take(100)}")
                             _uiState.update { state ->
+                                val updatedBlocks = state.document.blocks.map {
+                                    if (it.id == blockId) {
+                                        val updatedBlock = (it as Block.ProcessBlock).copy(
+                                            status = ProcessStatus.RUNNING,
+                                            progress = progress,
+                                            extractedText = accumulatedText
+                                        )
+                                        Log.d("StackEditorVM", "Updated block $blockId: status=${updatedBlock.status}, progress=${updatedBlock.progress}, extractedTextLen=${updatedBlock.extractedText.length}")
+                                        updatedBlock
+                                    } else it
+                                }
                                 state.copy(
                                     document = state.document.copy(
-                                        blocks = state.document.blocks.map {
-                                            if (it.id == blockId) block.copy(
-                                                status = ProcessStatus.RUNNING,
-                                                progress = 80,
-                                                extractedText = accumulatedText
-                                            ) else it
-                                        },
+                                        blocks = updatedBlocks,
                                         updatedAt = System.currentTimeMillis()
                                     ),
                                     isDirty = true
@@ -445,7 +459,7 @@ document = StackDocument(
                             state.copy(
                                 document = state.document.copy(
                                     blocks = state.document.blocks.map {
-                                        if (it.id == blockId) block.copy(
+                                        if (it.id == blockId) (it as Block.ProcessBlock).copy(
                                             status = ProcessStatus.DONE,
                                             progress = 100
                                         ) else it
@@ -464,15 +478,18 @@ document = StackDocument(
                     }
                     if (audioSamples != null) {
                         var accumulatedText = ""
+                        var progress = 20
                         bridge.runInferenceWithAudioFlow(prompt, audioSamples).collect { result ->
                             accumulatedText = result
+                            progress = (20 + (accumulatedText.length.coerceAtMost(5000) * 70 / 5000)).coerceIn(20, 90)
+                            Log.d("StackEditorVM", "Audio processing update: progress=$progress, textLength=${accumulatedText.length}")
                             _uiState.update { state ->
                                 state.copy(
                                     document = state.document.copy(
                                         blocks = state.document.blocks.map {
-                                            if (it.id == blockId) block.copy(
+                                            if (it.id == blockId) (it as Block.ProcessBlock).copy(
                                                 status = ProcessStatus.RUNNING,
-                                                progress = 80,
+                                                progress = progress,
                                                 extractedText = accumulatedText
                                             ) else it
                                         },
@@ -486,7 +503,7 @@ document = StackDocument(
                             state.copy(
                                 document = state.document.copy(
                                     blocks = state.document.blocks.map {
-                                        if (it.id == blockId) block.copy(
+                                        if (it.id == blockId) (it as Block.ProcessBlock).copy(
                                             status = ProcessStatus.DONE,
                                             progress = 100
                                         ) else it
@@ -513,15 +530,17 @@ document = StackDocument(
 
                     if (montage != null) {
                         var accumulatedText = ""
+                        var progress = 20
                         bridge.runInferenceWithImageFlow(sequencePrompt, montage).collect { result ->
                             accumulatedText = "Video (${durationSec}s):\n$result"
+                            progress = (20 + (accumulatedText.length.coerceAtMost(5000) * 70 / 5000)).coerceIn(20, 90)
                             _uiState.update { state ->
                                 state.copy(
                                     document = state.document.copy(
                                         blocks = state.document.blocks.map {
-                                            if (it.id == blockId) block.copy(
+                                            if (it.id == blockId) (it as Block.ProcessBlock).copy(
                                                 status = ProcessStatus.RUNNING,
-                                                progress = 80,
+                                                progress = progress,
                                                 extractedText = accumulatedText
                                             ) else it
                                         },
@@ -535,7 +554,7 @@ document = StackDocument(
                             state.copy(
                                 document = state.document.copy(
                                     blocks = state.document.blocks.map {
-                                        if (it.id == blockId) block.copy(
+                                        if (it.id == blockId) (it as Block.ProcessBlock).copy(
                                             status = ProcessStatus.DONE,
                                             progress = 100
                                         ) else it
@@ -567,15 +586,18 @@ document = StackDocument(
                     }
 
                     var accumulatedText = ""
+                    var progress = 20
                     bridge.runInferenceFlow(finalPrompt).collect { result ->
                         accumulatedText = result
+                        progress = (20 + (accumulatedText.length.coerceAtMost(5000) * 70 / 5000)).coerceIn(20, 90)
+                        Log.d("StackEditorVM", "Text processing update: progress=$progress, textLength=${accumulatedText.length}")
                         _uiState.update { state ->
                             state.copy(
                                 document = state.document.copy(
                                     blocks = state.document.blocks.map {
-                                        if (it.id == blockId) block.copy(
+                                        if (it.id == blockId) (it as Block.ProcessBlock).copy(
                                             status = ProcessStatus.RUNNING,
-                                            progress = 80,
+                                            progress = progress,
                                             extractedText = accumulatedText
                                         ) else it
                                     },
@@ -589,7 +611,7 @@ document = StackDocument(
                         state.copy(
                             document = state.document.copy(
                                 blocks = state.document.blocks.map {
-                                    if (it.id == blockId) block.copy(
+                                    if (it.id == blockId) (it as Block.ProcessBlock).copy(
                                         status = ProcessStatus.DONE,
                                         progress = 100
                                     ) else it
@@ -600,17 +622,20 @@ document = StackDocument(
                 } else {
                     // For other types, use text-based inference
                     var accumulatedText = ""
+                    var progress = 20
                     bridge.runInferenceFlow(prompt).collect { result ->
                         accumulatedText = result
+                        progress = (20 + (accumulatedText.length.coerceAtMost(5000) * 70 / 5000)).coerceIn(20, 90)
+                        Log.d("StackEditorVM", "Other processing update: progress=$progress, textLength=${accumulatedText.length}")
                         _uiState.update { state ->
                             state.copy(
                                 document = state.document.copy(
                                     blocks = state.document.blocks.map {
-                                        if (it.id == blockId) block.copy(
+                                        if (it.id == blockId) (it as Block.ProcessBlock).copy(
                                             status = ProcessStatus.RUNNING,
-                                            progress = 80,
-                                            extractedText = accumulatedText
-                                        ) else it
+                                                progress = progress,
+                                                extractedText = accumulatedText
+                                            ) else it
                                     },
                                     updatedAt = System.currentTimeMillis()
                                 ),
@@ -622,7 +647,7 @@ document = StackDocument(
                         state.copy(
                             document = state.document.copy(
                                 blocks = state.document.blocks.map {
-                                    if (it.id == blockId) block.copy(
+                                    if (it.id == blockId) (it as Block.ProcessBlock).copy(
                                         status = ProcessStatus.DONE,
                                         progress = 100
                                     ) else it
@@ -636,7 +661,7 @@ document = StackDocument(
                     state.copy(
                         document = state.document.copy(
                             blocks = state.document.blocks.map {
-                                if (it.id == blockId) block.copy(
+                                if (it.id == blockId) (it as Block.ProcessBlock).copy(
                                     status = ProcessStatus.ERROR,
                                     progress = 0,
                                     errorMessage = e.message ?: "AI processing failed"

@@ -25,6 +25,43 @@
 - Future: More Parsers
 - In the Settings Tab, there should be a way to visualize the inputs and outputs of the model. 
 
+## Latest Sprint: Chat Model Response & Navigation Fixes (May 2026)
+
+### LiteRtInferenceBridge API Fix ✅ (Completed)
+- [x] Fixed `getContents()` vs `getContent()` - LiteRT Message class returns Contents object
+- [x] Added debug logging for model status and inference flow tracing
+
+### Conversation History in Prompts ✅ (Completed)
+- [x] Updated `buildPrompt()` to include previous messages from conversation history
+- [x] Prompts now include full message history for multi-turn context awareness
+
+### UI Navigation Updates ✅ (Completed)
+- [x] Chat FAB shows on Stacks/Settings tabs, hides when in Chat, reappears after exit
+- [x] Clicking tabs while in Chat triggers `popBackStack()` to close chat
+- [x] Consistent behavior between X button and tab selection
+
+## Previous Sprint: Navigation & UI Refinements (May 2026)
+
+### Tab Navigation Refactor - Completed
+- [x] Changed bottom nav from [Chat, Stacks, Settings] to [Stacks, Settings]
+- [x] Added Chat FAB (FloatingActionButton) in bottom-right corner
+- [x] Changed start destination from Chat to Stacks
+- [x] Chat FAB navigates to Chat screen via FAB click
+
+### Stack Editor Fixes - Completed
+- [x] Fixed X button navigation in StackScreen - now calls `popBackStack()` to return to stack list
+- [x] Fixed processing text not displaying - changed `block.copy` to `(it as Block.ProcessBlock).copy` in 14 places in StackEditorViewModel
+- [x] Fixed progress bar stuck - the original `block` variable was captured from outer scope, not the current block in the list
+- [x] Added dynamic progress (20-90%) based on accumulated text length
+- [x] Added color coding to chevron: red (error), yellow (running), green (done with content)
+- [x] Added debug logging with tag "StackEditorVM" and "StackScreen"
+
+### Chat Close Button - Completed
+- [x] Replaced Delete button with red X button in ChatScreen TopAppBar
+- [x] X button calls `onNavigateBack` to close chat and return to previous tab
+- [x] Added `onNavigateBack` parameter to ChatScreen function signature
+- [x] MainScreen passes `onNavigateBack = { navController.popBackStack() }` to ChatScreen
+
 ## Current Sprint: Testing & Refinement (May 2026)
 
 ### LiteRT API Fixes ✅ (Completed)

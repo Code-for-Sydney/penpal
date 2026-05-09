@@ -50,7 +50,7 @@ This document provides an in-depth look at the system architecture, component re
 | Phase 1: Foundation | ✅ Complete | Gradle multi-module, Kotlin DSL, core modules |
 | Phase 2: Core AI | ✅ Complete | AI interfaces, VectorStore, processing pipeline |
 | Phase 3: Feature Modules | ✅ Complete | Chat, Process, Inference modules created |
-| Phase 3.5: Tab Wiring | ✅ Complete | ViewModels connected, MainScreen with 3 tabs (Chat, Think, Settings) |
+| Phase 3.5: Tab Wiring | ✅ Complete | ViewModels connected, MainScreen with 2 tabs (Think, Settings) + Chat FAB |
 | Phase 4: Polish | ✅ Complete | WorkManager notifications, offline mode, network monitoring |
 | Phase 4.5: Stacks | ✅ Complete | Think tab with block-based editor, GraphNodeCanvas, DrawingCanvas |
 | Phase 4.6: Stacks Enhanced | ✅ Complete | Image picker, Coil integration, home navigation |
@@ -58,12 +58,14 @@ This document provides an in-depth look at the system architecture, component re
 | Phase 5.5: Streaming Token Filter | ✅ Complete | Trie-based filter, Flow-based inference, 120s timeout |
 | Phase 5.6: Text Structure Fix | ✅ Complete | Smart spacing, whitespace handling, lastEmittedChar tracking |
 | Phase 5.7: Structured Message Parts | ✅ Complete | Opencode-inspired parts architecture with rich UI rendering |
+| Phase 5.8: Chat Model Response Fix | ✅ Complete | getContents() fix, conversation history in prompts, FAB navigation |
 
 ### Key Inference Components
 
 | Component | Implementation | Description |
 |-----------|----------------|-------------|
-| **InferenceBridge** | `LiteRtInferenceBridge` | LiteRT-LM Engine API pattern |
+| **LiteRtInferenceBridge** | `LiteRtInferenceBridge` | LiteRT-LM Engine API pattern with `getContents()` for text extraction |
+| **ChatViewModel** | `ChatViewModel` | Multi-turn conversation support with full message history in prompts |
 | **Engine** | `LmEngineManager` | GPU/CPU backend fallback, Engine lifecycle |
 | **Model** | Gemma 4 E2B-IT | Google's efficient on-device LLM |
 | **API** | LiteRT-LM | Direct on-device inference via Engine class |
@@ -286,11 +288,11 @@ PenpalDatabase (Singleton via getInstance())
 
 | Tab | ViewModel | UI Status | Backend Status |
 |-----|-----------|-----------|----------------|
-| Chat | ChatViewModel | ✅ Functional | ✅ RAG via InferenceBridge, structured MessageParts |
+| Chat | ChatViewModel | ✅ Functional | ✅ RAG via InferenceBridge, structured MessageParts (via FAB) |
 | Think | StackEditorViewModel | ✅ Functional | ✅ Room persistence + auto-processing |
 | Settings | SettingsViewModel | ✅ Functional | ✅ Model download, inference status |
 
-**Note:** MainScreen currently shows 3 tabs. Process and Inference exist as feature modules but are not primary tabs.
+**Note:** MainScreen currently shows 2 tabs in bottom navigation: Think, Settings. Chat is accessible via the FAB in the bottom-right corner.
 
 ---
 
@@ -1147,19 +1149,26 @@ class ProcessViewModel @Inject constructor(
 
 | Tab | Route | Icon | Screen |
 |-----|-------|------|--------|
-| Chat | `chat` | AutoMirrored.Chat | ChatScreen |
 | Think | `stacks` | AutoAwesome | StackListScreen → StackScreen |
 | Settings | `settings` | Settings | SettingsScreen |
+| Chat | `chat` | AutoMirrored.Chat | ChatScreen (via FAB) |
+
+**Navigation Behavior:**
+- Chat FAB shows on Stacks and Settings tabs
+- FAB hides when user is in Chat screen
+- FAB reappears after exiting Chat (via X button or tab click)
+- Clicking a tab while in Chat triggers `popBackStack()` to close chat
+- Consistent navigation flow between tabs and Chat screen
 
 ### Tab Implementation Status
 
 | Tab | ViewModel | UI Status | Backend Status |
 |-----|-----------|-----------|----------------|
-| Chat | ChatViewModel | ✅ Functional | ✅ RAG via InferenceBridge, structured MessageParts |
+| Chat | ChatViewModel | ✅ Functional | ✅ RAG via InferenceBridge, structured MessageParts (via FAB) |
 | Think | StackEditorViewModel | ✅ Functional | ✅ Room persistence + auto-processing |
 | Settings | SettingsViewModel | ✅ Functional | ✅ Model download, inference status |
 
-**Note:** Process and Inference exist as feature modules but are not primary tabs in MainScreen. Process functionality is integrated into stacks and chat flows. Inference status is shown in Settings.
+**Note:** MainScreen shows 2 tabs (Think, Settings) in bottom nav. Chat is accessible via FAB in bottom-right corner.
 
 ### Module Dependencies
 
@@ -1224,7 +1233,7 @@ feature:settings ──> core:ai, core:data, core:ui
 
 ---
 
-*Last updated: Documentation synced with codebase — corrected tab structure (3 tabs), manual DI (no Hilt), removed references to non-existent Hilt modules, updated build versions, verified actual file inventory (May 2026)*
+*Last updated: Documentation synced — tab structure (2 tabs + Chat FAB), navigation refactor to popBackStack(), StackEditorViewModel block update fix (May 2026)*
 
 ---
 

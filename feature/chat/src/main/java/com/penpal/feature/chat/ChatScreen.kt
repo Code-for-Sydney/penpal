@@ -70,6 +70,7 @@ import com.penpal.core.ui.PenpalTheme
 fun ChatScreen(
     uiState: ChatUiState,
     onEvent: (ChatEvent) -> Unit,
+    onNavigateBack: () -> Unit = {},
     onNavigateToStacks: () -> Unit = {},
     onNavigateToChatWithStack: (String) -> Unit = {},
     stackListViewModel: com.penpal.feature.stacks.StackListViewModel? = null,
@@ -157,7 +158,7 @@ fun ChatScreen(
                 showContext = showContext,
                 onToggleContext = { showContext = !showContext },
                 onOpenDrawer = { scope.launch { drawerState.open() } },
-                onClearChat = { onEvent(ChatEvent.ClearChat) },
+                onNavigateBack = onNavigateBack,
                 isModelReady = isModelReady,
                 isModelLoading = isModelLoading,
                 isModelUnloading = isModelUnloading,
@@ -233,7 +234,8 @@ fun ChatScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(uiState.messages, key = { it.id + it.content.length + it.parts.size }) { message ->
-                    Log.d("ChatScreen", "MessageBubble: id=${message.id.take(8)}, role=${message.role}, contentLength=${message.content.length}")
+                    val textPartsCount = message.parts.filterIsInstance<MessagePart.TextPart>().size
+                    Log.d("ChatScreen", "MessageBubble: id=${message.id.take(8)}, role=${message.role}, contentLen=${message.content.length}, parts=${message.parts.size}, textParts=$textPartsCount")
                     MessageBubble(
                         message = message,
                         modifier = Modifier.fillMaxWidth(),
@@ -313,7 +315,7 @@ private fun ChatTopBar(
     showContext: Boolean,
     onToggleContext: () -> Unit,
     onOpenDrawer: () -> Unit,
-    onClearChat: () -> Unit,
+    onNavigateBack: () -> Unit,
     isModelReady: Boolean = false,
     isModelLoading: Boolean = false,
     isModelUnloading: Boolean = false,
@@ -346,10 +348,11 @@ private fun ChatTopBar(
                     )
                 }
             }
-            IconButton(onClick = onClearChat) {
+            IconButton(onClick = onNavigateBack) {
                 Icon(
-                    imageVector = Icons.Default.Delete,
-                    contentDescription = "Clear chat"
+                    imageVector = Icons.Default.Close,
+                    contentDescription = "Close chat",
+                    tint = MaterialTheme.colorScheme.error
                 )
             }
         },

@@ -4,6 +4,64 @@ All notable changes to the Penpal project.
 
 ## [Unreleased]
 
+### Chat Model Response & Navigation Fixes (May 2026)
+
+#### LiteRtInferenceBridge API Fix ✅
+
+**`core/ai/LiteRtInferenceBridge.kt`**:
+- Fixed `renderMessageIntoString()` response extraction
+- Changed from reflection-based `getContent()` to `getContents()` method
+- Root cause: LiteRT Message class returns a `Contents` object, not a simple string
+- The old reflection method was failing because the API had changed
+- Added debug logging for model status and inference flow tracing
+
+#### Conversation History in Prompts ✅
+
+**`feature/chat/ChatViewModel.kt`**:
+- Updated `buildPrompt()` to include previous messages from conversation history
+- Model now maintains conversation context across multiple exchanges
+- Prompts now include full message history, not just the latest user message
+- Enables multi-turn conversations with proper context awareness
+
+#### UI Navigation Updates ✅
+
+**`app/MainScreen.kt`**:
+- Chat FAB visibility management:
+  - Shows on Stacks and Settings tabs for quick chat access
+  - Hides when user is in Chat screen
+  - Reappears after exiting Chat (same behavior as X button)
+- Tab click handling while in Chat:
+  - Clicking a tab now triggers `popBackStack()` to close chat
+  - Consistent behavior whether closing via X button or tab selection
+- Improved navigation flow between tabs and Chat screen
+
+### Navigation & UI Refinements (May 2026)
+
+#### Tab Navigation Refactor ✅
+
+- Changed bottom navigation from `[Chat, Stacks, Settings]` to `[Stacks, Settings]`
+- Added Chat FAB (FloatingActionButton) in bottom-right corner for quick chat access
+- Changed start destination from `Screen.Chat.route` to `Screen.Stacks.route`
+- Added import for `Icons.AutoMirrored.Filled.Chat` for FAB icon
+
+#### Stack Editor Bug Fixes ✅
+
+- Fixed X button navigation - changed to use `popBackStack()` to return to stack list
+- Fixed processing text not displaying in expanded block section
+- Root cause: Changed all 14 occurrences from `block.copy` to `(it as Block.ProcessBlock).copy` in `StackEditorViewModel.kt`
+- The bug was caused by capturing the outer scope `block` variable instead of using `it` (the current block in the list)
+- Added dynamic progress updates (20-90%) based on accumulated text length
+- Added color coding to expand/collapse chevron: red (error), yellow (running), green (done with content)
+- Added debug logging with tags "StackEditorVM" and "StackScreen"
+
+#### Chat Close Button ✅
+
+- Replaced Delete (trash) button with red X button in ChatScreen TopAppBar
+- X button calls `onNavigateBack` to close chat and return to previous tab
+- Added `onNavigateBack` parameter to `ChatScreen` function signature
+- Added `onNavigateBack` parameter to `ChatTopBar` composable
+- Updated `MainScreen` to pass `onNavigateBack = { navController.popBackStack() }` to both ChatScreen instances
+
 ### LiteRT API Fixes & Model Status Toggle (May 2026)
 
 **Commits:** `3e9665a` `3a446a6`

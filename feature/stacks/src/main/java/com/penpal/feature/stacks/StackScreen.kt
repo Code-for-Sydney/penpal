@@ -1119,6 +1119,7 @@ fun BlockCard(
                     ProcessBlockContent(
                         block = block,
                         isSelected = isSelected,
+                        isExpanded = isExpanded,
                         onUpdate = onUpdate,
                         onProcess = onProcess
                     )
@@ -1152,7 +1153,16 @@ fun BlockCard(
                 }
             }
 
-            // Expand/collapse indicator
+            // Expand/collapse indicator with status color
+            val statusColor = when (block) {
+                is Block.ProcessBlock -> when (block.status) {
+                    ProcessStatus.ERROR -> MaterialTheme.colorScheme.error
+                    ProcessStatus.RUNNING -> Color(0xFFFFB300) // Amber/Yellow
+                    ProcessStatus.DONE -> if (block.extractedText.isNotEmpty()) Color(0xFF4CAF50) else MaterialTheme.colorScheme.onSurfaceVariant
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                }
+                else -> MaterialTheme.colorScheme.onSurfaceVariant
+            }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1164,7 +1174,7 @@ fun BlockCard(
                     imageVector = if (isExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
                     contentDescription = if (isExpanded) "Collapse" else "Expand",
                     modifier = Modifier.size(16.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                    tint = statusColor.copy(alpha = 0.7f)
                 )
             }
         }
@@ -1579,11 +1589,11 @@ fun EmptyStateCard(
 fun ProcessBlockContent(
     block: Block.ProcessBlock,
     isSelected: Boolean,
+    isExpanded: Boolean,
     onUpdate: (Block) -> Unit,
     onProcess: (() -> Unit)? = null
 ) {
     var uri by remember(block.sourceUri) { mutableStateOf(block.sourceUri) }
-    var isExpanded by remember { mutableStateOf(false) }
     val context = LocalContext.current
 
     Column(
@@ -1893,75 +1903,41 @@ fun ProcessBlockContent(
             }
         }
 
-        // Show parsed content when done - expandable
-        if (block.extractedText.isNotEmpty()) {
+        // Show parsed content when done - controlled by block's expand/collapse
+        if (block.extractedText.isNotEmpty() && isExpanded) {
+            Log.d("StackScreen", "Displaying AI content: blockId=${block.id}, extractedTextLen=${block.extractedText.length}, textPreview=${block.extractedText.take(50)}")
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Collapsible AI result section
+            // AI result section - shown when block is expanded
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
                 )
             ) {
-                Column {
-                    // Header with expand/collapse
+                Column(modifier = Modifier.padding(12.dp)) {
                     Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { isExpanded = !isExpanded }
-                            .padding(12.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Psychology,
-                                contentDescription = "AI Result",
-                                modifier = Modifier.size(18.dp),
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "AI Analysis",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
                         Icon(
-                            imageVector = if (isExpanded) Icons.Default.ExpandMore else Icons.Default.ExpandLess,
-                            contentDescription = if (isExpanded) "Collapse" else "Expand",
-                            modifier = Modifier.size(20.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            imageVector = Icons.Default.Psychology,
+                            contentDescription = "AI Result",
+                            modifier = Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "AI Analysis",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurface
                         )
                     }
-
-                    // Content - expanded or collapsed preview
-                    if (isExpanded) {
-                        // Full text when expanded
-                        Text(
-                            text = block.extractedText,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 12.dp)
-                                .padding(bottom = 12.dp)
-                        )
-                    } else {
-                        // Preview when collapsed
-                        Text(
-                            text = block.extractedText.take(300) + if (block.extractedText.length > 300) "..." else "",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 12.dp)
-                                .padding(bottom = 12.dp)
-                        )
-                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = block.extractedText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
                 }
             }
         }

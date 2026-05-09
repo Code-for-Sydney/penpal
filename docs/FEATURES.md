@@ -5,7 +5,7 @@
 **Purpose:** Conversational RAG interface. Queries go through `InferenceBridge` with vector-retrieved context. Uses Flow-based streaming with trie-based special token filtering.
 
 **Key classes:**
-- `ChatViewModel` — manages conversation history as `List<ChatMessage>` in `StateFlow`, uses `runInferenceFlow()`
+- `ChatViewModel` — manages conversation history as `List<ChatMessage>` in `StateFlow`, uses `runInferenceFlow()` with full message history for context-aware prompts
 - `ChatScreen` — lazy column of message bubbles; input field with context panel
 - `StreamingTokenFilter` — removes Gemma 4 control tokens from model output (in `core:ai`)
 - `GemmaSpecialTokens` — definitions for all control tokens (in `core:ai`)
@@ -14,17 +14,22 @@
 ```
 User types → ChatViewModel.sendMessage() → launch(Default)
   → VectorStore.similaritySearch()           // retrieve top-K chunks
-  → buildPrompt(userMessage, chunks)         // RAG context assembly
+  → buildPrompt(userMessage, chunks, history) // RAG context + conversation history
   → inferenceBridge.runInferenceFlow(prompt) // Flow-based streaming
        → conversation.sendMessageAsync()     // LiteRT-LM Engine API
-       → renderMessageIntoString()           // Extract text from Message
+       → renderMessageIntoString(message)     // Extract text from Message via getContents()
        → StreamingTokenFilter.append(chunk)  // Remove special tokens
   → Flow.collect { partialResult ->
        updateLastAssistantMessage(partialResult)
-    }
+     }
   → _uiState.update()                        // StateFlow emits
   → Compose recompose                        // UI updates
 ```
+
+**Navigation:**
+- Chat FAB appears on Stacks/Settings tabs, hides when in Chat
+- Clicking tabs while in Chat closes it via `popBackStack()`
+- Consistent exit behavior via X button or tab selection
 
 **Current Issue — Text Splitting After Special Characters:**
 After implementing `StreamingTokenFilter`, chat text is split into separate lines after each special token occurrence. The Gemma 4 chat template includes structural newlines around turn tokens (e.g., `<|turn>model\n...\n<turn|>`), which remain after token removal.
@@ -267,7 +272,7 @@ WorkManager.initialize(context, config)
 
 ## Bottom navigation
 
-**Note:** The actual `MainScreen.kt` has 3 tabs: Chat, Think (Stacks), Settings. Process and Inference exist as modules but are not primary tabs.
+**Note:** The actual `MainScreen.kt` has 2 tabs in bottom navigation: Think (Stacks), Settings. Chat is accessible via the FAB in the bottom-right corner.
 
 ```kotlin
 sealed class Screen(

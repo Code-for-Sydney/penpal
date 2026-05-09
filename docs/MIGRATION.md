@@ -83,7 +83,7 @@ This document serves as the definitive reference for migrating PenPal from the c
 ```
 penpal/
 ├── app/                           # Shell app, navigation, MainScreen with BottomNav
-│   ├── MainScreen.kt              # Compose NavHost + BottomNavigation (Chat, Think, Settings)
+│   ├── MainScreen.kt              # Compose NavHost + BottomNavigation (Think, Settings tabs)
 │   ├── MainComposeActivity.kt     # Compose-based Activity entry point (Launcher)
 │   ├── PenpalApplication.kt       # Manual DI singleton
 │   └── (legacy: MainActivity, NotebookSelectionActivity, etc.)
@@ -694,4 +694,4 @@ class ProcessViewModel @Inject constructor(
 
 ---
 
-*Last updated: Documentation synced — Phase 5.6 marked complete, corrected tab structure, removed Hilt references, updated Room schema to v3 (May 2026)*
+*Last updated: Documentation synced — tab structure (2 tabs + Chat FAB), navigation refactor, StackEditorViewModel fix (May 2026)*

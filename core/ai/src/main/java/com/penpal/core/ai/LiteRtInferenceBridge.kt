@@ -773,7 +773,12 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
 
     @OptIn(ExperimentalApi::class)
     override fun runInferenceFlowParts(input: String): Flow<List<MessagePart>> = flow {
+        Log.d(TAG, ">>> runInferenceFlowParts CALLED with input length: ${input.length}")
+        Log.d(TAG, ">>> _isReady.value = ${_isReady.value}")
+        Log.d(TAG, ">>> conversation = ${conversation}")
+        
         if (!_isReady.value || conversation == null) {
+            Log.e(TAG, ">>> Model not ready or conversation null!")
             throw IllegalStateException("Model not ready. Please load the model first.")
         }
 
@@ -784,16 +789,56 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
         try {
             val conv = conversation!!
             val content = Contents.of(Content.Text(input))
+            Log.d(TAG, "=== FlowParts START ===")
             Log.d(TAG, "Sending message via FlowParts with ${input.length} chars")
+            Log.d(TAG, "conversation is null: ${conversation == null}")
+            Log.d(TAG, "=========================")
 
             withTimeout(120_000) {
+                Log.d(TAG, ">>> Calling sendMessageAsync...")
                 conv.sendMessageAsync(content)
                     .catch { e ->
                         Log.e(TAG, "FlowParts error: ${e.message}", e)
                         throw e
                     }
                     .collect { message ->
-                        val text = try { message.javaClass.getMethod("getContent").invoke(message) as? String ?: "" } catch (e: Exception) { "" }
+                        Log.d(TAG, ">>> Flow collect: got message object: ${message.javaClass.name}")
+                        
+                        // Debug: list all methods
+                        val methods = message.javaClass.methods.joinToString(", ") { it.name }
+                        Log.d(TAG, ">>> Available methods: $methods")
+                        
+                        var extractedText = ""
+                        try { 
+                            // Use getContents() - returns Contents object, not a List
+                            val getContentsMethod = message.javaClass.getMethod("getContents")
+                            val contents = getContentsMethod.invoke(message)
+                            Log.d(TAG, ">>> getContents() returned: ${contents?.javaClass?.name}, toString: $contents")
+                            
+                            if (contents != null) {
+                                // Contents class has getText() method - try it
+                                try {
+                                    val textMethod = contents.javaClass.getMethod("getText")
+                                    val textResult = textMethod.invoke(contents) as? String
+                                    Log.d(TAG, ">>> Contents.getText() = $textResult")
+                                    if (!textResult.isNullOrEmpty()) {
+                                        extractedText = textResult
+                                    }
+                                } catch (_: Exception) { }
+                                
+                                // Fallback: use toString() if getText didn't work
+                                if (extractedText.isEmpty()) {
+                                    extractedText = contents.toString()
+                                    Log.d(TAG, ">>> Using toString() as fallback: $extractedText")
+                                }
+                            }
+                            
+                            Log.d(TAG, ">>> Final extracted text: '$extractedText'")
+                        } catch (e: Exception) { 
+                            Log.e(TAG, ">>> getContents reflection FAILED: ${e.message}")
+                        }
+                        Log.d(TAG, ">>> Final text length: ${extractedText.length}, isNotEmpty: ${extractedText.isNotEmpty()}")
+                        val text = extractedText
                         if (text.isNotEmpty()) {
                             val result = filter.appendWithTransitions(text)
                             if (result.text.isNotEmpty() || result.transitions.isNotEmpty()) {

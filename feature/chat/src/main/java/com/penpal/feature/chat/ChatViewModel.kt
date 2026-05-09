@@ -110,7 +110,8 @@ class ChatViewModel(
     private val chatMessageDao: ChatMessageDao? = null,
     private val chatConversationDao: ChatConversationDao? = null,
     private val stackDao: StackDao? = null,
-    private val workerLauncher: WorkerLauncher? = null
+    private val workerLauncher: WorkerLauncher? = null,
+    private val onLoadModel: (() -> Unit)? = null
 ) : ViewModel() {
 
     private val gson = Gson()
@@ -556,27 +557,38 @@ class ChatViewModel(
                 val sourceIds = allChunks.map { it.id }
                 Log.d("ChatViewModel", "Built prompt (${contextPrompt.length} chars), isReady=${inferenceBridge.isReady.value}")
 
-                if (!inferenceBridge.isReady.value) {
-                    Log.w("ChatViewModel", "Model not ready, cannot run inference")
+                val isReadyNow = inferenceBridge.isReady.value
+                Log.d("ChatViewModel", "MODEL STATUS CHECK: isReady=$isReadyNow")
+                
+                if (!isReadyNow) {
+                    Log.w("ChatViewModel", "Model not ready, auto-loading model...")
+                    // Auto-load the model
+                    onLoadModel?.invoke()
+                    // Show loading message while model loads
                     updateLastAssistantMessage(
-                        listOf(MessagePart.TextPart("The AI model is not ready. Please download and load a model in Settings first. Tap to retry once model is loaded.")),
+                        listOf(MessagePart.TextPart("Loading AI model...")),
                         sourceIds
                     )
                     _uiState.update {
                         it.copy(
-                            isLoading = false,
+                            isLoading = true,
                             retrievedContext = emptyList(),
                             pendingRetryMessage = currentInput,
-                            pendingRetryError = "Model not ready"
+                            pendingRetryError = null
                         )
                     }
                     return@launch
                 }
 
+                Log.d("ChatViewModel", "=== CHATVIEWMODEL SEND MESSAGE FLOW START ===")
                 Log.d("ChatViewModel", "Starting inference via FlowParts...")
+                Log.d("ChatViewModel", ">>> Calling runInferenceFlowParts...")
+                Log.d("ChatViewModel", "inferenceBridge class: ${inferenceBridge.javaClass.name}")
+                Log.d("ChatViewModel", "=============================================")
                 inferenceBridge.runInferenceFlowParts(contextPrompt)
                     .catch { error ->
-                        Log.e("ChatViewModel", "FlowParts inference error: ${error.message}", error)
+                        Log.e("ChatViewModel", "FlowParts inference ERROR: ${error.message}", error)
+                        Log.e("ChatViewModel", "Stack trace: ", error)
                         _uiState.update { state ->
                             state.copy(
                                 isLoading = false,
@@ -619,10 +631,11 @@ class ChatViewModel(
                         }
                     }
                     .collect { parts ->
-                        val textPreview = parts.filterIsInstance<MessagePart.TextPart>().joinToString(" ") { it.text }
-                            .replace("\n", "\\n")
-                            .take(120)
-                        Log.d("ChatViewModel", "Assistant chunk: ${textPreview}")
+                        val textParts = parts.filterIsInstance<MessagePart.TextPart>()
+                        val textPreview = textParts.joinToString(" ") { it.text }.replace("\n", "\\n").take(120)
+                        Log.d("ChatViewModel", "=== Assistant chunk (${parts.size} parts, ${textParts.size} text) ===")
+                        Log.d("ChatViewModel", "Text: ${textPreview}")
+                        Log.d("ChatViewModel", "=============================================")
                         updateLastAssistantMessage(parts, sourceIds)
                     }
 
@@ -744,7 +757,6 @@ class ChatViewModel(
     }
 
     private fun buildPrompt(userMessage: String, context: List<ChunkEntity>): String {
-        // Get effective system prompt (per-conversation override takes priority over default)
         val effectiveSystemPrompt = _uiState.value.systemPrompt.ifBlank { _uiState.value.defaultSystemPrompt }
 
         val systemPromptPrefix = if (effectiveSystemPrompt.isNotBlank()) {
@@ -753,12 +765,14 @@ class ChatViewModel(
             ""
         }
 
+        val conversationHistory = buildConversationHistory()
+
         return if (context.isNotEmpty()) {
             val contextItems = context.joinToString("\n\n") { chunk ->
                 "[Document: ${chunk.sourceId}]\n${chunk.text}"
             }
             """
-            ${systemPromptPrefix}Use the following context to answer the question. If the context doesn't contain relevant information, say so.
+            ${systemPromptPrefix}${conversationHistory}Use the following context to answer the question. If the context doesn't contain relevant information, say so.
 
             Context:
             $contextItems
@@ -766,7 +780,23 @@ class ChatViewModel(
             Question: $userMessage
             """.trimIndent()
         } else {
-            "${systemPromptPrefix}$userMessage"
+            "${systemPromptPrefix}${conversationHistory}$userMessage"
         }
+    }
+
+    private fun buildConversationHistory(): String {
+        val historyMessages = _uiState.value.messages
+        if (historyMessages.isEmpty()) return ""
+
+        val sb = StringBuilder("Conversation history:\n")
+        for (msg in historyMessages) {
+            val roleStr = when (msg.role) {
+                MessageRole.USER -> "User"
+                MessageRole.ASSISTANT -> "Assistant"
+            }
+            sb.appendLine("$roleStr: ${msg.content}")
+        }
+        sb.appendLine()
+        return sb.toString()
     }
 }
