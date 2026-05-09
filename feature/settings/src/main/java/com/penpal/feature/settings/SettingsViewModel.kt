@@ -36,7 +36,8 @@ data class SettingsUiState(
     val availableModels: List<ModelManager.ModelInfo> = emptyList(),
     val isLoadingModels: Boolean = false,
     val backendPreference: BackendPreference = BackendPreference.AUTO,
-    val inactivityTimeoutMinutes: Int = 10
+    val inactivityTimeoutMinutes: Int = 10,
+    val defaultSystemPrompt: String = ""
 )
 
 enum class InferenceMode {
@@ -71,9 +72,15 @@ class SettingsViewModel(
             _uiState.update { it.copy(isLoading = true) }
 
             // Load inactivity timeout setting
-            val timeoutMinutes = application.getSharedPreferences("penpal_app_prefs", MODE_PRIVATE)
-                .getInt("inactivity_timeout_minutes", 10)
-            _uiState.update { it.copy(inactivityTimeoutMinutes = timeoutMinutes) }
+            val prefs = application.getSharedPreferences("penpal_app_prefs", MODE_PRIVATE)
+            val timeoutMinutes = prefs.getInt("inactivity_timeout_minutes", 10)
+            val defaultSystemPrompt = prefs.getString("default_system_prompt", "") ?: ""
+            _uiState.update {
+                it.copy(
+                    inactivityTimeoutMinutes = timeoutMinutes,
+                    defaultSystemPrompt = defaultSystemPrompt
+                )
+            }
 
             // Check if model already exists
             val existingModel = ModelManager.findExistingModel(application)
@@ -134,6 +141,7 @@ class SettingsViewModel(
             is SettingsEvent.DeleteSpecificModel -> deleteSpecificModel(event.modelPath)
             is SettingsEvent.UpdateBackendPreference -> updateBackendPreference(event.preference)
             is SettingsEvent.UpdateInactivityTimeout -> updateInactivityTimeout(event.minutes)
+            is SettingsEvent.UpdateDefaultSystemPrompt -> updateDefaultSystemPrompt(event.prompt)
         }
     }
 
@@ -147,6 +155,14 @@ class SettingsViewModel(
             .putInt("inactivity_timeout_minutes", minutes)
             .apply()
         _uiState.update { it.copy(inactivityTimeoutMinutes = minutes) }
+    }
+
+    private fun updateDefaultSystemPrompt(prompt: String) {
+        application.getSharedPreferences("penpal_app_prefs", MODE_PRIVATE)
+            .edit()
+            .putString("default_system_prompt", prompt)
+            .apply()
+        _uiState.update { it.copy(defaultSystemPrompt = prompt) }
     }
 
     private fun showDownloadDialog() {
@@ -437,4 +453,5 @@ sealed class SettingsEvent {
     data class DeleteSpecificModel(val modelPath: String) : SettingsEvent()
     data class UpdateBackendPreference(val preference: BackendPreference) : SettingsEvent()
     data class UpdateInactivityTimeout(val minutes: Int) : SettingsEvent()
+    data class UpdateDefaultSystemPrompt(val prompt: String) : SettingsEvent()
 }

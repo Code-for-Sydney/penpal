@@ -9,6 +9,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -250,6 +251,35 @@ fun SettingsScreen(
                             Icon(Icons.Default.SwapHoriz, contentDescription = "Change mode")
                         }
                     }
+                )
+            }
+
+            // ──────────────────────────────────────────────────────────────
+            // System Prompt Section
+            // ──────────────────────────────────────────────────────────────
+            SettingsSection(title = "Default System Prompt") {
+                Text(
+                    text = "This prompt will be used as the default for all new conversations",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+                var systemPromptText by rememberSaveable { mutableStateOf(uiState.defaultSystemPrompt) }
+
+                LaunchedEffect(uiState.defaultSystemPrompt) {
+                    systemPromptText = uiState.defaultSystemPrompt
+                }
+                OutlinedTextField(
+                    value = systemPromptText,
+                    onValueChange = {
+                        systemPromptText = it
+                        onEvent(SettingsEvent.UpdateDefaultSystemPrompt(it))
+                    },
+                    label = { Text("System Prompt") },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 3,
+                    maxLines = 6,
+                    placeholder = { Text("You are a helpful AI assistant...") }
                 )
             }
 
