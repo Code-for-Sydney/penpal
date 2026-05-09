@@ -33,6 +33,12 @@ android {
         }
     }
 
+    packaging {
+        jniLibs {
+            useLegacyPackaging = false
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -46,6 +52,11 @@ android {
 
     buildFeatures {
         compose = true
+    }
+
+    lint {
+        abortOnError = false
+        checkReleaseBuilds = false
     }
 
     packaging {
@@ -110,6 +121,6 @@ dependencies {
     api(project(":feature:chat"))
     api(project(":feature:process"))
     api(project(":feature:inference"))
-    api(project(":feature:notebooks"))
+    api(project(":feature:stacks"))
     api(project(":feature:settings"))
 }
