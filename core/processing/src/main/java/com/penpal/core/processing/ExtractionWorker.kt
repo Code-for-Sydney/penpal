@@ -22,6 +22,7 @@ class ExtractionWorker(
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val jobId = inputData.getString(KEY_JOB_ID) ?: return@withContext Result.failure()
+        val agentPrompt = inputData.getString(KEY_AGENT_PROMPT)?.takeIf { it.isNotBlank() }
 
         setProgress(workDataOf(KEY_PROGRESS to 0))
         notificationHelper.showProgressNotification(jobId, "Loading...", 0)
@@ -85,5 +86,6 @@ class ExtractionWorker(
         const val KEY_JOB_ID = "job_id"
         const val KEY_PROGRESS = "progress"
         const val KEY_ERROR = "error"
+        const val KEY_AGENT_PROMPT = "agent_prompt"
     }
 }

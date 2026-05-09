@@ -18,7 +18,7 @@ class WorkerLauncher(
 ) {
     private val workManager = WorkManager.getInstance(context)
 
-    suspend fun enqueue(uri: String, mimeType: String, rule: String): String {
+    suspend fun enqueue(uri: String, mimeType: String, rule: String, agentPrompt: String? = null): String {
         return withContext(Dispatchers.IO) {
             val jobId = UUID.randomUUID().toString()
             val job = ExtractionJobEntity(
@@ -32,8 +32,12 @@ class WorkerLauncher(
             )
             extractionJobDao.insert(job)
 
+            val inputData = workDataOf(
+                ExtractionWorker.KEY_JOB_ID to jobId,
+                ExtractionWorker.KEY_AGENT_PROMPT to (agentPrompt ?: "")
+            )
             val workRequest = OneTimeWorkRequestBuilder<ExtractionWorker>()
-                .setInputData(workDataOf(ExtractionWorker.KEY_JOB_ID to jobId))
+                .setInputData(inputData)
                 .build()
 
             workManager.enqueueUniqueWork(jobId, ExistingWorkPolicy.KEEP, workRequest)
