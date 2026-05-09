@@ -25,27 +25,31 @@
 - Future: More Parsers
 - In the Settings Tab, there should be a way to visualize the inputs and outputs of the model. 
 
-## Current Sprint: LiteRT API Fix & Bug Testing (May 2026)
+## Current Sprint: Testing & Refinement (May 2026)
 
-### Build Fix ✅ (Completed)
-- [x] Reverted LiteRT version from 0.10.0 to `latest.release` in `gradle/libs.versions.toml`
-- [x] Fixed `LiteRtInferenceBridge.kt` - `renderMessageIntoString()` doesn't exist in current LiteRT API
-- [x] Added reflection-based fallback to get message content: `message.javaClass.getMethod("getContent").invoke(message)`
-- **Note**: Need to find proper LiteRT API method for extracting message text - current solution uses reflection
-
-### Model Status Toggle Fix ✅ (Completed)
+### LiteRT API Fixes ✅ (Completed)
 - [x] Added `LOADING` and `READY` states to `ModelStatus` enum in `InferenceBridge.kt`
+- [x] Reverted LiteRT version from 0.10.0 to `latest.release` in `gradle/libs.versions.toml`
+- [x] Fixed `renderMessageIntoString()` API compatibility - uses reflection-based `getContent()` method
 - [x] Updated `LiteRtInferenceBridge.loadModel()` to set `LOADING` → `READY` status
-- [x] Fixed `isModelLoading` check to include both `DOWNLOADING` and `LOADING` states
-- [x] Fixed `onToggleModel` condition to work with both `DOWNLOADED` and `READY` states
-- [x] Updated `ModelStatusIndicator` to show proper status text for all states
-- [x] Updated `SettingsScreen` to handle new `LOADING` and `READY` states
-- [x] Fixed `SettingsViewModel` to set `ModelStatus.READY` (not DOWNLOADED) on successful load
-- [x] Fixed `MainScreen.onToggleModel` to allow toggle when modelStatus is DOWNLOADED or READY
 
-### Testing: Model Loading Crash
+### Model Status Toggle Fixes ✅ (Completed)
+- [x] Fixed `ModelStatusIndicator` to show proper status text for all states: "ON", "Loading...", "Unloading...", "Downloading...", "DL'd", "ERR", "OFF"
+- [x] Fixed `MainScreen.onToggleModel` to allow toggle when modelStatus is `DOWNLOADED` or `READY`
+- [x] Fixed `MainScreen` model file existence detection when status is `NOT_DOWNLOADED`
+- [x] Fixed toggle handler in `ChatScreen`, `StackListScreen`, and `SettingsScreen`
+- [x] Updated `SettingsViewModel` to set `ModelStatus.READY` on successful load
+
+### Stacks Refactoring ✅ (Completed)
+- [x] Renamed all `Notebook*` files to `Stack*` in `feature/stacks` module
+
+### Testing: Model Loading
 - [ ] Test app on device to verify model loads correctly with the reflection fix
 - [ ] If still crashing, investigate model file compatibility
+
+### Audio Features
+- [ ] Test audio recording in stacks
+- [ ] Verify audio playback functionality
 
 ## Previous Sprint: Block Parsing & Stacks Enhancement (May 2026)
 

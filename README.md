@@ -8,7 +8,7 @@ A feature-rich Android application combining drawing capabilities with AI-powere
 
 Penpal provides a unified experience for:
 
-- **Smart Notebooks**: Draw, annotate, and organize handwritten notes
+- **Smart Stacks**: Draw, annotate, and organize notes in block-based documents
 - **Document Processing**: Extract and index content from PDFs, URLs, audio, and images
 - **AI-Powered Chat**: Query your knowledge base with RAG-enabled conversations
 - **On-Device Inference**: Run Gemma 4 E2B-IT locally for privacy-preserving AI
@@ -75,7 +75,7 @@ Penpal's inference layer is built around **Gemma 4 E2B-IT** and uses the **LiteR
 | Tab | Purpose | Status |
 |-----|---------|--------|
 | **Chat** | RAG-enabled conversations with your knowledge | ✅ Functional |
-| **Think** | Block-based notebooks with graphs, drawings, images | ✅ Functional |
+| **Think** | Block-based stacks with graphs, drawings, images | ✅ Functional |
 | **Settings** | App configuration, model management, preferences | ✅ Functional |
 
 **Note:** The current MainScreen has 3 tabs (Chat, Think, Settings). Process and Inference functionality is integrated into Settings and other flows.
@@ -123,11 +123,11 @@ core/
 
 feature/
 ├── chat/               # ChatScreen, ChatViewModel (RAG flow, persistent conversations,
-│                       # notebook/file attachment, structured MessageParts)
+│                       # stack/file attachment, structured MessageParts)
 ├── process/            # ProcessScreen, ProcessViewModel (job queue)
 ├── inference/          # InferenceScreen, InferenceViewModel (model management)
-├── notebooks/          # NotebookScreen, NotebookEditorViewModel (block-based editor,
-│                       # auto-processing, image picker, Coil integration)
+├── stacks/             # StackScreen, StackEditorViewModel (block-based editor,
+│                       # auto-processing, image picker, Coil integration, audio recording)
 └── settings/           # SettingsScreen, SettingsViewModel (model download UI)
 ```
 
@@ -135,8 +135,8 @@ feature/
 
 ```
 app ──> core:ai, core:data, core:processing, core:ui
-feature:chat ──> core:ai, core:data, core:processing, core:ui, feature:notebooks
-feature:notebooks ──> core:ai, core:data, core:processing, core:ui
+feature:chat ──> core:ai, core:data, core:processing, core:ui, feature:stacks
+feature:stacks ──> core:ai, core:data, core:processing, core:ui, core:media
 feature:process ──> core:ai, core:data, core:processing, core:ui
 feature:inference ──> core:ai, core:data, core:ui
 feature:settings ──> core:ai, core:data, core:ui

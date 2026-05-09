@@ -4,6 +4,82 @@ All notable changes to the Penpal project.
 
 ## [Unreleased]
 
+### LiteRT API Fixes & Model Status Toggle (May 2026)
+
+**Commits:** `3e9665a` `3a446a6`
+
+#### ModelStatus Enum Updates ✅
+
+**`core/ai/InferenceBridge.kt`**:
+- Added `LOADING` and `READY` states to `ModelStatus` enum
+- Updated enum: `NOT_DOWNLOADED`, `DOWNLOADING`, `DOWNLOADED`, `LOADING`, `READY`, `ERROR`
+
+#### LiteRtInferenceBridge API Fix ✅
+
+**`core/ai/LiteRtInferenceBridge.kt`**:
+- Fixed `renderMessageIntoString()` API compatibility issue
+- Added reflection-based `getContent()` method to extract message text: `message.javaClass.getMethod("getContent").invoke(message)`
+- Updated `loadModel()` to set `ModelStatus.READY` (not `DOWNLOADED`) on successful model load
+- Added guard to skip initialization if model already loaded
+
+#### Model Status Toggle Fixes ✅
+
+**`core/ui/ModelStatusIndicator.kt`**:
+- Updated status text for all states:
+  - `READY` / `isReady`: "ON" (green)
+  - `LOADING` / `isLoading`: "Loading..." (orange)
+  - `isUnloading`: "Unloading..." (orange)
+  - `DOWNLOADING`: "Downloading..." (orange)
+  - `DOWNLOADED`: "DL'd" (gray)
+  - `ERROR`: "ERR" (red)
+  - Default: "OFF" (gray)
+
+**`app/MainScreen.kt`**:
+- Fixed `onToggleModel` to allow toggle when modelStatus is `DOWNLOADED` or `READY`
+- Fixed model file existence detection: when status is `NOT_DOWNLOADED`, check if model file exists on disk and treat as `DOWNLOADED`
+
+**`feature/chat/ChatScreen.kt`**:
+- Fixed `onToggleModel` condition to work with both `DOWNLOADED` and `READY` states
+
+**`feature/stacks/StackListScreen.kt`**:
+- Fixed `onToggleModel` condition to work with both `DOWNLOADED` and `READY` states
+
+**`feature/settings/SettingsScreen.kt`**:
+- Fixed `onToggleModel` condition to work with both `DOWNLOADED` and `READY` states
+- Handles new `LOADING` and `READY` states
+
+**`feature/settings/SettingsViewModel.kt`**:
+- Updated to set `ModelStatus.READY` (not `DOWNLOADED`) on successful model load
+
+#### Build Configuration Fix ✅
+
+**`gradle/libs.versions.toml`**:
+- Reverted LiteRT version from `0.10.0` to `latest.release`
+
+#### Audio Features Updates ✅
+
+**`app/src/main/java/com/drawapp/AudioChunker.kt`**:
+- Updated audio chunking utilities
+
+**`app/src/main/java/com/drawapp/AudioPlayer.kt`**:
+- Updated audio playback utilities
+
+**`app/src/main/java/com/drawapp/AudioRecorder.kt`**:
+- Updated audio recording utilities
+
+#### Module Status
+
+| Module | Status | Description |
+|--------|--------|-------------|
+| core:ai | ✅ Complete | LOADING/READY states, reflection fix for LiteRT API |
+| core:ui | ✅ Complete | ModelStatusIndicator status text fixes |
+| app | ✅ Complete | MainScreen toggle fix, model file detection |
+| feature:chat | ✅ Complete | ChatScreen toggle fix |
+| feature:stacks | ✅ Complete | StackListScreen toggle fix |
+| feature:settings | ✅ Complete | SettingsScreen/ViewModel toggle fix |
+
+---
+
 ### WIP Block Parsing & Stacks Migration (May 2026)
 
 **Commit:** `f29891d`

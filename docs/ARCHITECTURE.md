@@ -77,6 +77,7 @@ This document provides an in-depth look at the system architecture, component re
 | **Model Source** | HuggingFace | `litert-community/gemma-4-E2B-it-litert-lm` (~2.6 GB) |
 | **Timeout Guard** | `AtomicBoolean` + 120s | Prevents hung inference sessions |
 | **Markdown Render** | `MarkdownText.kt` | Lightweight markdown renderer for chat messages |
+| **Model Status** | `ModelStatusIndicator` | UI component showing: ON, Loading..., Unloading..., Downloading..., DL'd, ERR, OFF |
 
 ### AI Inference Architecture (LiteRT-LM Engine API)
 
@@ -463,7 +464,7 @@ data class DownloadProgress(
 
 enum class DownloadStatus { NOT_STARTED, DOWNLOADING, COMPLETED, FAILED }
 enum class ModelBackend { ON_DEVICE, REMOTE_API }
-enum class ModelStatus { NOT_DOWNLOADED, DOWNLOADING, DOWNLOADED, LOADING, LOADED, ERROR }
+enum class ModelStatus { NOT_DOWNLOADED, DOWNLOADING, DOWNLOADED, LOADING, READY, ERROR }
 ```
 
 #### LiteRtInferenceBridge (LiteRT-LM Engine API)
