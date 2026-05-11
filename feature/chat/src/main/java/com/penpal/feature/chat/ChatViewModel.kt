@@ -5,9 +5,13 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.gson.Gson
+import com.penpal.core.ai.ChatMessageInfo
 import com.penpal.core.ai.InferenceBridge
 import com.penpal.core.ai.MessagePart
 import com.penpal.core.ai.ModelStatus
+import com.penpal.core.ai.ToolExecutionContext
+import com.penpal.core.ai.ToolRegistry
+import com.penpal.core.ai.ToolResult
 import com.penpal.core.ai.VectorStoreRepository
 import com.penpal.core.data.ChatConversationDao
 import com.penpal.core.data.ChatConversationEntity
@@ -112,10 +116,12 @@ class ChatViewModel(
     private val chatConversationDao: ChatConversationDao? = null,
     private val stackDao: StackDao? = null,
     private val workerLauncher: WorkerLauncher? = null,
-    private val onLoadModel: (() -> Unit)? = null
+    private val onLoadModel: (() -> Unit)? = null,
+    private val toolRegistry: ToolRegistry? = null
 ) : ViewModel() {
 
     private val gson = Gson()
+    private val toolExecutorMaxIterations = 3
 
     private val _uiState = MutableStateFlow(ChatUiState())
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
@@ -700,7 +706,16 @@ class ChatViewModel(
                     }
                     .onCompletion {
                         val lastMessage = _uiState.value.messages.lastOrNull { it.role == MessageRole.ASSISTANT }
+                        val finalParts = lastMessage?.parts ?: emptyList()
                         val finalContent = lastMessage?.content
+
+                        // Execute any tool calls that were made during inference
+                        val toolCalls = finalParts.filterIsInstance<MessagePart.ToolCallPart>()
+                        if (toolCalls.isNotEmpty() && toolRegistry != null) {
+                            Log.d("ChatViewModel", "Found ${toolCalls.size} tool call(s) to execute")
+                            executeToolCallsAfterInference(toolCalls)
+                        }
+
                         Log.d("ChatViewModel", "=== INFERENCE COMPLETE ===")
                         Log.d("ChatViewModel", "Final response: '${finalContent?.replace("\n", "\\n")}'")
                         Log.d("ChatViewModel", "Parts: ${lastMessage?.parts?.size}")
@@ -749,6 +764,155 @@ class ChatViewModel(
                         retrievedContext = emptyList()
                     )
                 }
+            }
+        }
+    }
+
+    private fun executeToolAndContinue(
+        toolCall: MessagePart.ToolCallPart,
+        currentPrompt: String,
+        contextPrompt: String,
+        allChunks: List<ChunkEntity>
+    ): Pair<String, List<MessagePart>> {
+        val registry = toolRegistry
+        if (registry == null || !registry.has(toolCall.name)) {
+            Log.w("ChatViewModel", "Tool not found or registry not configured: ${toolCall.name}")
+            return currentPrompt to emptyList()
+        }
+
+        val conversationHistory = _uiState.value.messages.map { msg ->
+            ChatMessageInfo(
+                id = msg.id,
+                role = if (msg.role == MessageRole.USER) com.penpal.core.ai.MessageRole.USER else com.penpal.core.ai.MessageRole.ASSISTANT,
+                content = msg.content,
+                timestamp = msg.timestamp
+            )
+        }
+
+        val attachedStackIds = _uiState.value.attachedStacks.map { it.stackId }
+
+        val toolContext = ToolExecutionContext(
+            toolCallId = toolCall.callId,
+            arguments = toolCall.arguments,
+            conversationHistory = conversationHistory,
+            attachedStackIds = attachedStackIds
+        )
+
+        Log.d("ChatViewModel", "Executing tool: ${toolCall.name} with args: ${toolCall.arguments}")
+
+        val result = registry.execute(toolCall.name, toolContext)
+
+        val toolResponseText = when (result) {
+            is ToolResult.Success -> result.output
+            is ToolResult.Error -> "Error: ${result.message}"
+            is ToolResult.StreamOutput -> {
+                val outputBuilder = StringBuilder()
+                result.chunks.collect { chunk ->
+                    outputBuilder.append(chunk)
+                }
+                outputBuilder.toString()
+            }
+        }
+
+        Log.d("ChatViewModel", "Tool result: ${toolResponseText.take(200)}...")
+
+        val toolResponseJson = """
+            {
+                "call_id": "${toolCall.callId}",
+                "name": "${toolCall.name}",
+                "output": ${gson.toJson(toolResponseText)}
+            }
+        """.trimIndent()
+
+        val responsePart = MessagePart.ToolResponsePart(
+            name = toolCall.name,
+            callId = toolCall.callId,
+            output = toolResponseText,
+            isError = result is ToolResult.Error
+        )
+
+        val continuationPrompt = buildToolContinuationPrompt(
+            currentPrompt,
+            toolCall,
+            toolResponseJson
+        )
+
+        return continuationPrompt to listOf(responsePart)
+    }
+
+    private fun buildToolContinuationPrompt(
+        originalResponse: String,
+        toolCall: MessagePart.ToolCallPart,
+        toolResponse: String
+    ): String {
+        return """
+            $originalResponse
+            <|tool_response|>
+            $toolResponse
+            <|tool_response|>
+            <|start_header_id|>model<|end_header_id|>
+
+        """.trimIndent()
+    }
+
+    private fun executeToolCallsAfterInference(toolCalls: List<MessagePart.ToolCallPart>) {
+        viewModelScope.launch {
+            val registry = toolRegistry ?: return@launch
+
+            for (toolCall in toolCalls) {
+                Log.d("ChatViewModel", "Executing post-inference tool: ${toolCall.name}")
+
+                val conversationHistory = _uiState.value.messages.map { msg ->
+                    ChatMessageInfo(
+                        id = msg.id,
+                        role = if (msg.role == MessageRole.USER) com.penpal.core.ai.MessageRole.USER else com.penpal.core.ai.MessageRole.ASSISTANT,
+                        content = msg.content,
+                        timestamp = msg.timestamp
+                    )
+                }
+
+                val attachedStackIds = _uiState.value.attachedStacks.map { it.stackId }
+
+                val toolContext = ToolExecutionContext(
+                    toolCallId = toolCall.callId,
+                    arguments = toolCall.arguments,
+                    conversationHistory = conversationHistory,
+                    attachedStackIds = attachedStackIds
+                )
+
+                val result = registry.execute(toolCall.name, toolContext)
+
+                val toolResponseText = when (result) {
+                    is ToolResult.Success -> result.output
+                    is ToolResult.Error -> "Error: ${result.message}"
+                    is ToolResult.StreamOutput -> {
+                        val outputBuilder = StringBuilder()
+                        result.chunks.collect { chunk ->
+                            outputBuilder.append(chunk)
+                        }
+                        outputBuilder.toString()
+                    }
+                }
+
+                val responsePart = MessagePart.ToolResponsePart(
+                    name = toolCall.name,
+                    callId = toolCall.callId,
+                    output = toolResponseText,
+                    isError = result is ToolResult.Error
+                )
+
+                _uiState.update { state ->
+                    val messages = state.messages.toMutableList()
+                    if (messages.isNotEmpty() && messages.last().role == MessageRole.ASSISTANT) {
+                        val lastMsg = messages.last()
+                        val updatedParts = lastMsg.parts + responsePart
+                        val updatedContent = lastMsg.content + "\n\n[Tool: ${toolCall.name}]\n" + toolResponseText
+                        messages[messages.lastIndex] = lastMsg.copy(parts = updatedParts, content = updatedContent)
+                    }
+                    state.copy(messages = messages)
+                }
+
+                Log.d("ChatViewModel", "Tool executed: ${toolCall.name} -> ${toolResponseText.take(100)}...")
             }
         }
     }
