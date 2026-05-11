@@ -23,7 +23,80 @@
 - Future: NNAPI NPU Support
 - Future: More Models
 - Future: More Parsers
-- In the Settings Tab, there should be a way to visualize the inputs and outputs of the model. 
+- In the Settings Tab, there should be a way to visualize the inputs and outputs of the model.
+
+## Agent Framework for stackx (Math & Science Education App) — ✅ Implemented
+
+### Overview
+Implement an agent framework that enables the model to use tools for multi-step problem solving. This enables use cases like: student uploads image of physics problem → agent converts to LaTeX → retrieves relevant context → synthesizes explanation with hints.
+
+### Current State (Fully Implemented ✅)
+
+| File | Status | Description |
+|------|--------|-------------|
+| `core/ai/Tool.kt` | ✅ Created | Tool interface with ToolExecutionContext, ToolResult |
+| `core/ai/ToolSchema.kt` | ✅ Created | ToolSchema, ToolParameter with JSON schema generation |
+| `core/ai/ToolRegistry.kt` | ✅ Created | ToolRegistry with register/execute methods |
+| `core/ai/ToolExecutor.kt` | ✅ Created | Tool execution loop with maxIterations |
+| `core/ai/BuiltinTools.kt` | ✅ Created | SearchKnowledgeTool, ReadStackTool, GetConversationHistoryTool, ListAttachedStacksTool |
+| `core/ai/WebSearchTools.kt` | ✅ Created | WebSearchTool, FetchUrlContentTool, StoreWebContentTool, ListStoredSourcesTool, DeleteStoredSourceTool |
+| `feature/chat/ChatViewModel.kt` | ✅ Modified | Added tool execution integration |
+| `core/data/Daos.kt` | ✅ Modified | Added getAllSourceIds() for listing stored sources |
+| `core/ai/VectorStoreRepository.kt` | ✅ Modified | Added getAllSourceIds() interface method |
+
+### Implementation Steps (Complete)
+
+1. **Phase 1: Tool Infrastructure** ✅
+   - [x] Create `Tool.kt` with Tool interface and ToolResult sealed class
+   - [x] Create `ToolSchema.kt` with parameter definitions
+   - [x] Create `ToolRegistry.kt` with tool registration and JSON schema generation
+   - [x] Create `ToolExecutor.kt` with multi-turn tool execution loop
+
+2. **Phase 2: Built-in Tools** ✅
+   - [x] Implement `SearchKnowledgeTool` wrapping `VectorStoreRepository.similaritySearch()`
+   - [x] Implement `ReadStackTool` wrapping `StackDao.getById()`
+   - [x] Implement `GetConversationHistoryTool` using `ToolExecutionContext.conversationHistory`
+   - [x] Implement `ListAttachedStacksTool` using `ToolExecutionContext.attachedStackIds`
+
+3. **Phase 3: Web Search Tools** ✅
+   - [x] Implement `WebSearchTool` for DuckDuckGo HTML search
+   - [x] Implement `FetchUrlContentTool` for URL content extraction with JSoup
+   - [x] Implement `StoreWebContentTool` for storing web content in vector store
+   - [x] Implement `ListStoredSourcesTool` and `DeleteStoredSourceTool` for source management
+
+4. **Phase 4: Execution Loop** ✅
+   - [x] Modify `ChatViewModel` to detect `ToolCallPart` in streaming `MessagePart` flow
+   - [x] Execute tools via `ToolRegistry.execute()` and inject results as `ToolResponsePart`
+   - [x] Tool execution runs after inference completes, appends results to message
+
+5. **Phase 5: Data Layer** ✅
+   - [x] Add `getAllSourceIds()` to `ChunkDao` for listing distinct sources
+   - [x] Add `getAllSourceIds()` to `VectorStoreRepository` interface and implementation
+
+### Files to Create/Modify
+
+| File | Status |
+|------|--------|
+| `core/ai/Tool.kt` | ✅ Created |
+| `core/ai/ToolSchema.kt` | ✅ Created |
+| `core/ai/ToolRegistry.kt` | ✅ Created |
+| `core/ai/ToolExecutor.kt` | ✅ Created |
+| `core/ai/BuiltinTools.kt` | ✅ Created |
+| `core/ai/WebSearchTools.kt` | ✅ Created |
+| `feature/chat/ChatViewModel.kt` | ✅ Modified - add execution loop |
+| `core/data/Daos.kt` | ✅ Modified |
+| `core/ai/VectorStoreRepository.kt` | ✅ Modified |
+| `docs/ARCHITECTURE.md` | ✅ Updated |
+| `docs/FEATURES.md` | ✅ Updated |
+| `docs/TODO.md` | ✅ Updated |
+
+### Remaining Work (Optional)
+
+- [ ] Show tool call UI in ChatScreen with expandable details
+- [ ] Display tool execution progress (pending → running → completed)
+- [ ] Add more built-in tools (calculator, unit converter, etc.)
+
+---
 
 ## Latest Sprint: Chat Model Response & Navigation Fixes (May 2026)
 

@@ -60,6 +60,7 @@ This document provides an in-depth look at the system architecture, component re
 | Phase 5.7: Structured Message Parts | ✅ Complete | Opencode-inspired parts architecture with rich UI rendering |
 | Phase 5.8: Chat Model Response Fix | ✅ Complete | getContents() fix, conversation history in prompts, FAB navigation |
 | Phase 5.9: UI Polish & Chat Improvements | ✅ Complete | FAB positioning (80dp margin), pinned TopBar, AI message alignment (fillMaxWidth) |
+| Phase 6.0: Agent Framework | ✅ Complete | ToolRegistry, ToolExecutor, BuiltinTools, execution loop for multi-step inference |
 
 ### Key Inference Components
 
@@ -75,6 +76,9 @@ This document provides an in-depth look at the system architecture, component re
 | **Special Tokens** | `GemmaSpecialTokens` | Definitions for turn, tool, thinking, media, sequence tokens |
 | **Message Parts** | `MessagePart` sealed class | Structured parts: Text, Reasoning, ToolCall, ToolResponse, Image, Audio |
 | **Part Aggregator** | `MessagePartAggregator` | Builds MessageParts from streaming token filter transitions |
+| **Tool Registry** | `ToolRegistry` | ✅ Implemented - registers available tools with JSON schemas |
+| **Tool Executor** | `ToolExecutor` | ✅ Implemented - executes tool calls and returns results |
+| **Built-in Tools** | `BuiltinTools.kt` | ✅ Implemented - SearchKnowledge, ReadStack, GetHistory, ListStacks |
 | **Model Manager** | `ModelManager` | HuggingFace/Kaggle download management |
 | **Text Embedder** | `OnnxMiniLmEmbedder` | ONNX Runtime with mean pooling + L2 normalization (fallback to mock) |
 | **Model Source** | HuggingFace | `litert-community/gemma-4-E2B-it-litert-lm` (~2.6 GB) |
@@ -396,7 +400,12 @@ core:ai/
 ├── GemmaSpecialTokens.kt    # Gemma 4 control token definitions
 ├── WordPieceTokenizer.kt    # BERT/MiniLM-compatible tokenizer
 ├── OllamaApiService.kt      # REST API client for Ollama
-└── OllamaModel.kt           # Data models for Ollama API responses
+├── OllamaModel.kt           # Data models for Ollama API responses
+├── ToolRegistry.kt          # ✅ Implemented - registers available tools with JSON schemas
+├── ToolExecutor.kt          # ✅ Implemented - executes tool calls and returns results
+├── ToolSchema.kt            # ✅ Implemented - tool parameter schema definitions
+├── Tool.kt                  # ✅ Implemented - tool interface definitions
+└── BuiltinTools.kt          # ✅ Implemented - built-in tools: SearchKnowledge, ReadStack, etc.
 ```
 
 #### DispatcherModule
@@ -1035,6 +1044,103 @@ Flow.collect() → StreamingTokenFilter → MessagePartAggregator → List<Messa
              │
              ▼
 5. Compose recomposes ChatScreen with streaming response
+```
+
+### Agent Framework Flow
+
+```
+User Query in Chat
+        │
+        ▼
+ChatViewModel.sendMessage(query)
+        │
+        ▼
+InferenceBridge.runInferenceFlowParts(prompt)
+        │  (model streams response with potential <|tool_call|> tokens)
+        ▼
+StreamingTokenFilter → ContentMode.TOOL_CALL detected
+        │
+        ▼
+MessagePartAggregator builds ToolCallPart(name, callId, args)
+        │
+        ▼
+ChatViewModel receives ToolCallPart in Flow<List<MessagePart>>
+        │
+        ├── ToolCall detected → pause streaming accumulation
+        │   │
+        │   ▼
+        │   ToolExecutor.execute(toolCall)
+        │   │
+        │   ├── search_knowledge(query)      → VectorStoreRepository.similaritySearch()
+        │   ├── process_image(uri, prompt)    → InferenceBridge.runInferenceWithImageFlowParts()
+        │   ├── read_stack(stackId)           → StackRepository.getBlocks()
+        │   └── get_conversation_history()    → ChatRepository.getMessages()
+        │   │
+        │   ▼
+        │   ToolResponsePart(name, callId, output)
+        │   │
+        │   ▼
+        │   Append tool response to prompt context
+        │   │
+        │   ▼
+        │   Resume inference with enriched prompt
+        │   │   (model can make further tool calls or produce final answer)
+        │   ▼
+        │
+        └── No tool call → render normally as TextPart/ReasoningPart
+                │
+                ▼
+        ChatScreen renders final multi-part response
+```
+
+This enables the **Agent Loop** pattern:
+
+1. Model generates text + optional tool calls
+2. Tool calls are intercepted and executed by `ToolExecutor`
+3. Results are fed back into the model's context
+4. Model continues generating (possibly calling more tools)
+5. Loop terminates when model produces a final answer without tool calls
+
+### Tool Registry & Schema (✅ Implemented)
+
+**Files**: `core/ai/Tool.kt`, `ToolSchema.kt`, `ToolRegistry.kt`, `BuiltinTools.kt`
+
+```kotlin
+// core/ai/Tool.kt
+interface Tool {
+    val name: String
+    val description: String
+    val schema: ToolSchema
+    suspend fun execute(context: ToolExecutionContext): ToolResult
+}
+
+// core/ai/ToolSchema.kt
+data class ToolSchema(
+    val name: String,
+    val description: String,
+    val parameters: List<ToolParameter>
+)
+
+data class ToolParameter(
+    val name: String,
+    val type: String,       // "string", "integer", "array", "object"
+    val description: String,
+    val required: Boolean = true,
+    val default: Any? = null
+)
+
+// core/ai/ToolRegistry.kt
+class ToolRegistry {
+    private val tools = mutableMapOf<String, Tool>()
+
+    fun register(tool: Tool) { tools[tool.name] = tool }
+    fun get(name: String): Tool? = tools[name]
+    fun getAll(): List<Tool> = tools.values.toList()
+    fun getToolsJson(): String  // Returns JSON schema for model prompt
+    suspend fun execute(name: String, context: ToolExecutionContext): ToolResult
+}
+
+// Built-in tools: SearchKnowledgeTool, ReadStackTool, GetConversationHistoryTool, ListAttachedStacksTool
 ```
 
 ---

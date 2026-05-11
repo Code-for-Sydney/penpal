@@ -1,5 +1,83 @@
 # Feature Notes — Tab by Tab
 
+## Agent Framework ✅ Implemented
+
+**Purpose:** Enable the on-device model to use tools for multi-step reasoning and problem solving. This unlocks agentic use cases for stackx, the math & science education app.
+
+**Current Status:** ✅ Implemented — ToolRegistry, ToolExecutor, and BuiltinTools created.
+
+### Implemented Architecture
+
+| File | Description |
+|------|-------------|
+| `core/ai/Tool.kt` | Tool interface with ToolExecutionContext and ToolResult |
+| `core/ai/ToolSchema.kt` | ToolSchema, ToolParameter with JSON schema generation |
+| `core/ai/ToolRegistry.kt` | ToolRegistry class with register/execute methods |
+| `core/ai/ToolExecutor.kt` | Tool execution loop with maxIterations control |
+| `core/ai/BuiltinTools.kt` | Built-in tools: SearchKnowledge, ReadStack, GetHistory, ListStacks |
+| `core/ai/WebSearchTools.kt` | Web search and content fetching tools |
+
+### Built-in Tools
+
+| Tool | Signature | Returns | Backing Service |
+|------|-----------|---------|-----------------|
+| `search_knowledge` | `(query: string, max_results?: number)` | Search results | `VectorStoreRepository.similaritySearch()` |
+| `read_stack` | `(stack_id: string)` | Notebook content | `StackDao.getById()` |
+| `get_conversation_history` | `()` | Message history | `ToolExecutionContext.conversationHistory` |
+| `list_attached_stacks` | `()` | Attached notebooks | `ToolExecutionContext.attachedStackIds` |
+| `web_search` | `(query: string, max_results?: number)` | Web search results | DuckDuckGo HTML scraping |
+| `fetch_url_content` | `(url: string)` | Web page content | OkHttp + JSoup |
+| `store_web_content` | `(url: string, content: string)` | Store to vector store | `VectorStoreRepository.embed()` |
+| `list_stored_sources` | `(include_content?: boolean)` | List stored URLs | `VectorStoreRepository.getAllSourceIds()` |
+| `delete_stored_source` | `(url: string)` | Delete stored content | `VectorStoreRepository.deleteChunksForSource()` |
+
+### Agent Execution Loop
+
+```
+User Query
+    │
+    ▼
+Model generates response (may include tool calls)
+    │
+    ├── No tool call → render answer
+    │
+    └── Tool call detected → ToolExecutor.execute()
+        │
+        ├── search_knowledge → retrieve context from vector store
+        ├── read_stack → load stack/notebook content
+        ├── web_search → search the web for information
+        ├── fetch_url_content → extract text from URLs
+        └── get_conversation_history → get chat context
+        │
+        ▼
+    Results appended to prompt → Model continues
+        │
+        └── Repeat until no more tool calls → Final answer
+```
+
+### Use Case: Physics Problem Solving (stackx)
+
+```
+1. Student uploads image of a physics problem
+2. Agent calls process_image(uri, "Convert to LaTeX")
+3. Agent receives LaTeX: F = m * a, v = v_0 + a*t
+4. Agent calls search_knowledge("Newton's laws kinematics")
+5. Agent receives relevant textbook chunks from vector store
+6. Agent synthesizes a tailored explanation with hints
+7. Student sees: problem in LaTeX + step-by-step solution + study tips
+```
+
+### Benefits for stackx
+
+- **Multi-step reasoning**: Model can break complex problems into sub-problems
+- **Context-aware**: Searches knowledge base for relevant material
+- **Image understanding**: Converts diagrams and handwritten problems to symbolic form
+- **Stack integration**: Reads existing notebook content to build on prior work
+- **Web search**: Can search the internet for additional information
+- **No external API**: All tools run on-device via existing services
+
+---
+
 ## Chat `:feature:chat`
 
 **Purpose:** Conversational RAG interface. Queries go through `InferenceBridge` with vector-retrieved context. Uses Flow-based streaming with trie-based special token filtering.
