@@ -101,6 +101,7 @@ sealed class ChatEvent {
     // System prompt
     data class UpdateSystemPrompt(val prompt: String) : ChatEvent()
     data object ToggleModel : ChatEvent()
+    data object Cancel : ChatEvent()
 }
 
 class ChatViewModel(
@@ -160,11 +161,94 @@ class ChatViewModel(
         }
 
         Log.d("ChatViewModel", "Retrying pending message: ${pendingMessage.take(50)}...")
+        
+        // Check if there's already an assistant message (from "Loading AI model...") to continue
+        val allAssistantMessages = _uiState.value.messages.filter { it.role == MessageRole.ASSISTANT }
+        Log.d("ChatViewModel", "retryLastMessage: all assistant messages: ${allAssistantMessages.map { "${it.content.take(30)}..." }}")
+        val existingAssistantMessage = allAssistantMessages.lastOrNull { it.content.contains("Loading AI model") }
+        Log.d("ChatViewModel", "retryLastMessage: found existing assistant message: ${existingAssistantMessage != null}, messages count: ${_uiState.value.messages.size}")
+        
+        // Clear pending retry message first
         _uiState.update { it.copy(pendingRetryMessage = null, pendingRetryError = null) }
+        
+        if (existingAssistantMessage != null) {
+            // Continue with the existing message - just run inference
+            runInferenceWithPendingMessage(pendingMessage)
+        } else {
+            // Fallback to normal send
+            _uiState.update { it.copy(inputText = pendingMessage) }
+            sendMessage()
+        }
+    }
 
-        // Set input to the pending message and trigger send
-        _uiState.update { it.copy(inputText = pendingMessage) }
-        sendMessage()
+    private fun runInferenceWithPendingMessage(contextPrompt: String) {
+        Log.d("ChatViewModel", "runInferenceWithPendingMessage: starting with prompt: ${contextPrompt.take(50)}...")
+        viewModelScope.launch {
+            try {
+                _uiState.update { it.copy(isLoading = true, retrievedContext = emptyList()) }
+
+                Log.d("ChatViewModel", "=== CHATVIEWMODEL RETRY FLOW START ===")
+                Log.d("ChatViewModel", "Continuing inference for: ${contextPrompt.take(50)}...")
+                Log.d("ChatViewModel", "=============================================")
+                
+                inferenceBridge.runInferenceFlowParts(contextPrompt)
+                    .catch { error ->
+                        Log.e("ChatViewModel", "Retry inference ERROR: ${error.message}", error)
+                        _uiState.update { state ->
+                            state.copy(
+                                isLoading = false,
+                                error = error.message ?: "Inference error",
+                                retrievedContext = emptyList()
+                            )
+                        }
+                    }
+                    .onCompletion {
+                        val lastMessage = _uiState.value.messages.lastOrNull { it.role == MessageRole.ASSISTANT }
+                        val finalContent = lastMessage?.content
+                        Log.d("ChatViewModel", "=== RETRY INFERENCE COMPLETE ===")
+                        Log.d("ChatViewModel", "Final response: '${finalContent?.replace("\n", "\\n")}'")
+                        Log.d("ChatViewModel", "Parts: ${lastMessage?.parts?.size}")
+                        Log.d("ChatViewModel", "=========================")
+                        _uiState.update { it.copy(isLoading = false, retrievedContext = emptyList()) }
+
+                        if (finalContent != null && finalContent.isNotBlank()) {
+                            val conversationId = _uiState.value.currentConversationId
+                            if (conversationId != null) {
+                                viewModelScope.launch {
+                                    chatMessageDao?.insert(
+                                        ChatMessageEntity(
+                                            id = pendingAssistantMessageId ?: UUID.randomUUID().toString(),
+                                            conversationId = conversationId,
+                                            role = "ASSISTANT",
+                                            content = finalContent,
+                                            sourcesJson = "[]",
+                                            createdAt = System.currentTimeMillis()
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    .collect { parts ->
+                        val textParts = parts.filterIsInstance<MessagePart.TextPart>()
+                        val textPreview = textParts.joinToString(" ") { it.text }.replace("\n", "\\n").take(120)
+                        Log.d("ChatViewModel", "=== Retry Assistant chunk (${parts.size} parts, ${textParts.size} text) ===")
+                        Log.d("ChatViewModel", "Text: ${textPreview}")
+                        Log.d("ChatViewModel", "=============================================")
+                        updateLastAssistantMessage(parts, emptyList())
+                    }
+
+            } catch (e: Exception) {
+                Log.e("ChatViewModel", "Failed to retry message", e)
+                _uiState.update { state ->
+                    state.copy(
+                        isLoading = false,
+                        error = "Failed to process message: ${e.message}",
+                        retrievedContext = emptyList()
+                    )
+                }
+            }
+        }
     }
 
     fun onEvent(event: ChatEvent) {
@@ -195,7 +279,21 @@ class ChatViewModel(
                 // The indicator in ChatTopBar uses onToggleModel directly from MainScreen
                 Log.d("ChatViewModel", "ToggleModel event received - handled by MainScreen")
             }
+            is ChatEvent.Cancel -> cancelInference()
         }
+    }
+
+    private fun cancelInference() {
+        Log.d("ChatViewModel", "Cancel requested")
+        inferenceBridge.stopInference()
+        _uiState.update { state ->
+            state.copy(
+                isLoading = false,
+                pendingRetryMessage = null,
+                pendingRetryError = null
+            )
+        }
+        Log.d("ChatViewModel", "Inference cancelled, UI updated")
     }
 
     private fun loadConversations() {
@@ -230,6 +328,7 @@ class ChatViewModel(
                 parentId = parentId
             )
             chatConversationDao.insert(conversation)
+            inferenceBridge.resetConversation()
             _uiState.update {
                 it.copy(
                     currentConversationId = conversationId,
@@ -247,6 +346,7 @@ class ChatViewModel(
         viewModelScope.launch {
             val conversation = chatConversationDao.getConversation(conversationId)
             if (conversation != null) {
+                inferenceBridge.resetConversation()
                 // Load attached stacks
                 val stackIds = try {
                     gson.fromJson(conversation.stackIdsJson, Array<String>::class.java).toList()
@@ -276,7 +376,7 @@ class ChatViewModel(
                         ChatMessage(
                             id = entity.id,
                             role = if (entity.role == "USER") MessageRole.USER else MessageRole.ASSISTANT,
-                            content = entity.content,
+                            content = entity.content.replace("\\n", "\n"),
                             sources = try {
                                 gson.fromJson(entity.sourcesJson, Array<String>::class.java).toList()
                             } catch (_: Exception) {
@@ -565,6 +665,7 @@ class ChatViewModel(
                     // Auto-load the model
                     onLoadModel?.invoke()
                     // Show loading message while model loads
+                    Log.d("ChatViewModel", "Auto-load: showing Loading AI model message, current messages: ${_uiState.value.messages.size}")
                     updateLastAssistantMessage(
                         listOf(MessagePart.TextPart("Loading AI model...")),
                         sourceIds
@@ -599,9 +700,9 @@ class ChatViewModel(
                     }
                     .onCompletion {
                         val lastMessage = _uiState.value.messages.lastOrNull { it.role == MessageRole.ASSISTANT }
-                        val finalContent = lastMessage?.content?.replace("\n", "\\n")
+                        val finalContent = lastMessage?.content
                         Log.d("ChatViewModel", "=== INFERENCE COMPLETE ===")
-                        Log.d("ChatViewModel", "Final response: '${finalContent}'")
+                        Log.d("ChatViewModel", "Final response: '${finalContent?.replace("\n", "\\n")}'")
                         Log.d("ChatViewModel", "Parts: ${lastMessage?.parts?.size}")
                         Log.d("ChatViewModel", "=========================")
                         _uiState.update { it.copy(isLoading = false, retrievedContext = emptyList()) }
