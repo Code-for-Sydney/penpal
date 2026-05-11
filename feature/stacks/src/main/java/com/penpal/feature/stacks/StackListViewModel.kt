@@ -18,7 +18,11 @@ data class StackListUiState(
     val isLoading: Boolean = false,
     val error: String? = null,
     val showDeleteDialog: Boolean = false,
-    val stackToDelete: StackSummary? = null
+    val stackToDelete: StackSummary? = null,
+    val isSelectionMode: Boolean = false,
+    val selectedStackIds: Set<String> = emptySet(),
+    val showRenameDialog: Boolean = false,
+    val stackToRename: StackSummary? = null
 )
 
 /**
@@ -121,6 +125,112 @@ class StackListViewModel(
                         showDeleteDialog = false,
                         stackToDelete = null,
                         error = e.message ?: "Failed to delete stack"
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * Enters selection mode on long press
+     */
+    fun enterSelectionMode(stackId: String) {
+        _uiState.update {
+            it.copy(
+                isSelectionMode = true,
+                selectedStackIds = setOf(stackId)
+            )
+        }
+    }
+
+    /**
+     * Toggles selection of a stack
+     */
+    fun toggleStackSelection(stackId: String) {
+        _uiState.update { state ->
+            val newSelected = if (stackId in state.selectedStackIds) {
+                state.selectedStackIds - stackId
+            } else {
+                state.selectedStackIds + stackId
+            }
+            state.copy(
+                selectedStackIds = newSelected,
+                isSelectionMode = newSelected.isNotEmpty()
+            )
+        }
+    }
+
+    /**
+     * Exits selection mode
+     */
+    fun exitSelectionMode() {
+        _uiState.update {
+            it.copy(
+                isSelectionMode = false,
+                selectedStackIds = emptySet()
+            )
+        }
+    }
+
+    /**
+     * Shows rename dialog for a stack
+     */
+    fun showRenameDialog(stack: StackSummary) {
+        _uiState.update {
+            it.copy(
+                showRenameDialog = true,
+                stackToRename = stack
+            )
+        }
+    }
+
+    /**
+     * Dismisses rename dialog
+     */
+    fun dismissRenameDialog() {
+        _uiState.update {
+            it.copy(
+                showRenameDialog = false,
+                stackToRename = null
+            )
+        }
+    }
+
+    /**
+     * Renames a stack
+     */
+    fun renameStack(newTitle: String) {
+        viewModelScope.launch {
+            val stack = _uiState.value.stackToRename ?: return@launch
+            try {
+                stackDao?.updateTitle(stack.id, newTitle, System.currentTimeMillis())
+                dismissRenameDialog()
+                loadStacks()
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(
+                        showRenameDialog = false,
+                        stackToRename = null,
+                        error = e.message ?: "Failed to rename stack"
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * Deletes all selected stacks
+     */
+    fun deleteSelectedStacks() {
+        viewModelScope.launch {
+            val idsToDelete = _uiState.value.selectedStackIds.toList()
+            try {
+                idsToDelete.forEach { stackDao?.delete(it) }
+                exitSelectionMode()
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(
+                        error = e.message ?: "Failed to delete stacks"
                     )
                 }
             }

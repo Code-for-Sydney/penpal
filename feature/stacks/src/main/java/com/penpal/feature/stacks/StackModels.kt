@@ -136,7 +136,8 @@ data class StackEditorState(
         val selectedBlockId: String? = null,
         val isLoading: Boolean = false,
         val error: String? = null,
-        val isDirty: Boolean = false // Has unsaved changes
+        val isDirty: Boolean = false,
+        val hasAutoRenamed: Boolean = false
 ) {
     companion object {
         val EmptyDocument = StackDocument(id = "", title = "Untitled", blocks = emptyList())

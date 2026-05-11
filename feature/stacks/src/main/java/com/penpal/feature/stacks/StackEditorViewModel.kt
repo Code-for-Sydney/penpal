@@ -117,7 +117,7 @@ class StackEditorViewModel(
         val docId = UUID.randomUUID().toString()
         _uiState.update {
             it.copy(
-document = StackDocument(
+ document = StackDocument(
                     id = docId,
                     title = "Untitled",
                     blocks = listOf(
@@ -130,8 +130,52 @@ document = StackDocument(
                 selectedBlockId = null,
                 isLoading = false,
                 error = null,
-                isDirty = false
+                isDirty = false,
+                hasAutoRenamed = false
             )
+        }
+    }
+
+    /** Auto-renames the document based on the first block's content using AI */
+    private fun autoRenameFromFirstBlock() {
+        val bridge = inferenceBridge ?: return
+        val state = _uiState.value
+        if (state.hasAutoRenamed) return
+        if (state.document.title != "Untitled") return
+
+        val firstBlock = state.document.blocks.firstOrNull() as? Block.ProcessBlock ?: return
+        if (firstBlock.extractedText.isBlank()) return
+
+        viewModelScope.launch {
+            try {
+                val prompt = """
+                    |Based on the following content, provide a short, descriptive title (max 50 characters).
+                    |Just respond with the title, nothing else.
+                    |
+                    |Content:
+                    |${firstBlock.extractedText.take(500)}
+                """.trimMargin()
+
+                var title = ""
+                bridge.runInferenceFlow(prompt).collect { result ->
+                    title = result.trim()
+                }
+
+                if (title.isNotBlank() && title.length <= 50) {
+                    _uiState.update { state ->
+                        state.copy(
+                            document = state.document.copy(
+                                title = title,
+                                updatedAt = System.currentTimeMillis()
+                            ),
+                            isDirty = true,
+                            hasAutoRenamed = true
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w("StackEditorVM", "Auto-rename failed: ${e.message}")
+            }
         }
     }
 
@@ -619,6 +663,7 @@ document = StackDocument(
                             )
                         )
                     }
+                    autoRenameFromFirstBlock()
                 } else {
                     // For other types, use text-based inference
                     var accumulatedText = ""
@@ -655,6 +700,7 @@ document = StackDocument(
                             )
                         )
                     }
+                    autoRenameFromFirstBlock()
                 }
             } catch (e: Exception) {
                 _uiState.update { state ->
