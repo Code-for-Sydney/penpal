@@ -79,7 +79,6 @@
             android:tint="#CCCCCC"
             android:layout_marginBottom="16dp" />
 
-
         <!-- Eraser -->
         <ImageButton
             android:id="@+id/btnEraser"
@@ -131,6 +130,17 @@
             android:tint="#CCCCCC"
             android:layout_marginBottom="16dp" />
 
+        <!-- Record Audio -->
+        <ImageButton
+            android:id="@+id/btnRecordAudio"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:src="@drawable/ic_mic"
+            android:background="@drawable/icon_btn_bg"
+            android:contentDescription="Record Audio"
+            android:tint="#FF5252"
+            android:layout_marginBottom="16dp" />
+
         <!-- Insert PDF -->
         <ImageButton
             android:id="@+id/btnAddPdf"
@@ -151,17 +161,6 @@
             android:background="@drawable/icon_btn_bg"
             android:contentDescription="Add AI Prompt"
             android:tint="#7C4DFF"
-            android:layout_marginBottom="8dp" />
-
-        <!-- Record Audio -->
-        <ImageButton
-            android:id="@+id/btnRecordAudio"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
-            android:src="@drawable/ic_mic"
-            android:background="@drawable/icon_btn_bg"
-            android:contentDescription="Record Audio"
-            android:tint="#FF5252"
             android:layout_marginBottom="8dp" />
 
         <!-- Playback / Recordings List -->
