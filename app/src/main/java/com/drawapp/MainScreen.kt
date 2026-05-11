@@ -145,16 +145,21 @@ fun MainScreen(onNavigateToStack: (Long) -> Unit = {}, onNavigateToStacks: () ->
                 // Show FAB when:
                 // 1. On tabs AND (first time OR user has opened chat before) - allows entering chat
                 // 2. Never show FAB when in chat
+                // 3. Hide when on Stacks route (has its own FABs)
                 if (!isChatRoute) {
-                    val hasOtherFab = route == Screen.Stacks.route || route?.startsWith("stacks/") == true || route == Screen.Notebooks.route
-                    FloatingActionButton(
-                            onClick = {
-                                hasOpenedChatViaFab = true
-                                navController.navigate(Screen.Chat.route)
-                            },
-                            modifier = if (hasOtherFab) Modifier.padding(bottom = 80.dp) else Modifier,
-                            containerColor = MaterialTheme.colorScheme.primary
-                    ) { Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = "Chat") }
+                    val isStacksRoute = route == Screen.Stacks.route || route?.startsWith("stacks/") == true
+                    val isNotebooksRoute = route == Screen.Notebooks.route
+                    val showChatFab = !isStacksRoute && !isNotebooksRoute
+
+                    if (showChatFab) {
+                        FloatingActionButton(
+                                onClick = {
+                                    hasOpenedChatViaFab = true
+                                    navController.navigate(Screen.Chat.route)
+                                },
+                                containerColor = MaterialTheme.colorScheme.primary
+                        ) { Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = "Chat") }
+                    }
                 }
             }
     ) { innerPadding ->
@@ -260,6 +265,7 @@ fun MainScreen(onNavigateToStack: (Long) -> Unit = {}, onNavigateToStacks: () ->
                             navController.navigate(StackRoutes.editorRoute(stackId))
                         },
                         onCreateNew = { navController.navigate(StackRoutes.EDITOR) },
+                        onNavigateToChat = { navController.navigate(Screen.Chat.route) },
                         onChatWithStack = { stackId ->
                             navController.navigate(ChatRoutes.chatWithStackRoute(stackId)) {
                                 popUpTo(Screen.Chat.route) { inclusive = true }
@@ -303,6 +309,7 @@ fun MainScreen(onNavigateToStack: (Long) -> Unit = {}, onNavigateToStacks: () ->
                                 launchSingleTop = true
                             }
                         },
+                        onNavigateToChat = { navController.navigate(Screen.Chat.route) },
                         isModelReady = isModelReady,
                         isModelLoading =
                                 modelStatus == ModelStatus.DOWNLOADING ||
@@ -345,6 +352,7 @@ fun MainScreen(onNavigateToStack: (Long) -> Unit = {}, onNavigateToStacks: () ->
                                 launchSingleTop = true
                             }
                         },
+                        onNavigateToChat = { navController.navigate(Screen.Chat.route) },
                         isModelReady = isModelReady,
                         isModelLoading =
                                 modelStatus == ModelStatus.DOWNLOADING ||
@@ -364,7 +372,10 @@ fun MainScreen(onNavigateToStack: (Long) -> Unit = {}, onNavigateToStacks: () ->
             // Notebooks Tab
             // ──────────────────────────────────────────────────────────────
             composable(Screen.Notebooks.route) {
-                NotebooksScreen(modifier = Modifier.fillMaxSize())
+                NotebooksScreen(
+                    modifier = Modifier.fillMaxSize(),
+                    onNavigateToChat = { navController.navigate(Screen.Chat.route) }
+                )
             }
 
             // Settings Tab
