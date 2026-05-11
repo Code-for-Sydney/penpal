@@ -768,7 +768,7 @@ class ChatViewModel(
         }
     }
 
-    private fun executeToolAndContinue(
+    private suspend fun executeToolAndContinue(
         toolCall: MessagePart.ToolCallPart,
         currentPrompt: String,
         contextPrompt: String,
