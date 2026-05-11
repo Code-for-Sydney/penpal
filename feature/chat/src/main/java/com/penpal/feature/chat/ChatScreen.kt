@@ -270,6 +270,7 @@ fun ChatScreen(
                 text = uiState.inputText,
                 onTextChange = { onEvent(ChatEvent.UpdateInput(it)) },
                 onSend = { onEvent(ChatEvent.SendMessage) },
+                onCancel = { onEvent(ChatEvent.Cancel) },
                 onAttachFile = { filePickerLauncher.launch("*/*") },
                 onAttachStack = { showStackPicker = true },
                 onSpeechInput = { showSpeechInput = true },
@@ -675,7 +676,7 @@ private fun MessageBubble(
                     .padding(12.dp)
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    if (isUser || message.parts.isEmpty()) {
+                    if (isUser) {
                         SelectionContainer {
                             Text(
                                 text = message.content,
@@ -684,6 +685,14 @@ private fun MessageBubble(
                                 else MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
+                    } else if (message.parts.isEmpty()) {
+                        MarkdownText(
+                            text = message.content,
+                            modifier = Modifier.fillMaxWidth(),
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        )
                     } else {
                         message.parts.forEach { part ->
                             when (part) {
@@ -1043,6 +1052,7 @@ private fun ChatInputArea(
     text: String,
     onTextChange: (String) -> Unit,
     onSend: () -> Unit,
+    onCancel: () -> Unit,
     onAttachFile: () -> Unit,
     onAttachStack: () -> Unit,
     onSpeechInput: () -> Unit,
@@ -1054,25 +1064,35 @@ private fun ChatInputArea(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        IconButton(onClick = onAttachFile) {
-            Icon(
-                imageVector = Icons.Default.AttachFile,
-                contentDescription = "Attach file"
-            )
-        }
+        if (isLoading) {
+            IconButton(onClick = onCancel) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = "Cancel",
+                    tint = MaterialTheme.colorScheme.error
+                )
+            }
+        } else {
+            IconButton(onClick = onAttachFile) {
+                Icon(
+                    imageVector = Icons.Default.AttachFile,
+                    contentDescription = "Attach file"
+                )
+            }
 
-        IconButton(onClick = onAttachStack) {
-            Icon(
-                imageVector = Icons.Default.Book,
-                contentDescription = "Attach stack"
-            )
-        }
+            IconButton(onClick = onAttachStack) {
+                Icon(
+                    imageVector = Icons.Default.Book,
+                    contentDescription = "Attach stack"
+                )
+            }
 
-        IconButton(onClick = onSpeechInput) {
-            Icon(
-                imageVector = Icons.Default.Mic,
-                contentDescription = "Voice input"
-            )
+            IconButton(onClick = onSpeechInput) {
+                Icon(
+                    imageVector = Icons.Default.Mic,
+                    contentDescription = "Voice input"
+                )
+            }
         }
 
         OutlinedTextField(
@@ -1081,22 +1101,29 @@ private fun ChatInputArea(
             modifier = Modifier.weight(1f),
             placeholder = { Text("Ask about your documents...") },
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-            keyboardActions = KeyboardActions(onSend = { onSend() }),
+            keyboardActions = KeyboardActions(onSend = { if (!isLoading) onSend() }),
             singleLine = true,
             enabled = !isLoading
         )
 
-        IconButton(
-            onClick = onSend,
-            enabled = text.isNotBlank() && !isLoading
-        ) {
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.Send,
-                contentDescription = "Send",
-                tint = if (text.isNotBlank() && !isLoading)
-                    MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.onSurfaceVariant
+        if (isLoading) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(24.dp),
+                strokeWidth = 2.dp
             )
+        } else {
+            IconButton(
+                onClick = onSend,
+                enabled = text.isNotBlank()
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.Send,
+                    contentDescription = "Send",
+                    tint = if (text.isNotBlank())
+                        MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }
