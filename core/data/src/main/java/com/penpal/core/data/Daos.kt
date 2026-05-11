@@ -5,6 +5,9 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface ChunkDao {
+    @Query("SELECT DISTINCT sourceId FROM chunks ORDER BY createdAt DESC")
+    suspend fun getAllSourceIds(): List<String>
+
     @Query("SELECT * FROM chunks WHERE sourceId = :sourceId ORDER BY position")
     fun getChunksForSource(sourceId: String): Flow<List<ChunkEntity>>
 

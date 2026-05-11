@@ -18,6 +18,7 @@ interface VectorStoreRepository {
     suspend fun similaritySearch(query: String, topK: Int): List<ChunkEntity>
     suspend fun getChunksForSource(sourceId: String): List<ChunkEntity>
     suspend fun deleteChunksForSource(sourceId: String)
+    suspend fun getAllSourceIds(): List<String>
 
     /**
      * Returns the count of all cached chunks.
@@ -94,6 +95,10 @@ class VectorStoreRepositoryImpl(
         val chunks = chunkDao.getChunksForSource(sourceId).first()
         chunks.forEach { embeddingCache.remove(it.id) }
         chunkDao.deleteForSource(sourceId)
+    }
+
+    override suspend fun getAllSourceIds(): List<String> {
+        return chunkDao.getAllSourceIds()
     }
 
     override suspend fun getCachedChunkCount(): Int {
