@@ -30,6 +30,7 @@ fun StackListScreen(
     onStackSelected: (String) -> Unit,
     onCreateNew: () -> Unit,
     onChatWithStack: ((String) -> Unit)? = null,
+    onNavigateToChat: (() -> Unit)? = null,
     isModelReady: Boolean = false,
     isModelLoading: Boolean = false,
     isModelUnloading: Boolean = false,
@@ -58,11 +59,22 @@ fun StackListScreen(
             )
         },
         floatingActionButton = {
-            FloatingActionButton(
-                onClick = onCreateNew,
-                containerColor = MaterialTheme.colorScheme.primary
+            Column(
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Icon(Icons.Default.Add, contentDescription = "Create new stack")
+                FloatingActionButton(
+                    onClick = { onNavigateToChat?.invoke() },
+                    containerColor = MaterialTheme.colorScheme.primary
+                ) {
+                    Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = "Chat")
+                }
+                FloatingActionButton(
+                    onClick = onCreateNew,
+                    containerColor = MaterialTheme.colorScheme.primary
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = "Create new stack")
+                }
             }
         },
         modifier = modifier
