@@ -9,15 +9,17 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.View
-import android.view.WindowManager
 import android.widget.*
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
 import androidx.activity.result.contract.ActivityResultContracts
 import java.io.File
 import java.io.FileOutputStream
-import com.penpal.core.ai.ModelManager
+import com.penpal.core.ai.model.ModelManager
+import com.penpal.core.media.AudioRecorder
+import com.penpal.core.media.analysis.AudioPlayer
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import org.json.JSONArray
@@ -222,7 +224,9 @@ class MainActivity : AppCompatActivity() {
     )
 
     private var exportFormat: String = "pdf"
-    private val createDocumentLauncher = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.CreateDocument()) { uri ->
+    private val createDocumentLauncher = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/pdf")
+    ) { uri ->
         if (uri != null) {
             when (exportFormat) {
                 "pdf" -> performPdfExport(uri)
@@ -236,15 +240,13 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        window.setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN,
-            WindowManager.LayoutParams.FLAG_FULLSCREEN)
-        @Suppress("DEPRECATION")
-        window.decorView.systemUiVisibility = (
-            View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
-            View.SYSTEM_UI_FLAG_FULLSCREEN or
-            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY)
-
         setContentView(R.layout.activity_main)
+
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        window.insetsController?.let { controller ->
+            controller.hide(android.view.WindowInsets.Type.systemBars())
+            controller.systemBarsBehavior = android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
 
         drawingView         = findViewById(R.id.drawingView)
         btnUndo             = findViewById(R.id.btnUndo)
@@ -2362,7 +2364,7 @@ class MainActivity : AppCompatActivity() {
         val scale = drawingView.scaleFactor
         
         // Match font size exactly
-        etInlineEdit.textSize = (item.fontSize * scale) / resources.displayMetrics.scaledDensity
+        etInlineEdit.textSize = (item.fontSize * scale) / resources.displayMetrics.density
         
         inlineEditContainer.translationX = pts[0]
         inlineEditContainer.translationY = pts[1]

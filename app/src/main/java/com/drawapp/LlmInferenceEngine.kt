@@ -9,6 +9,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 
+@Deprecated("Legacy v1.x code. Will be removed in future release.", level = DeprecationLevel.WARNING)
 class LlmInferenceEngine(private val context: Context) {
 
     companion object {

@@ -12,6 +12,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
+@Deprecated("Legacy v1.x code. Will be removed in future release.", level = DeprecationLevel.WARNING)
 class InferenceEngineManager(private val context: Context) {
 
     companion object {

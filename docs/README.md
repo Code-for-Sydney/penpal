@@ -17,6 +17,7 @@ This directory contains documentation for the Penpal Android application.
 | [DATA_AND_PROCESSING.md](DATA_AND_PROCESSING.md) | Data layer, document parsing, WorkManager |
 | [MODULES.md](MODULES.md) | Gradle module setup and dependencies |
 | [THREADING.md](THREADING.md) | UI vs inference threading model |
+| [REFACTOR0001.md](REFACTOR0001.md) | Architecture doc sync — discrepancies found and corrections made |
 
 ## Quick Links
 

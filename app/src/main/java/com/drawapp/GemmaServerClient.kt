@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
 import com.google.gson.Gson
+import com.penpal.core.media.capture.AudioChunker
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Semaphore
 import java.io.File
@@ -16,6 +17,7 @@ import kotlin.coroutines.suspendCoroutine
  * Client for communicating with the Gemma transcription server.
  * Supports REST (single/batch) and WebSocket streaming.
  */
+@Deprecated("Legacy v1.x code. Will be removed in future release.", level = DeprecationLevel.WARNING)
 class GemmaServerClient(private val context: Context) {
 
     companion object {

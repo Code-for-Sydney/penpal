@@ -3,14 +3,15 @@ package com.drawapp
 import android.app.Application
 import android.util.Log
 import com.google.gson.Gson
-import com.penpal.core.ai.InferenceBridge
-import com.penpal.core.ai.LiteRtInferenceBridge
-import com.penpal.core.ai.MiniLmEmbedder
-import com.penpal.core.ai.ModelManager
-import com.penpal.core.ai.OnnxMiniLmEmbedder
-import com.penpal.core.ai.VectorStoreRepositoryImpl
-import com.penpal.core.processing.NotificationHelper
-import com.penpal.core.processing.WorkerLauncher
+import com.penpal.core.ai.inference.InferenceBridge
+import com.penpal.core.ai.inference.implementation.LiteRtInferenceBridge
+import com.penpal.core.ai.vectorstore.MiniLmEmbedder
+import com.penpal.core.ai.model.ModelManager
+import com.penpal.core.ai.embedding.OnnxMiniLmEmbedder
+import com.penpal.core.ai.vectorstore.VectorStoreRepositoryImpl
+import com.penpal.core.ai.vectorstore.VectorStoreProvider
+import com.penpal.core.processing.notification.NotificationHelper
+import com.penpal.core.processing.worker.WorkerLauncher
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -62,8 +63,8 @@ class PenpalApplication : Application() {
 
     val vectorStore: VectorStoreRepositoryImpl by lazy {
         val database = com.penpal.core.data.PenpalDatabase.getInstance(this)
-        val tokenizer = com.penpal.core.ai.WordPieceTokenizer.fromAssets(this)
-            ?: com.penpal.core.ai.WordPieceTokenizer.fallback()
+        val tokenizer = com.penpal.core.ai.embedding.WordPieceTokenizer.fromAssets(this)
+            ?: com.penpal.core.ai.embedding.WordPieceTokenizer.fallback()
         val onnxEmbedder = OnnxMiniLmEmbedder(
             modelPath = OnnxMiniLmEmbedder.modelFile(this).absolutePath,
             tokenizer = tokenizer
@@ -76,7 +77,7 @@ class PenpalApplication : Application() {
             MiniLmEmbedder()
         }
         val repo = VectorStoreRepositoryImpl(database.chunkDao(), embedder, gson)
-        com.penpal.core.ai.VectorStoreProvider.instance = repo
+        VectorStoreProvider.instance = repo
         repo
     }
 

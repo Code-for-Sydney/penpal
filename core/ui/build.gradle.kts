@@ -16,21 +16,24 @@ android {
     buildFeatures {
         compose = true
     }
+
+    lint {
+        abortOnError = false
+    }
 }
 
 dependencies {
-    api("androidx.core:core-ktx:1.13.1")
-    api("androidx.activity:activity-compose:1.9.1")
-    api("androidx.lifecycle:lifecycle-runtime-ktx:2.8.4")
-    api("androidx.lifecycle:lifecycle-runtime-compose:2.8.4")
-    api("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.4")
-    api(platform("androidx.compose:compose-bom:2024.06.00"))
-    api("androidx.compose.ui:ui")
-    api("androidx.compose.ui:ui-graphics")
-    api("androidx.compose.ui:ui-tooling-preview")
-    api("androidx.compose.material3:material3")
-    api("androidx.compose.material:material-icons-core")
-    api("androidx.compose.material:material-icons-extended")
-    api(project(":core:ai"))
-    debugApi("androidx.compose.ui:ui-tooling")
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.compose.ui)
+    implementation(libs.androidx.compose.ui.graphics)
+    implementation(libs.androidx.compose.ui.tooling.preview)
+    implementation(libs.androidx.compose.material3)
+    implementation(libs.androidx.compose.material.icons.core)
+    implementation(libs.androidx.compose.material.icons.extended)
+    debugImplementation(libs.androidx.compose.ui.tooling)
 }

@@ -24,6 +24,7 @@ import kotlin.math.sqrt
  *
  * Uses the existing HandwritingRecognizer (Gemma4) for inference.
  */
+@Deprecated("Legacy v1.x code. Will be removed in future release.", level = DeprecationLevel.WARNING)
 class ProcessingQueueManager private constructor(private val context: Context) {
 
     companion object {

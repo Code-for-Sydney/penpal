@@ -9,6 +9,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.atomic.AtomicBoolean
 
+@Deprecated(
+    message = "Legacy v1.x code. Migrate to :core:ai module.",
+    level = DeprecationLevel.WARNING
+)
 class HandwritingRecognizer private constructor(private val context: Context) {
 
     private val _isReady = MutableStateFlow(false)

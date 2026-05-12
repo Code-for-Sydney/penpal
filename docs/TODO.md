@@ -1,3 +1,4 @@
+- [x] Architecture documentation sync — compared ARCHITECTURE.md against actual codebase, fixed 46+ discrepancies (versions, tab structure, Hilt annotations, module file listings, DB schema, duplicate sections), created REFACTOR0001.md changelog
 - [x] In the Chat Tab, conversations aren't persistent. There needs to be a history similar to 
 - [x] In the Chat Tab, conversations should be able to load stacks into memory. 
 - [x] In the Chat Tab, adding a file to the chat would append the file to a new stack or add it to an existing stack if it is already loaded to the chat. Any files added to the chat should be pinned to the chat conversation.

@@ -399,7 +399,6 @@ class DrawingView @JvmOverloads constructor(
             is StrokeItem -> ItemState(Matrix(), Matrix(), RectF(), null, Path(item.path), RectF(item.boundsRect))
             is PromptItem -> ItemState(Matrix(item.matrix), Matrix(), RectF(), null, null, null, item.prompt, item.result, item.isShowingResult)
             is TextItem -> ItemState(Matrix(item.matrix), Matrix(), RectF(), null, null, null, item.text, null, null)
-            else -> ItemState(Matrix(), Matrix(), RectF())
         }
     }
 

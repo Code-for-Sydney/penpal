@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import android.graphics.Bitmap
 import android.util.Log
 import com.google.gson.Gson
+import com.penpal.core.media.capture.AudioChunker
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Semaphore
 import java.io.File

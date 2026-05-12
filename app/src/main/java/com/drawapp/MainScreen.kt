@@ -18,16 +18,17 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import com.penpal.core.ai.ModelStatus
-import com.penpal.feature.chat.ChatEvent
-import com.penpal.feature.chat.ChatScreen
-import com.penpal.feature.chat.ChatViewModel
-import com.penpal.feature.settings.SettingsScreen
-import com.penpal.feature.settings.SettingsViewModel
-import com.penpal.feature.stacks.StackEditorViewModel
-import com.penpal.feature.stacks.StackListScreen
-import com.penpal.feature.stacks.StackListViewModel
-import com.penpal.feature.stacks.StackScreen
+import com.penpal.core.ai.inference.model.ModelStatus
+import com.penpal.core.ai.model.ModelManager
+import com.penpal.feature.chat.screen.ChatScreen
+import com.penpal.feature.chat.viewmodel.ChatEvent
+import com.penpal.feature.chat.viewmodel.ChatViewModel
+import com.penpal.feature.settings.screen.SettingsScreen
+import com.penpal.feature.settings.viewmodel.SettingsViewModel
+import com.penpal.feature.stacks.viewmodel.StackEditorViewModel
+import com.penpal.feature.stacks.screen.StackListScreen
+import com.penpal.feature.stacks.viewmodel.StackListViewModel
+import com.penpal.feature.stacks.screen.StackScreen
 
 import com.drawapp.NotebooksScreen
 
@@ -74,6 +75,21 @@ fun MainScreen(onNavigateToStack: (Long) -> Unit = {}, onNavigateToStacks: () ->
     // Shared stack list view model for picker
     val stackListViewModel = remember { StackListViewModel(stackDao = database.stackDao()) }
 
+    // Shared tool registry for chat
+    val toolRegistry = remember {
+        com.penpal.core.ai.tools.ToolRegistry().also { registry ->
+            registry.register(com.penpal.core.ai.tools.SearchKnowledgeTool(app.vectorStore))
+            registry.register(com.penpal.core.ai.tools.ReadStackTool(database.stackDao()))
+            registry.register(com.penpal.core.ai.tools.GetConversationHistoryTool())
+            registry.register(com.penpal.core.ai.tools.ListAttachedStacksTool())
+            registry.register(com.penpal.core.ai.tools.web.WebSearchTool())
+            registry.register(com.penpal.core.ai.tools.web.FetchUrlContentTool())
+            registry.register(com.penpal.core.ai.tools.web.StoreWebContentTool(app.vectorStore))
+            registry.register(com.penpal.core.ai.tools.web.ListStoredSourcesTool(app.vectorStore))
+            registry.register(com.penpal.core.ai.tools.web.DeleteStoredSourceTool(app.vectorStore))
+        }
+    }
+
     // Shared model status across all tabs
     val isModelReady by app.inferenceBridge.isReady.collectAsState()
     val rawModelStatus by app.inferenceBridge.modelStatus.collectAsState()
@@ -81,7 +97,7 @@ fun MainScreen(onNavigateToStack: (Long) -> Unit = {}, onNavigateToStacks: () ->
             remember(rawModelStatus) {
                 // If model file exists but status shows NOT_DOWNLOADED, treat as DOWNLOADED
                 if (rawModelStatus == ModelStatus.NOT_DOWNLOADED) {
-                    val modelPath = com.penpal.core.ai.ModelManager.findExistingModel(app)
+val modelPath = com.penpal.core.ai.model.ModelManager.findExistingModel(app)
                     if (modelPath != null) ModelStatus.DOWNLOADED else rawModelStatus
                 } else {
                     rawModelStatus
@@ -96,7 +112,7 @@ fun MainScreen(onNavigateToStack: (Long) -> Unit = {}, onNavigateToStacks: () ->
             bridge.unloadModel()
         } else if (modelStatus == ModelStatus.DOWNLOADED || modelStatus == ModelStatus.READY) {
             // Model is downloaded but not loaded - load it
-            val modelPath = com.penpal.core.ai.ModelManager.findExistingModel(app)
+            val modelPath = com.penpal.core.ai.model.ModelManager.findExistingModel(app)
             if (modelPath != null) {
                 bridge.loadModel(app, modelPath) {}
             }
@@ -181,7 +197,8 @@ fun MainScreen(onNavigateToStack: (Long) -> Unit = {}, onNavigateToStacks: () ->
                             chatConversationDao = database.chatConversationDao(),
                             stackDao = database.stackDao(),
                             workerLauncher = app.workerLauncher,
-                            onLoadModel = { onToggleModel?.invoke() }
+                            onLoadModel = { onToggleModel?.invoke() },
+                            toolRegistry = toolRegistry
                     )
                 }
                 val uiState by viewModel.uiState.collectAsState()
@@ -193,7 +210,7 @@ fun MainScreen(onNavigateToStack: (Long) -> Unit = {}, onNavigateToStacks: () ->
                         onNavigateToChatWithStack = { stackId ->
                             navController.navigate(ChatRoutes.chatWithStackRoute(stackId))
                         },
-                        stackListViewModel = stackListViewModel,
+                        stackPickerViewModel = stackListViewModel,
                         isModelReady = isModelReady,
                         isModelLoading =
                                 modelStatus == ModelStatus.DOWNLOADING ||
@@ -221,7 +238,8 @@ fun MainScreen(onNavigateToStack: (Long) -> Unit = {}, onNavigateToStacks: () ->
                             chatConversationDao = database.chatConversationDao(),
                             stackDao = database.stackDao(),
                             workerLauncher = app.workerLauncher,
-                            onLoadModel = { onToggleModel?.invoke() }
+                            onLoadModel = { onToggleModel?.invoke() },
+                            toolRegistry = toolRegistry
                     )
                 }
                 val uiState by viewModel.uiState.collectAsState()
@@ -239,7 +257,7 @@ fun MainScreen(onNavigateToStack: (Long) -> Unit = {}, onNavigateToStacks: () ->
                         onNavigateToChatWithStack = { navStackId ->
                             navController.navigate(ChatRoutes.chatWithStackRoute(navStackId))
                         },
-                        stackListViewModel = stackListViewModel,
+                        stackPickerViewModel = stackListViewModel,
                         isModelReady = isModelReady,
                         isModelLoading =
                                 modelStatus == ModelStatus.DOWNLOADING ||

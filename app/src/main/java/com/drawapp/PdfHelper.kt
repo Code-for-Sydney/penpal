@@ -8,6 +8,7 @@ import com.tom_roush.pdfbox.text.PDFTextStripper
 import com.tom_roush.pdfbox.text.TextPosition
 import java.io.InputStream
 
+@Deprecated("Legacy v1.x code. Will be removed in future release.", level = DeprecationLevel.WARNING)
 object PdfHelper {
 
     fun extractText(context: Context, uri: Uri, pageIndex: Int): String {

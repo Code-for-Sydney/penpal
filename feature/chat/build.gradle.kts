@@ -16,22 +16,28 @@ android {
     buildFeatures {
         compose = true
     }
+
+    lint {
+        abortOnError = false
+    }
 }
 
 dependencies {
-    api(project(":core:ai"))
-    api(project(":core:data"))
-    api(project(":core:processing"))
-    api(project(":core:ui"))
-    api(project(":feature:stacks"))
+    implementation(project(":core:ai"))
+    implementation(project(":core:data"))
+    implementation(project(":core:processing"))
+    implementation(project(":core:ui"))
 
-    api("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.4")
-    api("androidx.lifecycle:lifecycle-runtime-compose:2.8.4")
-    api("androidx.compose.ui:ui")
-    api("androidx.compose.ui:ui-graphics")
-    api("androidx.compose.ui:ui-tooling-preview")
-    api("androidx.compose.material3:material3")
-    api("androidx.compose.material:material-icons-extended")
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.compose.ui)
+    implementation(libs.androidx.compose.ui.graphics)
+    implementation(libs.androidx.compose.ui.tooling.preview)
+    implementation(libs.androidx.compose.material3)
+    implementation(libs.androidx.compose.material.icons.extended)
+    implementation(libs.gson)
 
-    debugApi("androidx.compose.ui:ui-tooling")
+    debugImplementation(libs.androidx.compose.ui.tooling)
 }

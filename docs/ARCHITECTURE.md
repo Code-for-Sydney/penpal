@@ -50,7 +50,7 @@ This document provides an in-depth look at the system architecture, component re
 | Phase 1: Foundation | ✅ Complete | Gradle multi-module, Kotlin DSL, core modules |
 | Phase 2: Core AI | ✅ Complete | AI interfaces, VectorStore, processing pipeline |
 | Phase 3: Feature Modules | ✅ Complete | Chat, Process, Inference modules created |
-| Phase 3.5: Tab Wiring | ✅ Complete | ViewModels connected, MainScreen with 2 tabs (Think, Settings) + Chat FAB |
+| Phase 3.5: Tab Wiring | ✅ Complete | ViewModels connected, MainScreen with 3 tabs (Notebooks, Think, Settings) + Chat FAB |
 | Phase 4: Polish | ✅ Complete | WorkManager notifications, offline mode, network monitoring |
 | Phase 4.5: Stacks | ✅ Complete | Think tab with block-based editor, GraphNodeCanvas, DrawingCanvas |
 | Phase 4.6: Stacks Enhanced | ✅ Complete | Image picker, Coil integration, home navigation |
@@ -59,7 +59,7 @@ This document provides an in-depth look at the system architecture, component re
 | Phase 5.6: Text Structure Fix | ✅ Complete | Smart spacing, whitespace handling, lastEmittedChar tracking |
 | Phase 5.7: Structured Message Parts | ✅ Complete | Opencode-inspired parts architecture with rich UI rendering |
 | Phase 5.8: Chat Model Response Fix | ✅ Complete | getContents() fix, conversation history in prompts, FAB navigation |
-| Phase 5.9: UI Polish & Chat Improvements | ✅ Complete | FAB positioning (80dp margin), pinned TopBar, AI message alignment (fillMaxWidth) |
+| Phase 5.9: UI Polish & Chat Improvements | ✅ Complete | FAB positioning, pinned TopBar, AI message alignment |
 | Phase 6.0: Agent Framework | ✅ Complete | ToolRegistry, ToolExecutor, BuiltinTools, execution loop for multi-step inference |
 
 ### Key Inference Components
@@ -68,7 +68,7 @@ This document provides an in-depth look at the system architecture, component re
 |-----------|----------------|-------------|
 | **LiteRtInferenceBridge** | `LiteRtInferenceBridge` | LiteRT-LM Engine API pattern with `getContents()` for text extraction |
 | **ChatViewModel** | `ChatViewModel` | Multi-turn conversation support with full message history in prompts |
-| **Engine** | `LmEngineManager` | GPU/CPU backend fallback, Engine lifecycle |
+| **Engine** | `com.google.ai.edge.litertlm.Engine` | GPU/CPU backend fallback via LiteRT-LM library |
 | **Model** | Gemma 4 E2B-IT | Google's efficient on-device LLM |
 | **API** | LiteRT-LM | Direct on-device inference via Engine class |
 | **Streaming** | `Flow<String>` / `Flow<List<MessagePart>>` | Flow-based streaming (primary) + callback fallback |
@@ -79,8 +79,9 @@ This document provides an in-depth look at the system architecture, component re
 | **Tool Registry** | `ToolRegistry` | ✅ Implemented - registers available tools with JSON schemas |
 | **Tool Executor** | `ToolExecutor` | ✅ Implemented - executes tool calls and returns results |
 | **Built-in Tools** | `BuiltinTools.kt` | ✅ Implemented - SearchKnowledge, ReadStack, GetHistory, ListStacks |
+| **Web Search Tools** | `WebSearchTools.kt` | ✅ Implemented - web search tool integration |
 | **Model Manager** | `ModelManager` | HuggingFace/Kaggle download management |
-| **Text Embedder** | `OnnxMiniLmEmbedder` | ONNX Runtime with mean pooling + L2 normalization (fallback to mock) |
+| **Text Embedder** | `OnnxMiniLmEmbedder` | ONNX Runtime with mean pooling + L2 normalization (fallback to `MiniLmEmbedder` mock) |
 | **Model Source** | HuggingFace | `litert-community/gemma-4-E2B-it-litert-lm` (~2.6 GB) |
 | **Timeout Guard** | `AtomicBoolean` + 120s | Prevents hung inference sessions |
 | **Markdown Render** | `MarkdownText.kt` | Lightweight markdown renderer for chat messages |
@@ -88,7 +89,7 @@ This document provides an in-depth look at the system architecture, component re
 
 ### AI Inference Architecture (LiteRT-LM Engine API)
 
-The inference system uses the real LiteRT-LM Engine API for on-device LLM inference. The architecture has been updated to support **Flow-based streaming** with **trie-based token filtering**:
+The inference system uses the real LiteRT-LM Engine API for on-device LLM inference. The architecture supports **Flow-based streaming** with **trie-based token filtering**:
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
@@ -96,7 +97,9 @@ The inference system uses the real LiteRT-LM Engine API for on-device LLM infere
 │                                                                      │
 │  ┌──────────────────────────────────────────────────────────────┐  │
 │  │                      InferenceBridge                          │  │
-│  │  (Interface: initialize, generate, streamGenerate, detectItems)│  │
+│  │  (Interface: runInference, runInferenceFlow, runInferenceFlowParts, │
+│  │   runInferenceWithImageFlow, runInferenceWithImageFlowParts,  │  │
+│  │   runInferenceWithAudio, runInferenceWithAudioFlow, etc.)    │  │
 │  └────────────────────────────┬─────────────────────────────────┘  │
 │                               │                                     │
 │  ┌────────────────────────────▼─────────────────────────────────┐  │
@@ -106,29 +109,31 @@ The inference system uses the real LiteRT-LM Engine API for on-device LLM infere
 │  │  • MessageCallback for legacy streaming                       │  │
 │  │  • StreamingTokenFilter (trie-based special token removal)    │  │
 │  │  • 120s timeout with AtomicBoolean guards                     │  │
-│  │  • Image/Audio content support (Content.ImageBytes)           │  │
+│  │  • Image/Audio content support (Content.ImageBytes/AudioBytes)│  │
 │  │  • GPU/CPU backend fallback                                    │  │
 │  └────────────────────────────┬─────────────────────────────────┘  │
 │                               │                                     │
 │  ┌────────────────────────────▼─────────────────────────────────┐  │
 │  │                    LmEngineManager                             │  │
-│  │  • Creates Engine with GpuBackendSpec or CpuBackendSpec       │  │
-│  │  • Tracks backend state (GPU/CPU)                              │  │
+│  │  • getEngine(modelPath, config, forceReload) - Mutex-guarded  │  │
+│  │  • GPU/CPU backend fallback via Backend.GPU()/Backend.CPU()   │  │
+│  │  • StateFlow-based: isInitialized, isLoading, error, modelPath│  │
 │  │  • Engine lifecycle management (create/release)                │  │
 │  └────────────────────────────┬─────────────────────────────────┘  │
 │                               │                                     │
 │  ┌────────────────────────────▼─────────────────────────────────┐  │
 │  │              com.google.ai.edge.litertlm.Engine               │  │
-│  │  • createConversation() -> Conversation                       │  │
-│  │  • sendMessageAsync() -> Flow<Message> / MessageCallback      │  │
+│  │  • EngineConfig(modelPath, backend, visionBackend, maxTokens) │  │
+│  │  • createConversation(ConversationConfig) -> Conversation     │  │
+│  │  • Conversation.sendMessageAsync() -> Flow<Message>           │  │
 │  │  • renderMessageIntoString() for text extraction              │  │
 │  └────────────────────────────┬─────────────────────────────────┘  │
 │                               │                                     │
 │  ┌────────────────────────────▼─────────────────────────────────┐  │
 │  │                    ModelManager                                │  │
-│  │  • startDownloadHFAsync() - HuggingFace download              │  │
-│  │  • startDownloadKaggleAsync() - Kaggle download                │  │
+│  │  • startDownloadAsync() - HuggingFace/Kaggle download         │  │
 │  │  • queryDownload() - Progress polling                          │  │
+│  │  • findExistingModel(), saveModelPath(), listAvailableModels()│  │
 │  │  • Uses Android DownloadManager for reliable downloads         │  │
 │  └──────────────────────────────────────────────────────────────┘  │
 │                                                                      │
@@ -140,21 +145,21 @@ The inference system uses the real LiteRT-LM Engine API for on-device LLM infere
 │  └──────────────────────────────────────────────────────────────┘  │
 │                                                                      │
 │  ┌──────────────────────────────────────────────────────────────┐  │
-│  │               StreamingTokenFilter (NEW)                      │  │
+│  │               StreamingTokenFilter                             │  │
 │  │  • TokenTrie for O(m) special token matching                  │  │
 │  │  • Character-by-character processing with boundary buffering  │  │
 │  │  • Removes: turn, tool, thinking, media, sequence tokens      │  │
 │  │  • Mode transition tracking for structured parts              │  │
 │  │  • Smart spacing: lastEmittedChar, word-char detection        │  │
-│  └──────────────────────────────────────────────────────────────┘
+│  └──────────────────────────────────────────────────────────────┘  │
 │                                                                      │
 │  ┌──────────────────────────────────────────────────────────────┐  │
-│  │            MessagePart Architecture (NEW)                     │  │
+│  │            MessagePart Architecture                             │  │
 │  │  • MessagePart sealed class: Text, Reasoning, ToolCall, etc.  │  │
 │  │  • MessagePartAggregator builds parts from stream transitions │  │
 │  │  • InferenceBridge.runInferenceFlowParts(): Flow<List<...>>   │  │
 │  │  • ChatViewModel collects parts, ChatScreen renders with UI   │  │
-│  └──────────────────────────────────────────────────────────────┘
+│  └──────────────────────────────────────────────────────────────┘  │
 └────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -162,7 +167,7 @@ The inference system uses the real LiteRT-LM Engine API for on-device LLM infere
 
 ```kotlin
 // ChatViewModel uses Flow-based inference with structured parts
-inferenceBridge.runInferenceFlowParts(contextPrompt)
+inferenceBridge.runInferenceFlowParts(prompt)
     .catch { error -> /* handle error */ }
     .onCompletion { /* save to DB, cleanup */ }
     .collect { parts ->
@@ -172,7 +177,7 @@ inferenceBridge.runInferenceFlowParts(contextPrompt)
 
 The Flow-based approach:
 1. `conversation.sendMessageAsync(content)` returns `Flow<Message>`
-2. Each `Message` is converted to text via `conv.renderMessageIntoString(message)`
+2. Each `Message` is converted to text via `message.getContent()` reflection call
 3. `StreamingTokenFilter.appendWithTransitions(chunk)` removes special tokens and emits mode transitions
 4. `MessagePartAggregator` builds immutable `MessagePart` objects from transitions
 5. `Flow<List<MessagePart>>` is collected by `ChatViewModel` and rendered by `ChatScreen`
@@ -185,14 +190,9 @@ The Flow-based approach:
 #### MessageCallback Interface (Legacy)
 
 ```kotlin
-interface MessageCallback {
-    fun onMessage(message: Message)
-    fun onDone()
-    fun onError(throwable: Throwable)
-}
+// com.google.ai.edge.litertlm.MessageCallback
+// Callback-based streaming still available via runInference()
 ```
-
-Callback-based streaming is still available via `runInference()` but `ChatViewModel` now prefers `runInferenceFlow()`.
 
 #### StreamingTokenFilter
 
@@ -200,10 +200,10 @@ Callback-based streaming is still available via `runInference()` but `ChatViewMo
 class StreamingTokenFilter(
     specialTokens: Set<String> = GemmaSpecialTokens.ALL_USER_FACING
 ) {
-    fun append(chunk: String): String  // Returns safe prefix, buffers partial tokens
+    fun append(chunk: String): FilteredChunk
     fun appendWithTransitions(chunk: String): FilteredChunkWithTransitions
-    fun flush(): String                // Emit remaining safe text at stream end
-    fun clear()                        // Reset buffer
+    fun flush(): FilteredChunk
+    fun clear()
 }
 ```
 
@@ -223,9 +223,18 @@ object GemmaSpecialTokens {
     val THINKING_TOKENS: Set<String>   // <|think|>, <|channel>, etc.
     val MEDIA_TOKENS: Set<String>      // <|image>, <audio|>, etc.
     val SEQUENCE_TOKENS: Set<String>   // <bos>, <eos>, <|endoftext|>
+    const val STRING_DELIMITER         // <|"|>
     val ALL_USER_FACING: Set<String>   // Union of all above
 }
 ```
+
+### MessagePart Architecture
+
+```
+core:ai/messaging/
+├── MessagePart.kt              # Sealed class: TextPart, ReasoningPart, ToolCallPart, ToolResponsePart, ImagePart, AudioPart
+├── MessagePartAggregator.kt    # Builds MessageParts from streaming transitions
+└── ContentMode.kt              # REGULAR, THINKING, TOOL_CALL, TOOL_RESPONSE, IMAGE, AUDIO, SYSTEM + FilteredChunk types
 ```
 
 #### RAG Flow (Chat → VectorStore → Inference)
@@ -234,7 +243,7 @@ object GemmaSpecialTokens {
 User Query in Chat
         │
         ▼
-VectorStoreRepository.similaritySearch(query, topK=6)
+VectorStoreRepositoryImpl.similaritySearch(query, topK=6)
         │  (retrieves relevant chunks from processed documents)
         ▼
 ChatViewModel builds prompt with document context
@@ -247,13 +256,10 @@ Check isModelReady state
  Ready   Not Ready
     │       │
     ▼       ▼
-runInference()  Show "Model not ready" message
-        │
-        ▼
-MessageCallback.onContent() → streaming tokens
-        │
-        ▼
-UI updates as response streams in
+runInferenceFlowParts()  Show "Model not ready" message
+    │
+    ▼
+Flow.collect() → StreamingTokenFilter → MessagePartAggregator → List<MessagePart>
 ```
 
 ### Build Configuration (Current)
@@ -262,42 +268,66 @@ UI updates as response streams in
 |-----------|---------|
 | Kotlin | 2.0.21 |
 | KSP | 2.0.21-1.0.28 |
-| Hilt | 2.52 (plugin only, not actively used) |
-| Room | 2.6.1 (app/processing), 2.7.0-beta01 (core:data) |
+| Hilt (plugin only, not used in code) | 2.52 |
+| Room | 2.6.1 |
 | Compose BOM | 2024.06.00 |
 | AGP | 9.1.1 |
+| Coroutines | 1.8.1 |
+| WorkManager | 2.9.1 |
+| Gson | 2.11.0 |
+| PdfBox (Android) | 2.0.27.0 |
+| OkHttp | 4.12.0 |
+| Jsoup | 1.17.2 |
+| ML Kit Text Recognition | 16.0.1 |
+| ONNX Runtime | 1.19.0 |
+| Coil Compose | 2.5.0 |
+| AndroidX WebKit | 1.10.0 |
+| LiteRT-LM | latest.release |
 
 ### Application Architecture
 
-**Note:** The project uses manual dependency injection via `PenpalApplication` lazy singletons, not Hilt. ViewModels are instantiated manually in `MainScreen.kt` using `remember { ... }`.
+**Note:** The project uses manual dependency injection via `PenpalApplication` lazy singletons, not Hilt. No `@HiltViewModel`, `@Module`, `@Singleton`, `@Inject`, or `@Qualifier` annotations exist in the codebase. ViewModels are instantiated manually in `MainScreen.kt` using `remember { ... }`.
 
 ```
 PenpalApplication (Singleton)
 ├── lazy vectorStore: VectorStoreRepositoryImpl
+│     (OnnxMiniLmEmbedder with MiniLmEmbedder fallback)
 ├── lazy workerLauncher: WorkerLauncher
-├── lazy inferenceBridge: InferenceBridge (LiteRtInferenceBridge)
+├── lazy inferenceBridge: LiteRtInferenceBridge
 ├── lazy gson: Gson
-└── gemmaServer: GemmaServerClient
+├── gemmaServer: GemmaServerClient (lateinit)
+└── notificationHelper: NotificationHelper (lateinit)
 
 PenpalDatabase (Singleton via getInstance())
-├── stackDao()
 ├── chunkDao()
 ├── extractionJobDao()
 ├── chatMessageDao()
 ├── chatConversationDao()
 ├── graphDao()
+├── graphTokenDao()
+├── stackDao()
+├── notebookDao()
+├── notebookSheetDao()
 └── fallbackToDestructiveMigration()
 ```
 
-### Tab Implementation Status
+### Tab Implementation
 
-| Tab | ViewModel | UI Status | Backend Status |
-|-----|-----------|-----------|----------------|
-| Chat | ChatViewModel | ✅ Functional | ✅ RAG via InferenceBridge, structured MessageParts (via FAB) |
-| Think | StackEditorViewModel | ✅ Functional | ✅ Room persistence + auto-processing |
-| Settings | SettingsViewModel | ✅ Functional | ✅ Model download, inference status |
+| Route | Icon | Screen | Bottom Nav | Backend |
+|-------|------|--------|------------|---------|
+| Notebooks | Book | NotebooksScreen | ✅ Tab | — |
+| Think (Stacks) | AutoAwesome | StackListScreen → StackScreen | ✅ Tab | Room persistence + auto-processing |
+| Settings | Settings | SettingsScreen | ✅ Tab | Model download, inference status |
+| Chat | Chat | ChatScreen | ❌ (FAB) | RAG via InferenceBridge, structured MessageParts |
 
-**Note:** MainScreen currently shows 2 tabs in bottom navigation: Think, Settings. Chat is accessible via the FAB in the bottom-right corner.
+**Bottom navigation**: 3 tabs — **Notebooks**, **Think** (Stacks), **Settings**. **Chat** is a separate NavHost route accessible via a FAB shown on the Settings tab. The FAB is hidden on Stacks and Notebooks tabs (which have their own FABs).
+
+**Navigation Behavior:**
+- Chat FAB shows on the Settings tab
+- FAB is hidden on Stacks/Notebooks tabs (they have their own FABs)
+- FAB hides when user is in Chat screen
+- FAB reappears after exiting Chat (via X button or tab click)
+- Clicking a tab while in Chat triggers `popBackStack()` to close chat
 
 ---
 
@@ -308,47 +338,122 @@ PenpalDatabase (Singleton via getInstance())
 ```
 penpal/
 ├── app/                           # Shell application, NavHost, MainScreen
-│   ├── MainScreen.kt              # Compose NavHost + BottomNavigation (Chat, Think, Settings)
+│   ├── MainScreen.kt              # Compose NavHost + BottomNavigation (Notebooks, Think, Settings) + Chat FAB
 │   ├── MainComposeActivity.kt     # Compose-based Activity entry point (Launcher)
 │   ├── PenpalApplication.kt       # Manual DI singleton
+│   ├── NotebooksScreen.kt         # Notebook management screen
+│   ├── NotebookAdapter.kt         # Notebook list adapter
+│   ├── NotebookManager.kt         # Notebook CRUD operations
+│   ├── Notebook.kt               # Notebook data model
 │   └── (legacy activities: MainActivity, StackSelectionActivity, etc.)
 ├── core/
-│   ├── ai/                        # ✅ Implemented
-│   │   ├── InferenceBridge.kt     # ML inference interface
-│   │   ├── LiteRtInferenceBridge.kt # LiteRT-LM Engine API implementation
-│   │   ├── OllamaInferenceBridge.kt # Remote inference fallback
-│   │   ├── LmEngineManager.kt     # Engine lifecycle, GPU/CPU fallback
-│   │   ├── TextEmbedder.kt        # Text embedding interface
-│   │   ├── MiniLmEmbedder.kt      # Mock embedder (384-dim, fallback)
-│   │   ├── OnnxMiniLmEmbedder.kt  # ONNX Runtime embedder with mean pooling + L2 norm
-│   │   ├── VectorStoreRepository.kt # LRU cache + similarity
-│   │   ├── VectorStoreProvider.kt # Cross-module singleton access
-│   │   ├── ModelManager.kt        # HuggingFace/Kaggle download management
-│   │   ├── MessagePart.kt         # Structured message parts (Text, Reasoning, ToolCall)
-│   │   ├── MessagePartAggregator.kt # Builds parts from streaming transitions
-│   │   ├── StreamingTokenFilter.kt # Trie-based special token filtering with mode transitions
-│   │   ├── GemmaSpecialTokens.kt  # Gemma 4 control token definitions
-│   │   └── WordPieceTokenizer.kt  # BERT/MiniLM-compatible tokenizer
-│   ├── data/                      # ✅ Implemented
-│   │   ├── PenpalDatabase.kt      # Room database v3 (singleton via getInstance())
-│   │   ├── Entities.kt            # 7 entities
-│   │   └── Daos.kt               # 6 DAOs
-│   ├── media/                     # ✅ Stub (empty shell, no source files)
-│   ├── processing/                # ✅ Implemented
-│   │   ├── DocumentParser.kt      # Parser interface
-│   │   ├── Parsers.kt             # Real parsers: PDF, Image OCR, Audio, URL, Code
-│   │   ├── ExtractionWorker.kt    # WorkManager worker with real parsing
-│   │   ├── WorkerLauncher.kt      # Job queue
-│   │   ├── NotificationHelper.kt  # WorkManager notifications
-│   │   └── NetworkMonitor.kt      # Connectivity tracking
-│   └── ui/                        # ✅ Implemented
-│       └── Theme.kt               # Material 3 dark/light
+│   ├── ai/                        # ✅ Implemented (27 files in subdirectories)
+│   │   ├── inference/
+│   │   │   ├── InferenceBridge.kt           # ML inference interface
+│   │   │   ├── model/ModelTypes.kt           # ModelStatus, DownloadProgress, InferenceConfig, DetectedItem
+│   │   │   └── implementation/
+│   │   │       ├── LiteRtInferenceBridge.kt  # LiteRT-LM Engine API implementation
+│   │   │       ├── OllamaInferenceBridge.kt  # Remote inference fallback
+│   │   │       └── LmEngineManager.kt        # Engine lifecycle, GPU/CPU fallback, mutex-guarded
+│   │   ├── embedding/
+│   │   │   ├── TextEmbedder.kt               # Text embedding interface
+│   │   │   ├── OnnxMiniLmEmbedder.kt         # ONNX Runtime embedder with mean pooling + L2 norm
+│   │   │   └── WordPieceTokenizer.kt         # BERT/MiniLM-compatible tokenizer
+│   │   ├── vectorstore/
+│   │   │   ├── VectorStoreRepository.kt      # Interface: embed(), similaritySearch()
+│   │   │   ├── VectorStoreImpl.kt            # LRU cache + cosine similarity (MiniLmEmbedder mock included)
+│   │   │   └── VectorStoreProvider.kt        # Cross-module singleton access
+│   │   ├── model/
+│   │   │   ├── ModelManager.kt               # HuggingFace/Kaggle download management
+│   │   │   ├── ModelDownloadManager.kt       # WorkManager-based download orchestration
+│   │   │   └── GgufConverter.kt              # GGUF to LiteRT-LM conversion utility
+│   │   ├── messaging/
+│   │   │   ├── MessagePart.kt                # Structured message parts (Text, Reasoning, ToolCall, ToolResponse, Image, Audio)
+│   │   │   ├── MessagePartAggregator.kt      # Builds parts from streaming transitions
+│   │   │   └── ContentMode.kt                # ContentMode enum + FilteredChunk types
+│   │   ├── tokenization/
+│   │   │   ├── StreamingTokenFilter.kt       # Trie-based special token filtering with mode transitions
+│   │   │   └── GemmaSpecialTokens.kt         # Gemma 4 control token definitions
+│   │   ├── tools/
+│   │   │   ├── Tool.kt                       # Tool interface definitions
+│   │   │   ├── ToolSchema.kt                 # Tool parameter schema definitions
+│   │   │   ├── ToolRegistry.kt               # Registers available tools with JSON schemas
+│   │   │   ├── ToolExecutor.kt               # Executes tool calls and returns results
+│   │   │   ├── BuiltinTools.kt               # Built-in tools: SearchKnowledge, ReadStack, etc.
+│   │   │   └── web/
+│   │   │       ├── WebSearchTools.kt         # Web search tool integration
+│   │   │       └── RawChunk.kt               # Raw chunk data class
+│   │   └── ollama/
+│   │       ├── OllamaApiService.kt           # REST API client for Ollama
+│   │       └── OllamaModels.kt               # Data models for Ollama API responses
+│   ├── data/                      # ✅ Implemented (22 files in subdirectories)
+│   │   ├── PenpalDatabase.kt      # Room database v9 (singleton via getInstance())
+│   │   ├── chat/
+│   │   │   ├── ChatMessageEntity.kt
+│   │   │   ├── ChatMessageDao.kt
+│   │   │   ├── ChatConversationEntity.kt
+│   │   │   └── ChatConversationDao.kt
+│   │   ├── knowledge/
+│   │   │   ├── ChunkEntity.kt
+│   │   │   └── ChunkDao.kt
+│   │   ├── processing/
+│   │   │   ├── ExtractionJobEntity.kt
+│   │   │   └── ExtractionJobDao.kt
+│   │   ├── graph/
+│   │   │   ├── GraphNodeEntity.kt
+│   │   │   ├── GraphEdgeEntity.kt
+│   │   │   ├── GraphTokenEntity.kt
+│   │   │   ├── GraphDao.kt
+│   │   │   └── GraphTokenDao.kt
+│   │   ├── stack/
+│   │   │   ├── StackEntity.kt
+│   │   │   └── StackDao.kt
+│   │   └── notebook/
+│   │       ├── NotebookEntity.kt
+│   │       ├── NotebookDao.kt
+│   │       ├── NotebookType.kt
+│   │       ├── NotebookMapper.kt
+│   │       └── sheet/
+│   │           ├── NotebookSheetEntity.kt
+│   │           └── NotebookSheetDao.kt
+│   ├── media/                     # ✅ Implemented (8 files)
+│   │   ├── AudioRecorder.kt
+│   │   ├── WavConstants.kt
+│   │   ├── analysis/
+│   │   │   ├── AudioAnalyzer.kt
+│   │   │   └── AudioPlayer.kt
+│   │   ├── capture/
+│   │   │   └── AudioChunker.kt
+│   │   └── serialization/
+│   │       ├── SvgSerializer.kt
+│   │       ├── SvgResult.kt
+│   │       └── SvgData.kt
+│   ├── processing/                # ✅ Implemented (8 files in subdirectories)
+│   │   ├── document/
+│   │   │   ├── DocumentParser.kt    # Parser interface
+│   │   │   └── Parsers.kt           # Real parsers: PDF, Image OCR, Audio, URL, Code
+│   │   ├── worker/
+│   │   │   ├── ExtractionWorker.kt  # WorkManager worker with manual DI
+│   │   │   └── WorkerLauncher.kt    # Job queue
+│   │   ├── notification/
+│   │   │   └── NotificationHelper.kt # WorkManager notifications
+│   │   ├── network/
+│   │   │   └── NetworkMonitor.kt    # Connectivity tracking
+│   │   └── speech/
+│   │       ├── WhisperTranscriber.kt
+│   │       └── SpeechRecognizer.kt
+│   └── ui/                        # ✅ Implemented (5 files)
+│       ├── theme/Theme.kt          # Material 3 dark/light
+│       ├── canvas/ActiveTool.kt    # Drawing tool types
+│       ├── canvas/BackgroundType.kt
+│       ├── component/StatusIndicator.kt  # Model status UI component
+│       └── picker/PickerDialog.kt
 ├── feature/                       # ✅ Phase 3+ Complete
-│   ├── chat/                      # ✅ RAG chat with structured MessageParts
-│   ├── process/                   # ✅ Document extraction UI
-│   ├── inference/                 # ✅ Model management UI
-│   ├── stacks/                 # ✅ Think tab - block editor
-│   └── settings/                  # ✅ App settings and configuration
+│   ├── chat/                      # 3 files: ChatScreen, ChatViewModel, MarkdownText
+│   ├── process/                   # 2 files: ProcessScreen, ProcessViewModel
+│   ├── inference/                 # 2 files: InferenceScreen, InferenceViewModel
+│   ├── stacks/                    # 9 files: StackModels, StackScreen, StackListScreen, 2 ViewModels, 4 components
+│   └── settings/                  # 3 files: SettingsScreen, SettingsViewModel, ModelDownloadBottomSheet
 ├── build.gradle.kts              # Root with plugins
 ├── settings.gradle.kts           # Module includes
 └── gradle/libs.versions.toml     # Version catalog
@@ -362,11 +467,11 @@ penpal/
 app ──> all core modules, all feature modules
 core:processing ──> core:ai, core:data
 core:ai ──> core:data              ← InferenceBridge is the core AI dependency
-core:media ──> (empty, no source files)
-feature:chat ──> core:ai, core:data, core:processing, core:ui, feature:stacks
-feature:stacks ──> core:ai, core:data, core:processing, core:ui
+core:media ──> (standalone media utilities)
+feature:chat ──> core:ai, core:data, core:processing, core:ui
+feature:stacks ──> core:ai, core:data, core:media, core:processing, core:ui
 feature:process ──> core:processing, core:ai, core:data, core:ui
-feature:inference ──> core:ai, core:data, core:ui ← Direct inference access
+feature:inference ──> core:ai, core:data, core:ui
 feature:settings ──> core:ai, core:data, core:ui
 ```
 
@@ -380,165 +485,183 @@ feature:settings ──> core:ai, core:data, core:ui
 
 Handles AI inference and text embedding. **This is the central architectural module.**
 
+#### Key Files (by subdirectory)
+
 ```
-core:ai/
-├── InferenceBridge.kt       # Interface: initialize(), runInference(), runInferenceFlow(), runInferenceFlowParts()
-├── LiteRtInferenceBridge.kt # LiteRT-LM Engine API implementation
-├── OllamaInferenceBridge.kt # Remote inference via Ollama REST API
-├── LmEngineManager.kt       # Engine lifecycle, GPU/CPU backend fallback
-├── ModelManager.kt          # HuggingFace/Kaggle download management
-├── ModelDownloadManager.kt  # WorkManager-based download orchestration
-├── ModelDownloadWorker.kt   # Background download worker
-├── TextEmbedder.kt          # Text embedding interface
-├── MiniLmEmbedder.kt        # Mock: 384-dim embeddings (fallback)
-├── OnnxMiniLmEmbedder.kt    # ONNX Runtime: mean pooling, L2 normalization
-├── VectorStoreRepository.kt # Interface: embed(), similaritySearch()
-├── VectorStoreProvider.kt   # Static provider for cross-module access
-├── MessagePart.kt           # Structured message parts (Text, Reasoning, ToolCall, ToolResponse, Image, Audio)
-├── MessagePartAggregator.kt # Builds MessageParts from streaming transitions
-├── StreamingTokenFilter.kt  # Trie-based special token filtering with mode transitions
-├── GemmaSpecialTokens.kt    # Gemma 4 control token definitions
-├── WordPieceTokenizer.kt    # BERT/MiniLM-compatible tokenizer
-├── OllamaApiService.kt      # REST API client for Ollama
-├── OllamaModel.kt           # Data models for Ollama API responses
-├── ToolRegistry.kt          # ✅ Implemented - registers available tools with JSON schemas
-├── ToolExecutor.kt          # ✅ Implemented - executes tool calls and returns results
-├── ToolSchema.kt            # ✅ Implemented - tool parameter schema definitions
-├── Tool.kt                  # ✅ Implemented - tool interface definitions
-└── BuiltinTools.kt          # ✅ Implemented - built-in tools: SearchKnowledge, ReadStack, etc.
+core:ai/src/main/java/com/penpal/core/ai/
+├── inference/
+│   ├── InferenceBridge.kt              # Interface: runInference(), runInferenceFlow(), runInferenceFlowParts(), etc.
+│   ├── model/ModelTypes.kt             # ModelStatus, DownloadProgress, InferenceConfig, DetectedItem
+│   └── implementation/
+│       ├── LiteRtInferenceBridge.kt     # LiteRT-LM Engine API implementation (Context constructor)
+│       ├── OllamaInferenceBridge.kt     # Remote inference via Ollama REST API
+│       └── LmEngineManager.kt           # Mutex-guarded engine lifecycle, GPU/CPU fallback
+├── embedding/
+│   ├── TextEmbedder.kt                  # Interface: dimension, embed()
+│   ├── OnnxMiniLmEmbedder.kt            # ONNX Runtime: mean pooling, L2 normalization
+│   └── WordPieceTokenizer.kt            # BERT/MiniLM-compatible tokenizer
+├── vectorstore/
+│   ├── VectorStoreRepository.kt         # Interface: embed(), similaritySearch(), getChunksForSource(), etc.
+│   ├── VectorStoreImpl.kt               # LRU cache (10,000), cosine similarity (MiniLmEmbedder mock included)
+│   └── VectorStoreProvider.kt           # Static provider for cross-module access
+├── model/
+│   ├── ModelManager.kt                  # HuggingFace/Kaggle download management
+│   ├── ModelDownloadManager.kt          # Download progress tracking
+│   └── GgufConverter.kt                 # GGUF to LiteRT-LM conversion utility
+├── messaging/
+│   ├── MessagePart.kt                   # Sealed class: TextPart, ReasoningPart, ToolCallPart, ToolResponsePart, ImagePart, AudioPart
+│   ├── MessagePartAggregator.kt         # Builds MessageParts from streaming transitions
+│   └── ContentMode.kt                   # REGULAR, THINKING, TOOL_CALL, TOOL_RESPONSE, IMAGE, AUDIO, SYSTEM + FilteredChunk types
+├── tokenization/
+│   ├── StreamingTokenFilter.kt          # Trie-based special token filtering with mode transitions
+│   └── GemmaSpecialTokens.kt            # Gemma 4 control token definitions (TURN, TOOL, THINKING, MEDIA, SEQUENCE, STRING_DELIMITER)
+├── tools/
+│   ├── Tool.kt                          # Tool interface definitions
+│   ├── ToolSchema.kt                    # Tool parameter schema definitions
+│   ├── ToolRegistry.kt                  # Tool registration and lookup
+│   ├── ToolExecutor.kt                  # Tool execution orchestration
+│   ├── BuiltinTools.kt                  # Built-in: SearchKnowledge, ReadStack, GetHistory, ListStacks
+│   └── web/
+│       ├── WebSearchTools.kt            # Web search tool integration
+│       └── RawChunk.kt                  # Raw chunk data class (id, sourceId, text, position)
+└── ollama/
+    ├── OllamaApiService.kt              # REST API client for Ollama
+    └── OllamaModels.kt                  # Data models for Ollama API responses
 ```
 
-#### DispatcherModule
-
-```kotlin
-@Qualifier @Retention(AnnotationRetention.BINARY)
-annotation class IoDispatcher
-
-@Qualifier @Retention(AnnotationRetention.BINARY)
-annotation class DefaultDispatcher
-
-@Qualifier @Retention(AnnotationRetention.BINARY)
-annotation class InferenceDispatcher
-
-// @InferenceDispatcher limited to 2 parallel tasks
-```
-
-#### InferenceBridge (LiteRT-LM Engine API)
+#### InferenceBridge Interface
 
 ```kotlin
 interface InferenceBridge {
-    val isReady: Boolean
-    val isReadyFlow: StateFlow<Boolean>
-    val isProcessingFlow: StateFlow<Boolean>
-    val modelInfoFlow: StateFlow<ModelInfo>
-    val downloadProgressFlow: StateFlow<DownloadProgress>
+    val isReady: StateFlow<Boolean>
+    val isProcessing: StateFlow<Boolean>
+    val isDownloading: StateFlow<Boolean>
+    val isUnloading: StateFlow<Boolean>
+    val downloadProgress: StateFlow<DownloadProgress>
+    val modelStatus: StateFlow<ModelStatus>
 
     // Lifecycle
-    suspend fun initialize(context: Context, config: InferenceConfig): Boolean
-    suspend fun downloadModel(modelId: String): Flow<DownloadProgress>
-    fun release()
-    fun close()
+    fun initialize(context: Context, modelName: String, backend: String?, onDone: (String) -> Unit)
+    suspend fun isModelDownloaded(): Boolean
+    fun downloadModel(context: Context, modelName: String, coroutineScope: CoroutineScope, ...)
+    fun downloadModel(listener: DownloadProgressListener)
+    fun deleteModel()
+    suspend fun listAvailableModels(context: Context): List<ModelManager.ModelInfo>
+    fun loadModel(context: Context, modelPath: String, backend: String?, onDone: (String) -> Unit)
+    fun deleteModel(modelPath: String)
 
-    // Generation with streaming support
-    suspend fun generate(prompt: String, config: GenerationConfig): String
-    fun streamGenerate(prompt: String, config: GenerationConfig): Flow<String>
+    // Callback-based inference
+    fun runInference(input: String, resultListener, cleanUpListener, onError)
+    fun runInferenceWithImage(input: String, image: Bitmap, resultListener, cleanUpListener, onError)
+    fun runInferenceWithAudio(input: String, audioData: FloatArray, resultListener, cleanUpListener, onError)
+
+    // Flow-based streaming (primary)
     fun runInferenceFlow(input: String): Flow<String>
     fun runInferenceFlowParts(input: String): Flow<List<MessagePart>>
     fun runInferenceWithImageFlow(input: String, image: Bitmap): Flow<String>
     fun runInferenceWithImageFlowParts(input: String, image: Bitmap): Flow<List<MessagePart>>
+    fun runInferenceWithAudioFlow(input: String, audioData: FloatArray): Flow<String>
+    fun runInferenceWithAudioFlowParts(input: String, audioData: FloatArray): Flow<List<MessagePart>>
 
-    // Task-specific inference
-    suspend fun detectItems(bitmap: Bitmap, prompt: String): List<DetectedItem>
-    suspend fun recognizeText(bitmap: Bitmap, prompt: String): String
-    suspend fun transcribeAudio(audioData: ByteArray, prompt: String?): String
+    // Control
+    fun resetConversation()
+    fun stopInference()
+    fun release()
+    fun unloadModel()
 }
+```
+
+#### ModelTypes (core:ai/inference/model/ModelTypes.kt)
+
+```kotlin
+enum class ModelStatus {
+    NOT_DOWNLOADED, DOWNLOADING, DOWNLOADED, LOADING, READY, ERROR
+}
+
+data class DownloadProgress(
+    val downloadedBytes: Long = 0,
+    val totalBytes: Long = 0
+) {
+    val percentage: Int get() = if (totalBytes > 0) ((downloadedBytes * 100) / totalBytes).toInt() else 0
+}
+
+data class InferenceConfig(
+    val temperature: Float = 0.3f,
+    val topK: Int = 16,
+    val topP: Float = 0.95f,
+    val maxTokens: Int = 4096,
+    val prompt: String = "Analyze the handwriting in this image."
+)
 
 data class DetectedItem(
     val text: String,
-    val boxYmin: Float,  // 0-1000 normalized
-    val boxXmin: Float,
-    val boxYmax: Float,
-    val boxXmax: Float,
+    val boxYmin: Float, val boxXmin: Float,
+    val boxYmax: Float, val boxXmax: Float
 )
-
-data class ModelInfo(
-    val modelId: String,
-    val modelName: String,
-    val sizeBytes: Long,
-    val isDownloaded: Boolean
-)
-
-data class DownloadProgress(
-    val bytesDownloaded: Long,
-    val totalBytes: Long,
-    val status: DownloadStatus
-)
-
-enum class DownloadStatus { NOT_STARTED, DOWNLOADING, COMPLETED, FAILED }
-enum class ModelBackend { ON_DEVICE, REMOTE_API }
-enum class ModelStatus { NOT_DOWNLOADED, DOWNLOADING, DOWNLOADED, LOADING, READY, ERROR }
 ```
 
 #### LiteRtInferenceBridge (LiteRT-LM Engine API)
 
-The `LiteRtInferenceBridge` uses the LiteRT-LM Engine API with GPU/CPU backend fallback:
+The `LiteRtInferenceBridge` uses the LiteRT-LM Engine API with GPU/CPU backend fallback. It takes `Context` as a constructor parameter (no Hilt injection):
 
 ```kotlin
-@Singleton
-class LiteRtInferenceBridge @Inject constructor(
-    @InferenceDispatcher private val inferenceDispatcher: CoroutineDispatcher,
-) : InferenceBridge {
+@OptIn(ExperimentalCoroutinesApi::class)
+class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
 
-    private var engine: Engine? = null
+    private var engine: com.google.ai.edge.litertlm.Engine? = null
     private var conversation: Conversation? = null
-    private var lmEngineManager: LmEngineManager? = null
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    override val isReadyFlow = MutableStateFlow(false)
-    override val isProcessingFlow = MutableStateFlow(false)
-    override val modelInfoFlow = MutableStateFlow(ModelInfo(...))
-    override val downloadProgressFlow = MutableStateFlow(DownloadProgress(...))
+    // StateFlows: isReady, isProcessing, isDownloading, isUnloading, downloadProgress, modelStatus
 
-    override suspend fun initialize(context: Context, config: InferenceConfig): Boolean {
-        return withContext(inferenceDispatcher) {
-            // LiteRT-LM Engine API pattern
-            lmEngineManager = LmEngineManager(context)
-            engine = lmEngineManager?.createEngine()
-            isReadyFlow.value = engine != null
-            engine != null
-        }
+    fun initialize(context, modelName, backend, onDone) {
+        // Finds model file, calls initializeEngine()
     }
 
-    override fun runInference(prompt: String, callback: MessageCallback) {
-        val eng = engine ?: throw IllegalStateException("Engine not initialized")
-        val conv = eng.startConversation(callback)
-        conversation = conv
-        conv.send(prompt)
+    private suspend fun initializeEngine(modelPath: String, preferredBackend: String? = null): Boolean {
+        // GPU/CPU backend fallback via Backend.GPU()/Backend.CPU()
+        // EngineConfig(modelPath, backend, visionBackend, maxNumTokens=8192)
+        // Engine(engineConfig).initialize()
+        // createConversation(ConversationConfig(samplerConfig(topK=64, topP=0.95, temp=0.7)))
     }
+
+    fun runInference(input, resultListener, cleanUpListener, onError) {
+        // Uses AtomicBoolean for 120s timeout guard
+        // conv.sendMessageAsync(Contents.of(Content.Text(input)), MessageCallback)
+    }
+
+    fun runInferenceFlow(input: String): Flow<String> = flow {
+        // conv.sendMessageAsync(content).collect { message -> ... }
+        // withTimeout(120_000) { ... }
+    }.flowOn(Dispatchers.IO)
+
+    fun runInferenceFlowParts(input: String): Flow<List<MessagePart>> = flow {
+        // StreamingTokenFilter.appendWithTransitions()
+        // MessagePartAggregator.processChunk() / finalize()
+    }.flowOn(Dispatchers.IO)
 }
+```
 
-// LmEngineManager with GPU/CPU fallback
+Engine management uses `Engine(EngineConfig).initialize()` directly (not `Engine.create()`). The `LmEngineManager` class exists as a standalone utility but `LiteRtInferenceBridge` manages its own engine lifecycle inline.
+
+#### LmEngineManager
+
+```kotlin
 class LmEngineManager(private val context: Context) {
-    private var engine: Engine? = null
-    var backend: ModelBackend = ModelBackend.ON_DEVICE
+    private val mutex = Mutex()
 
-    fun createEngine(): Engine? {
-        // Try GPU first
-        val gpuSpec = GpuBackendSpec.create()
-        if (gpuSpec != null) {
-            engine = Engine.create(gpuSpec)
-            if (engine != null) {
-                backend = ModelBackend.GPU
-                return engine
-            }
-        }
-        // Fallback to CPU
-        val cpuSpec = CpuBackendSpec.create()
-        engine = Engine.create(cpuSpec)
-        backend = ModelBackend.CPU
-        return engine
-    }
+    data class Config(
+        val temperature: Float = 0.7f,
+        val topK: Int = 64,
+        val topP: Float = 0.95f,
+        val maxTokens: Int = 4096,
+        val useGpu: Boolean = true
+    )
 
-    fun release() { engine?.close(); engine = null }
+    suspend fun getEngine(modelPath: String, config: Config, forceReload: Boolean): Boolean
+    fun getEngine(): Engine?
+    fun getCurrentModelPath(): String?
+    suspend fun releaseEngine()
 }
 ```
 
@@ -550,53 +673,26 @@ interface VectorStoreRepository {
     suspend fun similaritySearch(query: String, topK: Int): List<ChunkEntity>
     suspend fun getChunksForSource(sourceId: String): List<ChunkEntity>
     suspend fun deleteChunksForSource(sourceId: String)
+    suspend fun getAllSourceIds(): List<String>
+    suspend fun getCachedChunkCount(): Int
+    suspend fun hasCachedData(): Boolean
 }
 
-// Implementation details:
-// - LRU cache (configurable max size, default 10,000)
+// Implementation in VectorStoreImpl.kt:
+// VectorStoreRepositoryImpl(chunkDao, textEmbedder, gson)
+// - LRU cache (LinkedHashMap, max 10,000)
 // - Cosine similarity for vector comparison
 // - Embeddings stored as JSON in Room
+// - MiniLmEmbedder (mock, 384-dim) included as fallback
 ```
 
 ---
 
 ### core:data
 
-Handles persistence and networking.
+Handles persistence via Room. 22 files organized in entity/DAO pairs by domain.
 
-```
-core:data/
-├── PenpalDatabase.kt      # Room database v3 (singleton via getInstance())
-├── Entities.kt            # 7 entities
-└── Daos.kt               # 6 DAOs
-```
-
-#### Room Database Singleton
-
-```kotlin
-// Thread-safe singleton for WorkManager compatibility
-object PenpalDatabase {
-    @Volatile
-    private var instance: PenpalDatabase_Impl? = null
-
-    fun getInstance(context: Context): PenpalDatabase_Impl {
-        return instance ?: synchronized(this) {
-            instance ?: buildDatabase(context).also { instance = it }
-        }
-    }
-}
-
-// ExtractionWorker uses this pattern instead of Hilt injection
-class ExtractionWorker(
-    ctx: Context,
-    params: WorkerParameters,
-) : CoroutineWorker(ctx, params) {
-    private val database = PenpalDatabase.getInstance(ctx)
-    // ...
-}
-```
-
-#### Room Schema
+#### PenpalDatabase (Singleton)
 
 ```kotlin
 @Database(
@@ -608,9 +704,12 @@ class ExtractionWorker(
         GraphNodeEntity::class,
         GraphEdgeEntity::class,
         StackEntity::class,
+        GraphTokenEntity::class,
+        NotebookEntity::class,
+        NotebookSheetEntity::class,
     ],
-    version = 3,
-    exportSchema = true,
+    version = 9,
+    exportSchema = false
 )
 abstract class PenpalDatabase : RoomDatabase() {
     abstract fun chunkDao(): ChunkDao
@@ -618,45 +717,53 @@ abstract class PenpalDatabase : RoomDatabase() {
     abstract fun chatMessageDao(): ChatMessageDao
     abstract fun chatConversationDao(): ChatConversationDao
     abstract fun graphDao(): GraphDao
+    abstract fun graphTokenDao(): GraphTokenDao
     abstract fun stackDao(): StackDao
+    abstract fun notebookDao(): NotebookDao
+    abstract fun notebookSheetDao(): NotebookSheetDao
+
+    companion object {
+        @Volatile private var INSTANCE: PenpalDatabase? = null
+
+        fun getInstance(context: Context): PenpalDatabase {
+            return INSTANCE ?: synchronized(this) {
+                Room.databaseBuilder(context, PenpalDatabase::class.java, "penpal_database")
+                    .fallbackToDestructiveMigration()
+                    .build()
+                    .also { INSTANCE = it }
+            }
+        }
+    }
 }
-```
-
-#### Enums
-
-```kotlin
-enum class ExtractionRule { 
-    FFT_PEAKS, DICOM_METADATA, FULL_TEXT, 
-    TRANSCRIPT, IMAGE_OCR, URL_CONTENT, CODE 
-}
-
-enum class JobStatus { QUEUED, RUNNING, DONE, FAILED }
-
-enum class NodeType { PAPER, CONCEPT, TOOL, DATA_MODEL }
 ```
 
 ---
 
 ### core:processing
 
-Handles document parsing and background extraction.
+Handles document parsing and background extraction. 8 files in organized subdirectories.
 
 ```
-core:processing/
-├── DocumentParser.kt      # Interface: parse(uri, rule) -> List<RawChunk>
-├── Parsers.kt            # Real implementations:
-│                         #   • PdfDocumentParser (PdfBox text extraction)
-│                         #   • ImageParser (ML Kit Text Recognition OCR)
-│                         #   • AudioParser (metadata, placeholder for transcription)
-│                         #   • UrlParser (Jsoup HTML parsing)
-│                         #   • CodeParser (language-aware: Kotlin, Java, Python, JS/TS, Go, Rust)
-│                         #   • ParserFactory (MIME type routing)
-├── ExtractionWorker.kt   # WorkManager worker with real parsing + vector persistence
-├── WorkerLauncher.kt     # Job queue management
-├── NotificationHelper.kt # WorkManager progress notifications
-├── NetworkMonitor.kt     # Connectivity tracking for offline mode
-├── WhisperTranscriber.kt # Audio transcription utilities
-└── SpeechRecognizer.kt   # Speech recognition interface
+core:processing/src/main/java/com/penpal/core/processing/
+├── document/
+│   ├── DocumentParser.kt    # Interface: parse(uri, rule) -> List<RawChunk>
+│   └── Parsers.kt           # Real implementations:
+│                             #   PdfDocumentParser (PdfBox text extraction)
+│                             #   ImageParser (ML Kit Text Recognition OCR)
+│                             #   AudioParser (metadata, placeholder for transcription)
+│                             #   UrlParser (Jsoup HTML parsing)
+│                             #   CodeParser (language-aware: Kotlin, Java, Python, JS/TS, Go, Rust)
+│                             #   ParserFactory (MIME type routing)
+├── worker/
+│   ├── ExtractionWorker.kt  # WorkManager worker with real parsing + vector persistence
+│   └── WorkerLauncher.kt    # Job queue management
+├── notification/
+│   └── NotificationHelper.kt
+├── network/
+│   └── NetworkMonitor.kt
+└── speech/
+    ├── WhisperTranscriber.kt
+    └── SpeechRecognizer.kt
 ```
 
 #### DocumentParser
@@ -673,69 +780,64 @@ data class RawChunk(
     val text: String,
     val position: Int  // page number or timestamp ms
 )
-
-// Implementations:
-// - PdfDocumentParser (PdfBox: text extraction + overlapping chunking)
-// - AudioParser (metadata reading, transcription placeholder)
-// - ImageParser (ML Kit Text Recognition with coroutine suspension)
-// - UrlParser (Jsoup: HTML → clean text extraction)
-// - CodeParser (language-aware parsing for Kotlin, Java, Python, JS/TS, Go, Rust)
-// - ParserFactory (creates parser by MIME type)
 ```
 
-#### ExtractionWorker
+#### ExtractionWorker (Manual DI)
 
 ```kotlin
-@HiltWorker
-class ExtractionWorker @AssistedInject constructor(
-    @Assisted ctx: Context,
-    @Assisted params: WorkerParameters,
-    private val parser: DocumentParser,
-    private val vectorStore: VectorStoreRepository,
-    @IoDispatcher private val io: CoroutineDispatcher,
-) : CoroutineWorker(ctx, params) {
+class ExtractionWorker(
+    context: Context,
+    params: WorkerParameters
+) : CoroutineWorker(context, params) {
 
-    override suspend fun doWork(): Result = withContext(io) {
+    private val extractionJobDao = PenpalDatabase.getInstance(context).extractionJobDao()
+    private val notificationHelper = NotificationHelper(context)
+
+    override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val jobId = inputData.getString(KEY_JOB_ID) ?: return@withContext Result.failure()
+        val agentPrompt = inputData.getString(KEY_AGENT_PROMPT)?.takeIf { it.isNotBlank() }
 
-        setProgress(workDataOf(KEY_PROGRESS to 0))
+        val job = extractionJobDao.getJob(jobId) ?: return@withContext Result.failure()
 
-        val job = extractionRepo.getJob(jobId)
-        val chunks = parser.parse(job.uri, job.rule)
-
-        setProgress(workDataOf(KEY_PROGRESS to 50))
-
-        withContext(Dispatchers.Default) {
-            vectorStore.embed(chunks)
-        }
-
-        setProgress(workDataOf(KEY_PROGRESS to 100))
-        extractionRepo.updateJobStatus(jobId, JobStatus.DONE)
-        Result.success(workDataOf(KEY_JOB_ID to jobId))
+        // Parse document, embed chunks, update status
+        parserFactory.createParser(mimeType).parse(uri, rule)
+        VectorStoreProvider.instance?.embed(chunks)
+        extractionJobDao.updateStatus(jobId, "DONE")
     }
 }
 ```
+
+No Hilt annotations — uses `PenpalDatabase.getInstance()` and `VectorStoreProvider.instance` for dependency access.
 
 ---
 
 ## feature:stacks Module
 
-The Stacks module provides a block-based editor for creating rich documents with text, images, drawings, graphs, and LaTeX. This implements the "Think" tab in the bottom navigation.
+The Stacks module provides a block-based editor for creating rich documents with text, images, drawings, graphs, LaTeX, and media processing. This implements the "Think" tab in the bottom navigation.
 
 ### Module Structure
 
 ```
-feature:stacks/
-├── StackModels.kt        # Block sealed class, GraphNode, GraphEdge, StackEvent
-├── StackEditorViewModel.kt # Editor state management, setImageUri()
-├── StackScreen.kt        # Main screen composable, image picker, Coil integration
-├── BlockRenderer.kt         # Block type rendering
-├── GraphNodeCanvas.kt       # Node-based graph editor
-└── DrawingCanvas.kt         # Touch-based drawing
+feature:stacks/src/main/java/com/penpal/feature/stacks/
+├── model/
+│   └── StackModels.kt         # Block sealed class, GraphNode, GraphEdge, StackEvent, StackScreenEvent
+├── viewmodel/
+│   ├── StackEditorViewModel.kt # Editor state management, block CRUD, AI processing
+│   └── StackListViewModel.kt   # Stack list management
+├── screen/
+│   ├── StackScreen.kt          # Main editor composable
+│   └── StackListScreen.kt      # Stack list with creation/selection
+└── component/
+    ├── BlockRenderer.kt        # Block type rendering
+    ├── GraphNodeCanvas.kt      # Node-based graph editor
+    ├── DrawingCanvas.kt        # Touch-based drawing
+    └── StackPicker.kt          # Stack selection picker component
 ```
 
 **Dependencies:**
 - `io.coil-kt:coil-compose:2.5.0` for async image loading in ImageBlockContent
+- `androidx.webkit:webkit:1.10.0` for WebView-based LaTeX rendering
+- `com.google.code.gson:gson` for JSON serialization of blocks
 
 ### Block Model (StackModels.kt)
 
@@ -743,47 +845,18 @@ feature:stacks/
 sealed class Block {
     abstract val id: String
 
-    data class TextBlock(
-        override val id: String,
-        val content: String = "",
-        val isEditing: Boolean = false
-    ) : Block()
-
-    data class ImageBlock(
-        override val id: String,
-        val uri: Uri? = null,
-        val caption: String = "",
-        val isEditing: Boolean = false
-    ) : Block()
-
-    data class DrawingBlock(
-        override val id: String,
-        val pathData: String = "",
-        val width: Float = 800f,
-        val height: Float = 600f
-    ) : Block()
-
-    data class LatexBlock(
-        override val id: String,
-        val expression: String = ""
-    ) : Block()
-
-    data class GraphBlock(
-        override val id: String,
-        val graphId: String,
-        val nodes: List<GraphNode> = emptyList(),
-        val edges: List<GraphEdge> = emptyList()
-    ) : Block()
-
-    data class EmbedBlock(
-        override val id: String,
-        val sourceId: String,
-        val preview: String = "",
-        val type: EmbedType = EmbedType.LINK
-    ) : Block()
+    data class TextBlock(id, content, isEditing) : Block()
+    data class ImageBlock(id, uri, caption, isEditing) : Block()
+    data class DrawingBlock(id, pathData, width, height) : Block()
+    data class LatexBlock(id, expression) : Block()
+    data class GraphBlock(id, graphId, nodes, edges) : Block()
+    data class EmbedBlock(id, sourceId, preview, type) : Block()
+    data class ProcessBlock(id, sourceUri, mediaType, status, progress, extractedText, errorMessage, showParsedContent) : Block()
 }
 
 enum class EmbedType { LINK, AUDIO, VIDEO, FILE }
+enum class MediaType { IMAGE, AUDIO, VIDEO, TEXT }
+enum class ProcessStatus { PENDING, QUEUED, RUNNING, DONE, ERROR }
 ```
 
 ### StackEvent (StackModels.kt)
@@ -792,39 +865,27 @@ enum class EmbedType { LINK, AUDIO, VIDEO, FILE }
 sealed class StackEvent {
     data class AddBlock(val block: Block, val afterBlockId: String? = null)
     data class RemoveBlock(val blockId: String)
-    data class UpdateTextBlock(val blockId: String, val content: String)
-    data class SetImageUri(val blockId: String, val uri: Uri)  // Image picker integration
+    data class MoveBlock(val blockId: String, val newIndex: Int)
+    data class UpdateBlock(val block: Block)
+    data class SelectBlock(val blockId: String?)
     data class UpdateGraphNode(val node: GraphNode)
     data class AddGraphEdge(val edge: GraphEdge)
-    data class AddDrawingPath(val pathData: String)
-    // ...
+    data class UpdateDocumentTitle(val title: String)
+    data class UpdateSystemPrompt(val prompt: String)
+    data class UpdateAgentPrompt(val prompt: String)
+    data class ToggleProcessView(val blockId: String)
+    object SaveDocument
+    object LoadDocument
+    object DeleteDocument
+    data class SetImageUri(val blockId: String, val uri: Uri)
+    data class AddProcessBlock(val mediaType: MediaType, val afterBlockId: String? = null)
+    data class UpdateProcessBlockStatus(val blockId: String, val status: ProcessStatus, ...)
+    data class ReprocessBlock(val blockId: String)
+    data class ProcessBlockWithAI(val blockId: String)
 }
 ```
 
-data class GraphNode(
-    val id: String,
-    val label: String,
-    var posX: Float,
-    var posY: Float,
-    val type: NodeType = NodeType.DEFAULT
-)
-
-enum class NodeType { DEFAULT, CONCEPT, TOOL, DATA, STARRED }
-
-data class GraphEdge(
-    val id: String,
-    val fromNodeId: String,
-    val toNodeId: String,
-    val label: String = "",
-    val type: EdgeType = EdgeType.DEFAULT
-)
-
-enum class EdgeType { DEFAULT, LABELLED, BIDIRECTIONAL, HIGHLIGHTED }
-```
-
 ### GraphNodeCanvas
-
-The `GraphNodeCanvas` is a custom Canvas composable for visualizing and editing node-based graphs:
 
 ```kotlin
 @Composable
@@ -844,109 +905,50 @@ fun GraphNodeCanvas(
     onCanvasTap: (Offset) -> Unit,
     onCanvasPan: (Offset) -> Unit,
     onCanvasScale: (Float) -> Unit,
-    // ...
 )
 ```
 
-**Interactions:**
-- **Drag**: `detectDragGestures` → updates node `posX/posY` → callback to ViewModel
-- **Pan**: `detectTransformGestures` with two fingers
-- **Zoom**: Pinch gesture with scale bounds (0.25x - 4x)
-- **Double-tap**: Creates new node at tap position
-- **Long-press**: Shows context menu for existing node
-- **Edge creation**: Tap start node → tap end node → edge created
+**Interactions:** Drag (detectDragGestures), Pan (detectTransformGestures with two fingers), Zoom (0.25x - 4x), Double-tap (creates node), Long-press (context menu), Edge creation.
 
-**Rendering:**
-- Grid drawn in canvas space
-- Edges rendered as curved `Path` with arrow heads
-- Nodes rendered as colored circles with labels
-- Color-coded by node type (DEFAULT=indigo, CONCEPT=emerald, TOOL=amber, DATA=blue, STARRED=red)
+**Rendering:** Grid in canvas space, edges as curved Path with arrow heads, nodes as colored circles with labels. Color-coded by node type (DEFAULT=indigo, CONCEPT=emerald, TOOL=amber, DATA=blue, STARRED=red).
 
 ### DrawingCanvas
-
-The `DrawingCanvas` provides freehand drawing with a floating toolbar:
 
 ```kotlin
 @Composable
 fun DrawingCanvas(
     pathData: String,
     onPathDataChanged: (String) -> Unit,
-    modifier: Modifier = Modifier,
     strokeColor: Color = Color.Black,
     strokeWidth: Float = 4f,
     backgroundColor: Color = Color.White
 )
 ```
 
-**Features:**
-- **Color palette**: 8 colors (black, gray, red, orange, blue, green, purple, pink)
-- **Eraser mode**: 3x stroke width, draws white
-- **Undo**: `paths.dropLast(1)` removes last path
-- **Clear**: Resets to empty path list
-- **Toolbar**: Auto-hides after 5 seconds
+**Features:** 8-color palette, eraser mode (3x stroke, white), undo (paths.dropLast(1)), clear, auto-hiding toolbar (5s).
 
-**Path Serialization:**
-```kotlin
-// Format: "isEraser:colorHex:strokeWidth:points..."
-// Example: "0:FF000000:4:100,200,150,250;0:FF000000:4:300,400,350,450"
-```
+**Path Serialization:** `"isEraser:colorHex:strokeWidth:points..."` format.
 
 ### StackEditorViewModel
 
 ```kotlin
-@HiltViewModel
-class StackEditorViewModel @Inject constructor(
-    // ...
+class StackEditorViewModel(
+    private val context: Context,
+    private val stackDao: StackDao,
+    private val workerLauncher: WorkerLauncher,
+    private val inferenceBridge: InferenceBridge,
+    private val onLoadModel: () -> Unit = {}
 ) : ViewModel() {
 
-    val uiState: StateFlow<StackEditorState> = MutableStateFlow(StackEditorState())
+    private val _uiState = MutableStateFlow(StackEditorState())
+    val uiState: StateFlow<StackEditorState> = _uiState.asStateFlow()
 
-    fun onEvent(event: StackEvent) {
-        when (event) {
-            is StackEvent.AddBlock -> { /* ... */ }
-            is StackEvent.RemoveBlock -> { /* ... */ }
-            is StackEvent.SetImageUri -> updateBlock(blockId) { /* set uri */ }
-            is StackEvent.UpdateGraphNode -> { /* ... */ }
-            is StackEvent.AddGraphEdge -> { /* ... */ }
-            // ...
-        }
-    }
-
-    fun setImageUri(blockId: String, uri: Uri) {
-        // Updates ImageBlock with selected gallery image URI
-    }
+    fun onEvent(event: StackEvent) { /* ... */ }
+    fun loadFromDatabase(stackId: String) { /* ... */ }
 }
 ```
 
-### StackScreen (Image Picker + Navigation)
-
-```kotlin
-@Composable
-fun StackScreen(
-    onNavigateToHome: () -> Unit = {},  // Navigate to Process tab
-    // ...
-) {
-    val imagePickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
-        // Handle selected image URI
-    }
-
-    // Toolbar home button triggers onNavigateToHome()
-}
-```
-
-**Coil Integration for ImageBlockContent:**
-```kotlin
-ImageBlockContent(
-    uri = block.uri,
-    caption = block.caption,
-    onPickImage = { imagePickerLauncher.launch("image/*") },
-    onCaptionChanged = { /* ... */ }
-)
-
-// Uses AsyncImage from coil-compose to display selected images
-```
+No Hilt injection — ViewModel is created manually in `MainScreen.kt` with `remember { StackEditorViewModel(...) }`.
 
 ---
 
@@ -954,9 +956,8 @@ ImageBlockContent(
 
 ```
 Main Thread (UI) ──suspend/StateFlow──> IO Dispatcher (Room, files, network)
-                                      ──> Default Dispatcher (embeddings, FFT)
-                                      ──> Inference Dispatcher (limited parallelism 2)
-                                      ──> WorkManager (persisted extraction)
+                                       ──> Default Dispatcher (embeddings, FFT)
+                                       ──> WorkManager (persisted extraction)
 ```
 
 ### Dispatcher Assignments
@@ -964,11 +965,11 @@ Main Thread (UI) ──suspend/StateFlow──> IO Dispatcher (Room, files, netw
 | Operation | Dispatcher |
 |-----------|------------|
 | UI StateFlow | Main (auto via viewModelScope) |
-| Room reads/writes | @IoDispatcher |
-| File I/O | @IoDispatcher |
-| ONNX/LiteRT inference | @InferenceDispatcher (limited 2) |
-| Embeddings computation | @DefaultDispatcher |
-| Graph layout/FFT | @DefaultDispatcher |
+| Room reads/writes | Dispatchers.IO |
+| File I/O | Dispatchers.IO |
+| ONNX/LiteRT inference | Dispatchers.IO (via flowOn) |
+| Embeddings computation | Default |
+| Graph layout | Default |
 | WorkManager workers | withContext inside doWork() |
 
 ---
@@ -978,32 +979,32 @@ Main Thread (UI) ──suspend/StateFlow──> IO Dispatcher (Room, files, netw
 ### Document Ingestion → Vector Storage
 
 ```
-1. User adds document via bottom sheet
+1. User adds document
            │
            ▼
-2. viewModelScope.launch(ioDispatcher)
+2. viewModelScope.launch(Dispatchers.IO)
            │
            ▼
-3. extractionRepo.createJob()  ← writes to Room
+3. PenpalDatabase.getInstance().extractionJobDao() → writes to Room
            │
            ▼
-4. WorkerLauncher.enqueue(jobId)   ← enqueues ExtractionWorker
+4. WorkerLauncher.enqueue(jobId) → enqueues ExtractionWorker
            │
            ▼
 5. ExtractionWorker.doWork():
-    ParserFactory.create(mimeType).parse(uri)  ← IO dispatcher (real parsing)
+     ParserFactory.create(mimeType).parse(uri)  ← IO dispatcher (real parsing)
            │
            ▼
-    chunks = [RawChunk, ...]        ← smart overlap for RAG context
+     chunks = [RawChunk, ...]
            │
            ▼
-    vectorStore.embed(chunks)        ← Default dispatcher (ONNX embedding)
+     VectorStoreProvider.instance.embed(chunks)   ← Default dispatcher (embedding)
            │
            ▼
-    Room.insert(chunks)             ← IO dispatcher (persistent storage)
+     chunkDao.insert(chunks)                      ← IO dispatcher (persistent storage)
            │
            ▼
-    Result.success()
+     Result.success()
 ```
 
 ### Query → RAG Response (LiteRT-LM Engine API)
@@ -1013,37 +1014,33 @@ Main Thread (UI) ──suspend/StateFlow──> IO Dispatcher (Room, files, netw
              │
              ▼
 2. ChatViewModel.sendQuery("What about X?")
-      viewModelScope.launch(Default)
+       viewModelScope.launch
              │
              ▼
-3. VectorStoreRepository.similaritySearch(query, topK=6)
-      Default dispatcher (embedding + cosine sim)
+3. VectorStoreRepositoryImpl.similaritySearch(query, topK=6)
+       cosine similarity over cached embeddings
              │
              ▼
-      chunks = [ChunkEntity, ...]    ← top-K relevant text
+       chunks = [ChunkEntity, ...] ← top-K relevant text
              │
              ▼
 4. Check isModelReady state
              │
-      ┌──────┴──────┐
-      │             │
-      ▼             ▼
-Ready         Not Ready
-      │             │
-      ▼             ▼
+       ┌─────┴─────┐
+       │           │
+     Ready     Not Ready
+       │           │
+       ▼           ▼
 runInferenceFlowParts()  Show "Model not ready" message
-      │
-      ▼
+       │
+       ▼
 Flow.collect() → StreamingTokenFilter → MessagePartAggregator → List<MessagePart>
              │
              ▼
-      ChatViewModel updates message with parts
+       ChatViewModel updates message with parts
              │
              ▼
-      ChatScreen renders TextPart, ReasoningBlock, ToolCallBlock
-             │
-             ▼
-5. Compose recomposes ChatScreen with streaming response
+       ChatScreen renders TextPart, ReasoningBlock, ToolCallBlock
 ```
 
 ### Agent Framework Flow
@@ -1071,10 +1068,10 @@ ChatViewModel receives ToolCallPart in Flow<List<MessagePart>>
         │   ▼
         │   ToolExecutor.execute(toolCall)
         │   │
-        │   ├── search_knowledge(query)      → VectorStoreRepository.similaritySearch()
-        │   ├── process_image(uri, prompt)    → InferenceBridge.runInferenceWithImageFlowParts()
-        │   ├── read_stack(stackId)           → StackRepository.getBlocks()
-        │   └── get_conversation_history()    → ChatRepository.getMessages()
+        │   ├── search_knowledge(query)     → VectorStoreRepositoryImpl.similaritySearch()
+        │   ├── process_image(uri, prompt)   → InferenceBridge.runInferenceWithImageFlowParts()
+        │   ├── read_stack(stackId)          → StackRepository.getBlocks()
+        │   └── get_conversation_history()   → ChatRepository.getMessages()
         │   │
         │   ▼
         │   ToolResponsePart(name, callId, output)
@@ -1083,30 +1080,17 @@ ChatViewModel receives ToolCallPart in Flow<List<MessagePart>>
         │   Append tool response to prompt context
         │   │
         │   ▼
-        │   Resume inference with enriched prompt
-        │   │   (model can make further tool calls or produce final answer)
-        │   ▼
+        │   Resume inference with enriched prompt (agent loop)
         │
-        └── No tool call → render normally as TextPart/ReasoningPart
-                │
-                ▼
-        ChatScreen renders final multi-part response
+        └── No tool call → render as TextPart/ReasoningPart
 ```
-
-This enables the **Agent Loop** pattern:
-
-1. Model generates text + optional tool calls
-2. Tool calls are intercepted and executed by `ToolExecutor`
-3. Results are fed back into the model's context
-4. Model continues generating (possibly calling more tools)
-5. Loop terminates when model produces a final answer without tool calls
 
 ### Tool Registry & Schema (✅ Implemented)
 
-**Files**: `core/ai/Tool.kt`, `ToolSchema.kt`, `ToolRegistry.kt`, `BuiltinTools.kt`
+**Files**: `core/ai/tools/Tool.kt`, `ToolSchema.kt`, `ToolRegistry.kt`, `ToolExecutor.kt`, `BuiltinTools.kt`, `web/WebSearchTools.kt`
 
 ```kotlin
-// core/ai/Tool.kt
+// core/ai/tools/Tool.kt
 interface Tool {
     val name: String
     val description: String
@@ -1114,33 +1098,15 @@ interface Tool {
     suspend fun execute(context: ToolExecutionContext): ToolResult
 }
 
-// core/ai/ToolSchema.kt
-data class ToolSchema(
-    val name: String,
-    val description: String,
-    val parameters: List<ToolParameter>
-)
-
-data class ToolParameter(
-    val name: String,
-    val type: String,       // "string", "integer", "array", "object"
-    val description: String,
-    val required: Boolean = true,
-    val default: Any? = null
-)
-
-// core/ai/ToolRegistry.kt
+// core/ai/tools/ToolRegistry.kt
 class ToolRegistry {
     private val tools = mutableMapOf<String, Tool>()
-
-    fun register(tool: Tool) { tools[tool.name] = tool }
-    fun get(name: String): Tool? = tools[name]
-    fun getAll(): List<Tool> = tools.values.toList()
+    fun register(tool: Tool)
+    fun get(name: String): Tool?
+    fun getAll(): List<Tool>
     fun getToolsJson(): String  // Returns JSON schema for model prompt
     suspend fun execute(name: String, context: ToolExecutionContext): ToolResult
 }
-
-// Built-in tools: SearchKnowledgeTool, ReadStackTool, GetConversationHistoryTool, ListAttachedStacksTool
 ```
 
 ---
@@ -1151,150 +1117,71 @@ class ToolRegistry {
 
 **Status**: Resolved
 
-**Problem**: After implementing the `StreamingTokenFilter`, chat text was being split into separate lines after each special character occurrence. The model output contains structural newlines around control tokens (e.g., `<|turn>model\n...content...\n<turn|>`), and when tokens were removed, spurious line breaks remained in the user-facing text.
+**Problem**: After implementing the `StreamingTokenFilter`, chat text was being split into separate lines after each special character occurrence.
 
 **Solution**:
 - Implemented smart spacing logic in `StreamingTokenFilter` with `lastEmittedChar` tracking
-- Added `appendWithTransitions()` method that emits mode transition events for structured parsing
-- Space insertion is now context-aware: only before word characters, not punctuation/symbols
-- Prevents `\n\n` spam between words while preserving natural paragraph structure
-
-**Result**: Chat responses now render with proper text structure. Excessive line breaks have been eliminated while preserving intentional paragraph breaks.
+- `appendWithTransitions()` emits mode transition events for structured parsing
+- Context-aware space insertion: only before word characters, not punctuation/symbols
+- Prevents `\n\n` spam while preserving intentional paragraph breaks
 
 **Files Involved**:
-- `core/ai/StreamingTokenFilter.kt`
-- `core/ai/GemmaSpecialTokens.kt`
-- `core/ai/LiteRtInferenceBridge.kt` (Flow accumulation logic)
-- `feature/chat/ChatViewModel.kt` (message update logic)
-- `feature/chat/ChatScreen.kt` (text rendering)
+- `core/ai/tokenization/StreamingTokenFilter.kt`
+- `core/ai/tokenization/GemmaSpecialTokens.kt`
+- `core/ai/inference/implementation/LiteRtInferenceBridge.kt`
+- `feature/chat/viewmodel/ChatViewModel.kt`
+- `feature/chat/screen/ChatScreen.kt`
 
 ---
 
 ## Build Configuration
 
-### Version Catalog (libs.versions.toml)
+### Root build.gradle.kts
+
+```kotlin
+plugins {
+    id("com.android.application") version "9.1.1" apply false
+    id("com.android.library") version "9.1.1" apply false
+    id("org.jetbrains.kotlin.android") version "2.0.21" apply false
+    id("com.google.devtools.ksp") version "2.0.21-1.0.28" apply false
+    id("com.google.dagger.hilt.android") version "2.52" apply false
+    id("org.jetbrains.kotlin.plugin.compose") version "2.0.21" apply false
+    id("com.google.android.libraries.mapsplatform.secrets-gradle-plugin") version "2.0.1" apply false
+}
+```
+
+### Version Catalog (select entries)
 
 ```toml
 [versions]
-kotlin = "2.1.0"
-compose-compiler = "2.1.0"
-hilt = "2.54"
-room = "2.7.0"
+agp = "9.1.1"
+kotlin = "2.0.21"
+ksp = "2.0.21-1.0.28"
+hilt = "2.51.1"
+composeBom = "2024.06.00"
+room = "2.6.1"
+workManager = "2.9.1"
 coroutines = "1.8.1"
-okhttp = "4.12.0"
-work = "2.9.1"
+litertlm = "latest.release"
+onnxruntime = "1.19.0"
+coil = "2.5.0"
 ```
 
-### Module build.gradle.kts
+### Module Plugins (Actual)
 
-```kotlin
-// core:ai/build.gradle.kts
-plugins {
-    id("com.android.library")
-    id("org.jetbrains.kotlin.android")
-    id("com.google.dagger.hilt.android")
-    id("com.google.devtools.ksp")
-}
-
-dependencies {
-    implementation(project(":core:data"))
-    implementation(libs.hilt.android)
-    implementation(libs.room.runtime)
-    implementation(libs.okhttp)
-}
-
-// core:processing/build.gradle.kts
-plugins {
-    id("com.android.library")
-    id("org.jetbrains.kotlin.android")
-    id("com.google.dagger.hilt.android")
-    id("com.google.devtools.ksp")
-}
-
-dependencies {
-    implementation(project(":core:ai"))
-    implementation(project(":core:data"))
-    implementation(libs.hilt.android)
-    implementation(libs.work.runtime)
-}
-```
-
----
-
-## Channel Bridge Pattern
-
-```kotlin
-class ProcessViewModel @Inject constructor(
-    private val extractionRepo: ExtractionRepository,
-    private val workerLauncher: WorkerLauncher,
-    @Inject @IoDispatcher private val ioDispatcher: CoroutineDispatcher,
-) : ViewModel() {
-
-    private val ingestionChannel = Channel<IngestionRequest>(capacity = Channel.BUFFERED)
-
-    init {
-        viewModelScope.launch(ioDispatcher) {
-            ingestionChannel.consumeEach { request ->
-                val jobId = extractionRepo.createJob(request)
-                WorkerLauncher.enqueue(jobId)
-                observeJobProgress(jobId)
-            }
-        }
-    }
-
-    fun submitIngestion(request: IngestionRequest) {
-        viewModelScope.launch {
-            ingestionChannel.send(request)
-        }
-    }
-}
-```
-
----
-
-## Bottom Navigation (Implemented)
-
-| Tab | Route | Icon | Screen |
-|-----|-------|------|--------|
-| Notebooks | `notebooks` | Book | NotebooksScreen |
-| Think | `stacks` | AutoAwesome | StackListScreen → StackScreen |
-| Settings | `settings` | Settings | SettingsScreen |
-| Chat | `chat` | AutoMirrored.Chat | ChatScreen (via FAB) |
-
-**Navigation Behavior:**
-- Chat FAB shows on Stacks, Notebooks, and Settings tabs
-- FAB positioned with 80dp bottom margin on Stacks/Notebooks screens to avoid overlapping other FABs
-- FAB hides when user is in Chat screen
-- FAB reappears after exiting Chat (via X button or tab click)
-- Clicking a tab while in Chat triggers `popBackStack()` to close chat
-- Consistent navigation flow between tabs and Chat screen
-
-### Tab Implementation Status
-
-| Tab | ViewModel | UI Status | Backend Status |
-|-----|-----------|-----------|----------------|
-| Chat | ChatViewModel | ✅ Functional | ✅ RAG via InferenceBridge, structured MessageParts (via FAB) |
-| Notebooks | — | ✅ Functional | — |
-| Think | StackEditorViewModel | ✅ Functional | ✅ Room persistence + auto-processing |
-| Settings | SettingsViewModel | ✅ Functional | ✅ Model download, inference status |
-
-**Note:** MainScreen shows 3 tabs (Notebooks, Think, Settings) in bottom nav. Chat is accessible via FAB in bottom-right corner.
-
-### Module Dependencies
-
-```
-app ──> all core modules, all feature modules
-core:processing ──> core:ai, core:data
-core:ai ──> core:data              ← InferenceBridge is the core AI dependency
-core:media ──> (empty shell, no source files)
-feature:chat ──> core:ai, core:data, core:processing, core:ui, feature:stacks
-feature:stacks ──> core:ai, core:data, core:processing, core:ui
-feature:process ──> core:processing, core:ai, core:data, core:ui
-feature:inference ──> core:ai, core:data, core:ui
-feature:settings ──> core:ai, core:data, core:ui
-```
-
-**Key Architectural Principle**: `InferenceBridge` in `core:ai` is the central dependency. All AI-powered features flow through this interface to the Gemma 4 E2B-IT model via LiteRT-LM. `ModelStatus` enum is defined in `core:ai` and imported by features that need to check model state.
+| Module | Plugins |
+|--------|---------|
+| app | android-application, kotlin-android, kotlin-compose, ksp, secrets |
+| core:ai | android-library, kotlin-android |
+| core:data | android-library, kotlin-android, ksp |
+| core:media | android-library, kotlin-android |
+| core:processing | android-library, kotlin-android, ksp |
+| core:ui | android-library, kotlin-android, kotlin-compose |
+| feature:chat | android-library, kotlin-android, kotlin-compose |
+| feature:process | android-library, kotlin-android, kotlin-compose |
+| feature:inference | android-library, kotlin-android, kotlin-compose |
+| feature:stacks | android-library, kotlin-android, kotlin-compose |
+| feature:settings | android-library, kotlin-android, kotlin-compose |
 
 ---
 
@@ -1302,17 +1189,17 @@ feature:settings ──> core:ai, core:data, core:ui
 
 | Resource | Strategy |
 |----------|----------|
-| Embedding cache | LRU with max 10,000 chunks in memory |
-| Bitmap | `recycle()` in finally block |
-| Room pagination | `chunkDao.getAllPaged(offset, limit)` |
-| Engine | `close()` on release, conversation cleanup |
+| Embedding cache | LRU (LinkedHashMap) with max 10,000 chunks |
+| Bitmap | compress to JPEG stream, no explicit recycle |
+| Room pagination | chunkDao.getAllPaged(offset, limit) |
+| Engine | close() on release, unload, or model switch |
 
 ---
 
 ## Thread Safety Checklist
 
 - [x] Every Room call in `withContext(Dispatchers.IO)`
-- [x] Every ONNX/embedding in `withContext(Dispatchers.Default)`
+- [x] Every embedding in Default dispatcher
 - [x] StateFlow updates via `.update {}` (lock-free)
 - [x] CoroutineWorker, not Worker
 - [x] No `runBlocking` anywhere
@@ -1327,7 +1214,7 @@ feature:settings ──> core:ai, core:data, core:ui
 | [MIGRATION.md](./MIGRATION.md) | v1.x → v2.x migration guide |
 | [CHANGELOG.md](./CHANGELOG.md) | Version history |
 | [DEVELOPMENT.md](./DEVELOPMENT.md) | Development guidelines |
-| [testingground/ARCHITECTURE.md](./testingground/ARCHITECTURE.md) | Detailed planning docs |
+| [REFACTOR0001.md](./REFACTOR0001.md) | Architecture doc sync changelog |
 
 ---
 
@@ -1339,17 +1226,17 @@ feature:settings ──> core:ai, core:data, core:ui
 | **LRU** | Least Recently Used — cache eviction strategy |
 | **Embedding** | Vector representation of text for semantic similarity |
 | **Chunk** | Parsed text segment from a document with position metadata |
-| **Hilt** | Google's dependency injection framework for Android |
+| **Manual DI** | Dependency injection via Application singleton lazies (no framework) |
 
 ---
 
-*Last updated: Documentation synced — tab structure (2 tabs + Chat FAB), navigation refactor to popBackStack(), StackEditorViewModel block update fix (May 2026)*
+*Last updated: 2026-05-12 — Full documentation sync with actual codebase (REFACTOR0001). Corrected versions, tab structure, file listings, removal of fabricated Hilt annotations, and duplicate sections.*
 
 ---
 
 ## Legacy v1.x Architecture
 
-> The following describes the current production architecture (v1.x single-Activity with Views).
+> The following describes the legacy production architecture (v1.x single-Activity with Views).
 
 ### High-Level Overview
 

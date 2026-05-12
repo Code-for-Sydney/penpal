@@ -4,6 +4,29 @@ All notable changes to the Penpal project.
 
 ## [Unreleased]
 
+### Architecture Documentation Sync — REFACTOR0001 (May 2026)
+
+**`docs/ARCHITECTURE.md`** — Major synchronization with actual codebase:
+- Fixed 46+ discrepancies between documented architecture and ground-truth code
+- Corrected version catalog: Kotlin 2.0.21, Hilt 2.51.1, Room 2.6.1 (was: Kotlin 2.1.0, Hilt 2.54, Room 2.7.0)
+- Fixed tab structure: 3 bottom nav tabs (Notebooks, Think, Settings) + Chat FAB — was self-contradictory with 3 different descriptions
+- Removed fabricated Hilt annotations (`@HiltViewModel`, `@Inject`, `@HiltWorker`, `@Qualifier`, `DispatcherModule`) — none exist in codebase
+- Updated InferenceBridge interface to match actual code (new StateFlows, Flow-based methods, audio inference)
+- Fixed core:data listing: 22 files, 10 entities, 9 DAOs, DB v9 (was: 3 files, 7 entities, 6 DAOs, v3)
+- Fixed core:media listing: 8 files (was: "empty shell, no source files")
+- Fixed core:ui listing: 5 files (was: just Theme.kt)
+- Fixed core:ai file tree: 27 files in subdirectories (was: flat 26 with wrong/missing entries)
+- Fixed feature:stacks listing: 9 files including StackListScreen, StackListViewModel, StackPicker
+- Added feature:stacks → core:media dependency
+- Removed duplicate Module Dependencies section
+- Updated ExtractionWorker to match manual DI pattern
+- Updated PenpalDatabase schema: 10 entities, v9, exportSchema=false
+
+**`docs/REFACTOR0001.md`** — Created:
+- Documents all 18 categories of discrepancies found
+- Lists all removals, updates, and additions made to ARCHITECTURE.md
+- Confirms zero code changes — documentation-only sync
+
 ### UI Polish & Chat Improvements (May 2026)
 
 #### Chat FAB Positioning Fix ✅

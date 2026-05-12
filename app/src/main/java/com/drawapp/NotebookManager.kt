@@ -1,5 +1,4 @@
 package com.drawapp
-
 import android.content.Context
 import android.content.SharedPreferences
 import android.graphics.Color
@@ -7,6 +6,7 @@ import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import java.io.File
 
+@Deprecated("Legacy v1.x code. Will be removed in future release.", level = DeprecationLevel.WARNING)
 object NotebookManager {
     private const val PREFS_NAME = "NotebookPrefs"
     private const val KEY_NOTEBOOKS = "notebooks"

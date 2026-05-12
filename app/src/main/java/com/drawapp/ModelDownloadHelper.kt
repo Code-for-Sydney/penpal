@@ -12,7 +12,7 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
-import com.penpal.core.ai.ModelManager
+import com.penpal.core.ai.model.ModelManager
 import kotlinx.coroutines.*
 import java.io.File
 

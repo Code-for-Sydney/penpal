@@ -19,7 +19,7 @@ import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.drawapp.DrawingView
 import com.google.android.material.floatingactionbutton.FloatingActionButton
-import com.penpal.core.ai.ModelManager
+import com.penpal.core.ai.model.ModelManager
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import org.json.JSONArray
