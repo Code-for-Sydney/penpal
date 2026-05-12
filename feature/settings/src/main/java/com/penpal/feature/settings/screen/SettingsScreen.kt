@@ -12,6 +12,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.penpal.core.ai.model.ModelManager
@@ -49,6 +50,7 @@ fun SettingsScreen(
     modifier: Modifier = Modifier
 ) {
     val scrollState = rememberScrollState()
+    val uriHandler = LocalUriHandler.current
 
     // Token input for HuggingFace download
     var hfToken by remember { mutableStateOf("") }
@@ -508,7 +510,7 @@ fun SettingsScreen(
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     TextButton(
-                        onClick = { /* Open HF tokens page */ }
+                        onClick = { uriHandler.openUri("https://huggingface.co/settings/tokens") }
                     ) {
                         Text("Get token at huggingface.co")
                     }

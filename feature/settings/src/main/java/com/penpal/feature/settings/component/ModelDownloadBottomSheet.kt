@@ -8,6 +8,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 
@@ -36,6 +37,7 @@ fun ModelDownloadBottomSheet(
 ) {
     var selectedSource by remember { mutableStateOf(DownloadSource.HUGGINGFACE) }
     var token by remember { mutableStateOf("") }
+    val uriHandler = LocalUriHandler.current
 
     val animatedProgress by animateFloatAsState(
         targetValue = downloadProgress,
@@ -123,7 +125,13 @@ fun ModelDownloadBottomSheet(
                 Spacer(modifier = Modifier.height(8.dp))
 
                 TextButton(
-                    onClick = { /* Open token page */ }
+                    onClick = {
+                        val url = when (selectedSource) {
+                            DownloadSource.HUGGINGFACE -> "https://huggingface.co/settings/tokens"
+                            DownloadSource.KAGGLE -> "https://www.kaggle.com/settings"
+                        }
+                        uriHandler.openUri(url)
+                    }
                 ) {
                     Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(4.dp))
