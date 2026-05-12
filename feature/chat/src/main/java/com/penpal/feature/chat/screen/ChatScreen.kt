@@ -32,12 +32,10 @@ import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Book
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.History
@@ -739,22 +737,11 @@ private fun MessageBubble(
 ) {
     val isUser = message.role == MessageRole.USER
     val isAssistant = !isUser
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
     val dateFormat = remember { SimpleDateFormat("MMM d, h:mm a", Locale.getDefault()) }
 
-    var showMenu by remember { mutableStateOf(false) }
+    var showRaw by remember { mutableStateOf(false) }
     var showTimestamp by remember { mutableStateOf(false) }
-    var showRawMessage by remember { mutableStateOf(false) }
     var offsetX by remember { mutableFloatStateOf(0f) }
-
-    val contentText = remember(message) {
-        if (isUser || message.parts.isEmpty()) {
-            message.content
-        } else {
-            message.parts.filterIsInstance<MessagePart.TextPart>().joinToString("\n") { it.text }
-        }
-    }
 
     Row(
         modifier = modifier
@@ -762,7 +749,7 @@ private fun MessageBubble(
                 detectHorizontalDragGestures(
                     onDragEnd = {
                         if (offsetX < -120f) {
-                            showMenu = true
+                            showRaw = !showRaw
                         } else if (offsetX > 120f) {
                             showTimestamp = !showTimestamp
                         }
@@ -794,7 +781,19 @@ private fun MessageBubble(
                     .padding(12.dp)
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    if (isUser) {
+                    if (showRaw) {
+                        SelectionContainer {
+                            Text(
+                                text = message.content,
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                    color = if (isUser) MaterialTheme.colorScheme.onPrimary
+                                    else MaterialTheme.colorScheme.onSurfaceVariant
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    } else if (isUser) {
                         SelectionContainer {
                             Text(
                                 text = message.content,
@@ -861,54 +860,6 @@ private fun MessageBubble(
                         )
                     }
                 }
-
-                Box {
-                    DropdownMenu(
-                        expanded = showMenu,
-                        onDismissRequest = { showMenu = false }
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("Copy") },
-                            onClick = {
-                                clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(contentText))
-                                showMenu = false
-                            },
-                            leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Show all message") },
-                            onClick = {
-                                showRawMessage = true
-                                showMenu = false
-                            },
-                            leadingIcon = { Icon(Icons.Default.Info, contentDescription = null) }
-                        )
-                        if (isAssistant) {
-                            DropdownMenuItem(
-                                text = { Text("Share") },
-                                onClick = {
-                                    val shareIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
-                                        type = "text/plain"
-                                        putExtra(android.content.Intent.EXTRA_TEXT, contentText)
-                                    }
-                                    context.startActivity(android.content.Intent.createChooser(shareIntent, "Share message"))
-                                    showMenu = false
-                                },
-                                leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) }
-                            )
-                            if (onStartSubChat != null) {
-                                DropdownMenuItem(
-                                    text = { Text("Start sub-chat") },
-                                    onClick = {
-                                        onStartSubChat(message.content)
-                                        showMenu = false
-                                    },
-                                    leadingIcon = { Icon(Icons.Default.Menu, contentDescription = null) }
-                                )
-                            }
-                        }
-                    }
-                }
             }
 
             if (showTimestamp) {
@@ -917,13 +868,6 @@ private fun MessageBubble(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                     modifier = Modifier.padding(top = 2.dp, start = 8.dp)
-                )
-            }
-
-            if (showRawMessage) {
-                RawMessageDialog(
-                    content = message.content,
-                    onDismiss = { showRawMessage = false }
                 )
             }
         }
@@ -1370,31 +1314,3 @@ private fun SpeechInputDialog(
     )
 }
 
-@Composable
-private fun RawMessageDialog(
-    content: String,
-    onDismiss: () -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Full Message") },
-        text = {
-            SelectionContainer {
-                Text(
-                    text = content,
-                    style = MaterialTheme.typography.bodySmall.copy(
-                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                    ),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .verticalScroll(rememberScrollState())
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Close")
-            }
-        }
-    )
-}
