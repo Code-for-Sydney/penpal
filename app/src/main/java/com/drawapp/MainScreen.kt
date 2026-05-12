@@ -222,6 +222,7 @@ val modelPath = com.penpal.core.ai.model.ModelManager.findExistingModel(app)
                             navController.navigate(ChatRoutes.chatWithStackRoute(stackId))
                         },
                         stackPickerViewModel = stackListViewModel,
+                        onShareMessage = { messageId -> viewModel.onEvent(ChatEvent.ShareMessage(messageId)) },
                         isModelReady = isModelReady,
                         isModelLoading =
                                 modelStatus == ModelStatus.DOWNLOADING ||
@@ -257,6 +258,7 @@ val modelPath = com.penpal.core.ai.model.ModelManager.findExistingModel(app)
                             navController.navigate(ChatRoutes.chatWithStackRoute(navStackId))
                         },
                         stackPickerViewModel = stackListViewModel,
+                        onShareMessage = { messageId -> viewModel.onEvent(ChatEvent.ShareMessage(messageId)) },
                         isModelReady = isModelReady,
                         isModelLoading =
                                 modelStatus == ModelStatus.DOWNLOADING ||

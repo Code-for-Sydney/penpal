@@ -120,6 +120,8 @@ sealed class ChatEvent {
     data object ToggleTools : ChatEvent()
     data object ToggleThinking : ChatEvent()
     data class ToggleTool(val toolName: String) : ChatEvent()
+    // Message actions
+    data class ShareMessage(val messageId: String) : ChatEvent()
 }
 
 class ChatViewModel(
@@ -254,6 +256,8 @@ class ChatViewModel(
                             }
                         }
 
+                        logLastAssistantReply()
+
                         if (cause == null && _uiState.value.error == null) {
                             val nextUserMessage = findNextPendingUserMessage()
                             if (nextUserMessage != null) {
@@ -326,6 +330,7 @@ class ChatViewModel(
                     .edit().putBoolean("thinking_enabled", newState).apply()
             }
             is ChatEvent.Cancel -> cancelInference()
+            is ChatEvent.ShareMessage -> shareMessage(event.messageId)
         }
     }
 
@@ -338,6 +343,32 @@ class ChatViewModel(
                 pendingRetryError = null
             )
         }
+    }
+
+    private fun shareMessage(messageId: String) {
+        val message = _uiState.value.messages.find { it.id == messageId } ?: return
+        val shareText = buildString {
+            append("${message.role.name}: ${message.content}")
+            if (message.parts.isNotEmpty()) {
+                message.parts.forEach { part ->
+                    when (part) {
+                        is MessagePart.TextPart -> append("\n${part.text}")
+                        is MessagePart.ReasoningPart -> append("\n[Thinking: ${part.text}]")
+                        is MessagePart.ToolCallPart -> append("\n[Tool: ${part.name}]")
+                        is MessagePart.ToolResponsePart -> append("\n[Tool Result: ${part.output}]")
+                        else -> {}
+                    }
+                }
+            }
+        }
+        val sendIntent = android.content.Intent().apply {
+            action = android.content.Intent.ACTION_SEND
+            type = "text/plain"
+            putExtra(android.content.Intent.EXTRA_TEXT, shareText)
+        }
+        val shareIntent = android.content.Intent.createChooser(sendIntent, "Share message")
+        shareIntent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        application.startActivity(shareIntent)
     }
 
     private fun loadConversations() {
@@ -752,10 +783,12 @@ class ChatViewModel(
                         val finalParts = lastMessage?.parts ?: emptyList()
                         val finalContent = lastMessage?.content
 
-                        // Execute any tool calls that were made during inference
+                        // Execute tool calls and continue inference if needed
                         val toolCalls = finalParts.filterIsInstance<MessagePart.ToolCallPart>()
                         if (toolCalls.isNotEmpty() && toolRegistry != null) {
-                            executeToolCallsAfterInference(toolCalls)
+                            // Execute tools and continue inference loop
+                            continueWithToolResults(toolCalls, currentInput, allChunks, sourceIds)
+                            return@onCompletion
                         }
 
                         _uiState.update { it.copy(isLoading = false, retrievedContext = emptyList()) }
@@ -778,6 +811,8 @@ class ChatViewModel(
                                 }
                             }
                         }
+
+                        logLastAssistantReply()
 
                         // Generate title after first successful exchange
                         if (_uiState.value.needsTitleGeneration) {
@@ -953,6 +988,214 @@ class ChatViewModel(
         }
     }
 
+    private fun continueWithToolResults(
+        toolCalls: List<MessagePart.ToolCallPart>,
+        userMessage: String,
+        context: List<ChunkEntity>,
+        sourceIds: List<String>
+    ) {
+        viewModelScope.launch {
+            val registry = toolRegistry ?: return@launch
+
+            val conversationHistory = _uiState.value.messages.map { msg ->
+                ChatMessageInfo(
+                    id = msg.id,
+                    role = if (msg.role == MessageRole.USER) MessageRole.USER else MessageRole.ASSISTANT,
+                    content = msg.content,
+                    timestamp = msg.timestamp
+                )
+            }
+
+            val attachedStackIds = _uiState.value.attachedStacks.map { it.stackId }
+
+            val toolResponsesJson = StringBuilder()
+            var iteration = 0
+            val maxIterations = 3
+
+            while (iteration < maxIterations) {
+                iteration++
+                android.util.Log.d("ChatViewModel", "=== Tool Loop Iteration $iteration ===")
+
+                for (toolCall in toolCalls) {
+                    val toolContext = ToolExecutionContext(
+                        toolCallId = toolCall.callId,
+                        arguments = toolCall.arguments,
+                        conversationHistory = conversationHistory,
+                        attachedStackIds = attachedStackIds
+                    )
+
+                    val result = registry.execute(toolCall.name, toolContext)
+
+                    val toolResponseText = when (result) {
+                        is ToolResult.Success -> result.output
+                        is ToolResult.Error -> "Error: ${result.message}"
+                        is ToolResult.StreamOutput -> {
+                            val outputBuilder = StringBuilder()
+                            result.chunks.collect { chunk ->
+                                outputBuilder.append(chunk)
+                            }
+                            outputBuilder.toString()
+                        }
+                    }
+
+                    val toolResponseJson = """
+                    {
+                        "call_id": "${toolCall.callId}",
+                        "name": "${toolCall.name}",
+                        "output": ${gson.toJson(toolResponseText)}
+                    }
+                    """.trimIndent()
+
+                    toolResponsesJson.appendLine(toolResponseJson)
+
+                    val responsePart = MessagePart.ToolResponsePart(
+                        name = toolCall.name,
+                        callId = toolCall.callId,
+                        output = toolResponseText,
+                        isError = result is ToolResult.Error
+                    )
+
+                    _uiState.update { state ->
+                        val messages = state.messages.toMutableList()
+                        if (messages.isNotEmpty() && messages.last().role == MessageRole.ASSISTANT) {
+                            val lastMsg = messages.last()
+                            val updatedParts = lastMsg.parts + responsePart
+                            val updatedContent = lastMsg.content + "\n\n[Tool: ${toolCall.name}]\n" + toolResponseText
+                            messages[messages.lastIndex] = lastMsg.copy(parts = updatedParts, content = updatedContent)
+                        }
+                        state.copy(messages = messages)
+                    }
+                }
+
+                // Build continuation prompt with tool results
+                val continuationPrompt = buildToolContinuationPrompt(
+                    userMessage,
+                    toolResponsesJson.toString()
+                )
+
+                // Continue inference with tool results
+                val hasMoreToolCalls = runInferenceWithToolResponse(continuationPrompt, context, sourceIds)
+
+                if (!hasMoreToolCalls) {
+                    break
+                }
+
+                // Check for new tool calls in the latest message
+                val latestMessage = _uiState.value.messages.lastOrNull { it.role == MessageRole.ASSISTANT }
+                val newToolCalls = latestMessage?.parts?.filterIsInstance<MessagePart.ToolCallPart>() ?: emptyList()
+
+                if (newToolCalls.isEmpty()) {
+                    break
+                }
+            }
+
+            // Done with tool loop - finish up
+            _uiState.update { it.copy(isLoading = false, retrievedContext = emptyList()) }
+
+            // Save final message
+            val finalMessage = _uiState.value.messages.lastOrNull { it.role == MessageRole.ASSISTANT }
+            if (finalMessage?.content?.isNotBlank() == true) {
+                val conversationId = _uiState.value.currentConversationId
+                if (conversationId != null) {
+                    viewModelScope.launch {
+                        chatMessageDao?.insert(
+                            ChatMessageEntity(
+                                id = pendingAssistantMessageId ?: UUID.randomUUID().toString(),
+                                conversationId = conversationId,
+                                role = "ASSISTANT",
+                                content = finalMessage.content,
+                                sourcesJson = gson.toJson(sourceIds),
+                                createdAt = System.currentTimeMillis()
+                            )
+                        )
+                    }
+                }
+            }
+
+            // Generate title if needed
+            if (_uiState.value.needsTitleGeneration) {
+                generateConversationTitle()
+                _uiState.update { it.copy(needsTitleGeneration = false) }
+            }
+
+            // Continue with queued messages
+            val nextUserMessage = findNextPendingUserMessage()
+            if (nextUserMessage != null) {
+                startTurnForUserMessage(nextUserMessage)
+            }
+        }
+    }
+
+    private suspend fun runInferenceWithToolResponse(
+        continuationPrompt: String,
+        context: List<ChunkEntity>,
+        sourceIds: List<String>
+    ): Boolean {
+        var hasToolCalls = false
+
+        try {
+            inferenceBridge.runInferenceFlowParts(continuationPrompt)
+                .catch { error ->
+                    android.util.Log.e("ChatViewModel", "Tool continuation inference error: ${error.message}")
+                }
+                .collect { parts ->
+                    updateLastAssistantMessage(parts, sourceIds)
+                }
+
+            // Check if the response has new tool calls
+            val lastMessage = _uiState.value.messages.lastOrNull { it.role == MessageRole.ASSISTANT }
+            hasToolCalls = lastMessage?.parts?.any { it is MessagePart.ToolCallPart } == true
+
+        } catch (e: Exception) {
+            android.util.Log.e("ChatViewModel", "Error in tool continuation: ${e.message}")
+        }
+
+        return hasToolCalls
+    }
+
+    private fun buildToolContinuationPrompt(
+        userMessage: String,
+        toolResponsesJson: String
+    ): String {
+        // Get the last assistant message (which contained the tool call)
+        val lastAssistantMsg = _uiState.value.messages
+            .filter { it.role == MessageRole.ASSISTANT }
+            .lastOrNull { it.parts.any { part -> part is MessagePart.ToolCallPart } }
+
+        val assistantContent = lastAssistantMsg?.content ?: ""
+
+        return buildString {
+            // System
+            appendLine("<|turn>system")
+            appendLine("You are a helpful assistant.")
+            appendLine("<turn|>")
+
+            // Previous turns (excluding the last assistant message with tool call)
+            val historyBeforeTool = _uiState.value.messages
+                .dropLastWhile { it.role == MessageRole.ASSISTANT && it.parts.any { p -> p is MessagePart.ToolCallPart } }
+            
+            historyBeforeTool.forEach { msg ->
+                val role = if (msg.role == MessageRole.USER) "user" else "model"
+                appendLine("<|turn>$role")
+                appendLine(msg.content)
+                appendLine("<turn|>")
+            }
+
+            // Assistant's tool call
+            appendLine("<|turn>model")
+            appendLine(assistantContent)
+            appendLine("<turn|>")
+
+            // Tool response
+            appendLine("<|tool_response|>")
+            appendLine(toolResponsesJson)
+            appendLine("<tool_response|>")
+
+            // Continue generation
+            append("<|turn>model")
+        }
+    }
+
     private fun updateLastAssistantMessage(parts: List<MessagePart>, sources: List<String>) {
         // Build content string from text parts for backward compatibility
         val content = buildString {
@@ -978,6 +1221,18 @@ class ChatViewModel(
                 )
             }
             state.copy(messages = messages)
+        }
+    }
+
+    private fun logLastAssistantReply() {
+        val lastAssistant = _uiState.value.messages.lastOrNull { it.role == MessageRole.ASSISTANT && it.content.isNotBlank() }
+        if (lastAssistant != null) {
+            Log.d(
+                "ChatViewModel",
+                "Last assistant reply: ${lastAssistant.content.take(400).replace("\n", " ").trim()}"
+            )
+        } else {
+            Log.d("ChatViewModel", "No assistant reply available yet")
         }
     }
 
@@ -1251,7 +1506,8 @@ class ChatViewModel(
 
                         val toolCalls = finalParts.filterIsInstance<MessagePart.ToolCallPart>()
                         if (toolCalls.isNotEmpty() && toolRegistry != null) {
-                            executeToolCallsAfterInference(toolCalls)
+                            continueWithToolResults(toolCalls, userMessage.content, allChunks, sourceIds)
+                            return@onCompletion
                         }
 
                         _uiState.update { it.copy(isLoading = false, retrievedContext = emptyList()) }

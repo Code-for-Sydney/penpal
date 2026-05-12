@@ -222,7 +222,7 @@ fun StackListScreen(
         Snackbar(
             modifier = Modifier.padding(16.dp),
             action = {
-                TextButton(onClick = { /* TODO: clear error */ }) {
+                TextButton(onClick = { viewModel.clearError() }) {
                     Text("Dismiss")
                 }
             }

@@ -1341,8 +1341,39 @@ class StackEditorViewModel(
     private fun loadDocument() {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true) }
-            // TODO: Load from Room database
-            _uiState.update { it.copy(isLoading = false) }
+            try {
+                val docId = _uiState.value.document.id
+                if (docId.isNotBlank()) {
+                    val entity = stackDao?.getStack(docId)
+                    if (entity != null) {
+                        val blocks = deserializeBlocks(entity.blocksJson)
+                        val document = StackDocument(
+                            id = entity.id,
+                            title = entity.title,
+                            blocks = blocks,
+                            createdAt = entity.createdAt,
+                            updatedAt = entity.updatedAt
+                        )
+                        loadDocument(document)
+                    } else {
+                        _uiState.update {
+                            it.copy(
+                                isLoading = false,
+                                error = "Document not found in database"
+                            )
+                        }
+                    }
+                } else {
+                    _uiState.update { it.copy(isLoading = false) }
+                }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        error = e.message ?: "Failed to load document"
+                    )
+                }
+            }
         }
     }
 

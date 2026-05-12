@@ -39,6 +39,7 @@ fun DrawingCanvas(
 ) {
     // Drawing state
     var paths by remember { mutableStateOf<List<DrawingPath>>(emptyList()) }
+    var undonePaths by remember { mutableStateOf<List<DrawingPath>>(emptyList()) }
     var currentPath by remember { mutableStateOf<DrawingPath?>(null) }
     var selectedColor by remember { mutableStateOf(strokeColor) }
     var selectedWidth by remember { mutableFloatStateOf(strokeWidth) }
@@ -82,6 +83,7 @@ fun DrawingCanvas(
                         onDragEnd = {
                             currentPath?.let { completed ->
                                 paths = paths + completed
+                                undonePaths = emptyList() // Clear redo history on new path
                             }
                             currentPath = null
                         }
@@ -123,6 +125,8 @@ fun DrawingCanvas(
                     IconButton(
                         onClick = {
                             if (paths.isNotEmpty()) {
+                                val lastPath = paths.last()
+                                undonePaths = undonePaths + lastPath
                                 paths = paths.dropLast(1)
                                 onPathDataChanged(serializePaths(paths))
                             }
@@ -137,9 +141,17 @@ fun DrawingCanvas(
                         )
                     }
 
-                    // Redo (placeholder - could track undone paths)
+                    // Redo
                     IconButton(
-                        onClick = { /* TODO: redo */ },
+                        onClick = {
+                            if (undonePaths.isNotEmpty()) {
+                                val pathToRedo = undonePaths.last()
+                                undonePaths = undonePaths.dropLast(1)
+                                paths = paths + pathToRedo
+                                onPathDataChanged(serializePaths(paths))
+                            }
+                        },
+                        enabled = undonePaths.isNotEmpty(),
                         modifier = Modifier.size(36.dp)
                     ) {
                         Icon(
@@ -172,6 +184,7 @@ fun DrawingCanvas(
                     IconButton(
                         onClick = {
                             paths = emptyList()
+                            undonePaths = emptyList()
                             onPathDataChanged("")
                         },
                         enabled = paths.isNotEmpty(),

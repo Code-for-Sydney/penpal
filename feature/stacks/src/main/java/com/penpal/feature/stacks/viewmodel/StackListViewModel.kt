@@ -184,6 +184,13 @@ class StackListViewModel(
     }
 
     /**
+     * Clears the current error message
+     */
+    fun clearError() {
+        _uiState.update { it.copy(error = null) }
+    }
+
+    /**
      * Exits selection mode
      */
     fun exitSelectionMode() {

@@ -90,18 +90,52 @@ class VectorStoreRepositoryImpl(
 
 class MiniLmEmbedder : TextEmbedder {
     override val dimension: Int = 384
-    private val mockEmbeddings = mutableMapOf<String, FloatArray>()
-    private var callCount = 0
+    private val embeddingCache = LinkedHashMap<String, FloatArray>(1000, 0.75f, true)
 
     override suspend fun embed(text: String): FloatArray {
-        callCount++
-        if (callCount % 100 == 0) mockEmbeddings.clear()
-        return mockEmbeddings.getOrPut(text) {
-            text.hashCode().let { hash ->
-                FloatArray(dimension) { i ->
-                    (((hash xor (i * 31)) and 0xFFFF).toFloat() / 0xFFFF.toFloat()) * 2f - 1f
-                }
+        return embeddingCache.getOrPut(text) { generateEmbedding(text) }
+    }
+
+    private fun generateEmbedding(text: String): FloatArray {
+        val embedding = FloatArray(dimension)
+        if (text.isEmpty()) return embedding
+
+        val cleaned = text.lowercase().trim()
+        val words = cleaned.split(Regex("\\s+"))
+
+        // Build a simple bag-of-words with position-aware hashing
+        for ((wordIdx, word) in words.withIndex()) {
+            val posInDoc = wordIdx.toFloat() / words.size.coerceAtLeast(1)
+            val wordHash = word.hashCode()
+
+            for (i in 0 until 4) { // Distribute each word across 4 dimensions
+                val dim = ((wordHash * 31 + i * 7919) and Int.MAX_VALUE) % dimension
+                val value = kotlin.math.sin(wordHash.toDouble() + i * 2.0).toFloat()
+                embedding[dim] += value * (1f - posInDoc * 0.3f)
             }
         }
+
+        // Add character n-gram features for subword information
+        for (ngramSize in 2..4) {
+            for (i in 0..cleaned.length - ngramSize) {
+                val ngram = cleaned.substring(i, i + ngramSize)
+                val ngramHash = ngram.hashCode()
+                val dim = ((ngramHash * 7) and Int.MAX_VALUE) % dimension
+                embedding[dim] += 0.3f
+            }
+        }
+
+        // L2 normalize
+        val norm = kotlin.math.sqrt(embedding.sumOf { it * it.toDouble() }).toFloat()
+        if (norm > 1e-10f) {
+            for (i in embedding.indices) {
+                embedding[i] /= norm
+            }
+        }
+
+        return embedding
     }
+
+    override fun equals(other: Any?): Boolean = other is MiniLmEmbedder
+    override fun hashCode(): Int = javaClass.hashCode()
 }

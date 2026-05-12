@@ -43,6 +43,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 
@@ -98,6 +99,7 @@ fun ChatScreen(
     onNavigateToChatWithStack: (String) -> Unit = {},
     stackPickerViewModel: PickerViewModel? = null,
     onStartSubChat: ((String) -> Unit)? = null,
+    onShareMessage: ((String) -> Unit)? = null,
     // Shared model status from MainScreen
     isModelReady: Boolean = uiState.isModelReady,
     isModelLoading: Boolean = false,
@@ -292,7 +294,8 @@ fun ChatScreen(
                     MessageBubble(
                         message = message,
                         modifier = Modifier.fillMaxWidth(),
-                        onStartSubChat = onStartSubChat
+                        onStartSubChat = onStartSubChat,
+                        onShareMessage = onShareMessage
                     )
                 }
 
@@ -758,7 +761,8 @@ private fun ContextPanel(
 private fun MessageBubble(
     message: ChatMessage,
     modifier: Modifier = Modifier,
-    onStartSubChat: ((String) -> Unit)? = null
+    onStartSubChat: ((String) -> Unit)? = null,
+    onShareMessage: ((String) -> Unit)? = null
 ) {
     val isUser = message.role == MessageRole.USER
     val isAssistant = !isUser
@@ -894,6 +898,27 @@ private fun MessageBubble(
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                     modifier = Modifier.padding(top = 2.dp, start = 8.dp)
                 )
+            }
+
+            if (onShareMessage != null) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 4.dp),
+                    horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
+                ) {
+                    IconButton(
+                        onClick = { onShareMessage(message.id) },
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Share,
+                            contentDescription = "Share message",
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+                        )
+                    }
+                }
             }
         }
     }

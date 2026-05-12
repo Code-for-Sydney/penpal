@@ -37,6 +37,7 @@ dependencies {
     implementation(libs.gson)
     implementation(libs.jsoup)
     implementation(libs.mlkit.text.recognition)
+    implementation(libs.onnxruntime.android)
     implementation(project(":core:ai"))
     implementation(project(":core:data"))
 }
