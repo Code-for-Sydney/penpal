@@ -23,12 +23,54 @@ class ToolRegistry {
 
     fun getToolSchemas(): List<ToolSchema> = tools.values.map { it.schema }
 
+    fun getToolSchemas(enabledTools: Set<String>): List<ToolSchema> =
+        tools.values.filter { it.name in enabledTools }.map { it.schema }
+
     /**
      * Returns tool declarations in Gemma 4 format:
      * <|tool>declaration:tool_name{description:<|"|>...<|"|>,parameters:...}<tool|>
      */
     fun getGemmaToolDeclarations(): String = buildString {
         tools.values.forEach { tool ->
+            val schema = tool.schema
+            append("<|tool>declaration:")
+            append(schema.name)
+            append("{description:<|\"|>")
+            append(schema.description)
+            append("<|\"|>,parameters:{properties:{")
+            
+            schema.parameters.forEachIndexed { index, param ->
+                if (index > 0) append(",")
+                append(param.name)
+                append(":{description:<|\"|>")
+                append(param.description)
+                append("<|\"|>,type:<|\"|>")
+                append(param.type.uppercase())
+                append("<|\"|>")
+                param.default?.let {
+                    append(",default:<|\"|>")
+                    append(it.toString())
+                    append("<|\"|>")
+                }
+                append("}")
+            }
+            
+            append("},required:[")
+            val required = schema.parameters.filter { it.required }
+            required.forEachIndexed { index, param ->
+                if (index > 0) append(",")
+                append("<|\"|>")
+                append(param.name)
+                append("<|\"|>")
+            }
+            append("],type:<|\"|>OBJECT<|\"|>}")
+            append("}<tool|>")
+            appendLine()
+        }
+    }
+
+    fun getGemmaToolDeclarations(enabledTools: Set<String>): String = buildString {
+        tools.values.filter { it.name in enabledTools }.forEach { tool ->
             val schema = tool.schema
             append("<|tool>declaration:")
             append(schema.name)

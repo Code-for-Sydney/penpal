@@ -49,6 +49,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
@@ -110,6 +111,7 @@ fun ChatScreen(
     var showHistory by remember { mutableStateOf(false) }
     var showStackPicker by remember { mutableStateOf(false) }
     var showSpeechInput by remember { mutableStateOf(false) }
+    var showToolPicker by remember { mutableStateOf(false) }
 
     // Over-drag panel for system prompt
     var isPanelExpanded by remember { mutableStateOf(false) }
@@ -129,6 +131,17 @@ fun ChatScreen(
     // Auto-scroll to bottom when new messages arrive
     LaunchedEffect(uiState.messages.size) {
         if (uiState.messages.isNotEmpty()) {
+            listState.animateScrollToItem(uiState.messages.size - 1)
+        }
+    }
+
+    // Track when text input is focused to scroll conversation up with keyboard
+    var isInputFocused by remember { mutableStateOf(false) }
+
+    // Auto-scroll to bottom when input gains focus (keyboard opens)
+    LaunchedEffect(isInputFocused) {
+        if (isInputFocused && uiState.messages.isNotEmpty()) {
+            kotlinx.coroutines.delay(150)
             listState.animateScrollToItem(uiState.messages.size - 1)
         }
     }
@@ -166,7 +179,6 @@ fun ChatScreen(
             modifier = modifier
                 .fillMaxSize()
                 .background(MaterialTheme.colorScheme.background)
-                .imePadding()
         ) {
             // Hidden panel (revealed by over-drag)
             if (panelHeight > 0) {
@@ -205,7 +217,7 @@ fun ChatScreen(
                 onToggleModel = onToggleModel,
                 toolsEnabled = uiState.toolsEnabled,
                 thinkingEnabled = uiState.thinkingEnabled,
-                onToggleTools = { onEvent(ChatEvent.ToggleTools) },
+                onOpenToolPicker = { showToolPicker = true },
                 onToggleThinking = { onEvent(ChatEvent.ToggleThinking) }
             )
 
@@ -316,6 +328,7 @@ fun ChatScreen(
                 onAttachStack = { showStackPicker = true },
                 onSpeechInput = { showSpeechInput = true },
                 isLoading = uiState.isLoading,
+                onFocusChange = { isInputFocused = it },
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(8.dp)
@@ -334,6 +347,18 @@ fun ChatScreen(
             },
             onDismiss = { showStackPicker = false },
             emptyMessage = "No stacks available. Create one in the Think tab."
+        )
+    }
+
+    // Tool picker dialog
+    if (showToolPicker) {
+        ToolPickerDialog(
+            toolsEnabled = uiState.toolsEnabled,
+            availableTools = uiState.availableTools,
+            enabledTools = uiState.enabledTools,
+            onToggleTools = { onEvent(ChatEvent.ToggleTools) },
+            onToggleTool = { toolName -> onEvent(ChatEvent.ToggleTool(toolName)) },
+            onDismiss = { showToolPicker = false }
         )
     }
 
@@ -367,7 +392,7 @@ private fun ChatTopBar(
     onToggleModel: (() -> Unit)? = null,
     toolsEnabled: Boolean = true,
     thinkingEnabled: Boolean = false,
-    onToggleTools: () -> Unit = {},
+    onOpenToolPicker: () -> Unit = {},
     onToggleThinking: () -> Unit = {},
 ) {
     TopAppBar(
@@ -382,7 +407,7 @@ private fun ChatTopBar(
         },
         actions = {
             // Tools toggle
-            IconButton(onClick = onToggleTools) {
+            IconButton(onClick = onOpenToolPicker) {
                 Icon(
                     imageVector = Icons.Default.Build,
                     contentDescription = if (toolsEnabled) "Tools enabled" else "Tools disabled",
@@ -1134,6 +1159,7 @@ private fun ChatInputArea(
     onAttachStack: () -> Unit,
     onSpeechInput: () -> Unit,
     isLoading: Boolean,
+    onFocusChange: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Row(
@@ -1175,30 +1201,34 @@ private fun ChatInputArea(
         OutlinedTextField(
             value = text,
             onValueChange = onTextChange,
-            modifier = Modifier.weight(1f),
+            modifier = Modifier
+                .weight(1f)
+                .onFocusChanged { onFocusChange(it.isFocused) },
             placeholder = { Text("Ask about your documents...") },
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-            keyboardActions = KeyboardActions(onSend = { if (!isLoading) onSend() }),
-            singleLine = true,
-            enabled = !isLoading
+            keyboardActions = KeyboardActions(onSend = { onSend() }),
+            singleLine = true
         )
 
-        if (isLoading) {
+        if (text.isNotBlank()) {
+            IconButton(onClick = onSend) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.Send,
+                    contentDescription = "Send",
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
+        } else if (isLoading) {
             CircularProgressIndicator(
                 modifier = Modifier.size(24.dp),
                 strokeWidth = 2.dp
             )
         } else {
-            IconButton(
-                onClick = onSend,
-                enabled = text.isNotBlank()
-            ) {
+            IconButton(onClick = onSend, enabled = false) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.Send,
                     contentDescription = "Send",
-                    tint = if (text.isNotBlank())
-                        MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurfaceVariant
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
@@ -1221,6 +1251,91 @@ private fun getMimeType(uri: Uri): String {
         path.endsWith(".mp3") || path.endsWith(".wav") || path.endsWith(".m4a") -> "audio/*"
         else -> "application/octet-stream"
     }
+}
+
+@Composable
+private fun ToolPickerDialog(
+    toolsEnabled: Boolean,
+    availableTools: List<com.penpal.feature.chat.viewmodel.ToolInfo>,
+    enabledTools: Map<String, Boolean>,
+    onToggleTools: () -> Unit,
+    onToggleTool: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Tools") },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                // Master toggle
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onToggleTools() },
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Enable Tools",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    Switch(
+                        checked = toolsEnabled,
+                        onCheckedChange = { onToggleTools() }
+                    )
+                }
+                
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                
+                if (availableTools.isEmpty()) {
+                    Text(
+                        text = "No tools available",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    availableTools.forEach { tool ->
+                        val isEnabled = enabledTools[tool.name] ?: true
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable(enabled = toolsEnabled) {
+                                    if (toolsEnabled) onToggleTool(tool.name)
+                                }
+                                .padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                                Text(
+                                    text = tool.name.replace("_", " ").replaceFirstChar { it.uppercase() },
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                                Text(
+                                    text = tool.description,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 2
+                                )
+                            }
+                            Switch(
+                                checked = isEnabled && toolsEnabled,
+                                onCheckedChange = { if (toolsEnabled) onToggleTool(tool.name) },
+                                enabled = toolsEnabled
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Done")
+            }
+        }
+    )
 }
 
 /**

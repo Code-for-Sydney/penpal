@@ -12,6 +12,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
@@ -119,6 +122,26 @@ val modelPath = com.penpal.core.ai.model.ModelManager.findExistingModel(app)
         }
     }
 
+    // Shared ChatViewModel factory for proper ViewModel scoping
+    val chatViewModelFactory = remember {
+        object : ViewModelProvider.Factory {
+            override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                @Suppress("UNCHECKED_CAST")
+                return ChatViewModel(
+                    vectorStore = app.vectorStore,
+                    inferenceBridge = app.inferenceBridge,
+                    application = app,
+                    chatMessageDao = database.chatMessageDao(),
+                    chatConversationDao = database.chatConversationDao(),
+                    stackDao = database.stackDao(),
+                    workerLauncher = app.workerLauncher,
+                    onLoadModel = { onToggleModel?.invoke() },
+                    toolRegistry = toolRegistry
+                ) as T
+            }
+        }
+    }
+
     Scaffold(
             bottomBar = {
                 NavigationBar {
@@ -188,19 +211,7 @@ val modelPath = com.penpal.core.ai.model.ModelManager.findExistingModel(app)
             // Chat Tab
             // ──────────────────────────────────────────────────────────────
             composable(Screen.Chat.route) {
-                val viewModel = remember {
-                    ChatViewModel(
-                            vectorStore = app.vectorStore,
-                            inferenceBridge = app.inferenceBridge,
-                            application = app,
-                            chatMessageDao = database.chatMessageDao(),
-                            chatConversationDao = database.chatConversationDao(),
-                            stackDao = database.stackDao(),
-                            workerLauncher = app.workerLauncher,
-                            onLoadModel = { onToggleModel?.invoke() },
-                            toolRegistry = toolRegistry
-                    )
-                }
+                val viewModel = viewModel<ChatViewModel>(factory = chatViewModelFactory)
                 val uiState by viewModel.uiState.collectAsState()
                 ChatScreen(
                         uiState = uiState,
@@ -229,19 +240,7 @@ val modelPath = com.penpal.core.ai.model.ModelManager.findExistingModel(app)
             // Chat with pre-attached stack
             composable(ChatRoutes.CHAT_WITH_STACK) { backStackEntry ->
                 val stackId = backStackEntry.arguments?.getString("stackId")
-                val viewModel = remember {
-                    ChatViewModel(
-                            vectorStore = app.vectorStore,
-                            inferenceBridge = app.inferenceBridge,
-                            application = app,
-                            chatMessageDao = database.chatMessageDao(),
-                            chatConversationDao = database.chatConversationDao(),
-                            stackDao = database.stackDao(),
-                            workerLauncher = app.workerLauncher,
-                            onLoadModel = { onToggleModel?.invoke() },
-                            toolRegistry = toolRegistry
-                    )
-                }
+                val viewModel = viewModel<ChatViewModel>(factory = chatViewModelFactory)
                 val uiState by viewModel.uiState.collectAsState()
 
                 // Auto-attach stack when entering this route

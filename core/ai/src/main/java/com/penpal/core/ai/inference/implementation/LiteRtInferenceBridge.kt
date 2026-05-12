@@ -356,6 +356,11 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
                     onDone("Model file not found: $modelPath")
                     return@launch
                 }
+                // Guard against reloading if already loaded with same model
+                if (_isReady.value && engine != null && currentModelPath == modelPath) {
+                    onDone("Model already loaded")
+                    return@launch
+                }
                 _modelStatus.value = ModelStatus.LOADING
                 val file = File(modelPath)
                 ModelManager.trackModel(context, ModelManager.ModelInfo(
@@ -397,7 +402,7 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
 
     @OptIn(ExperimentalApi::class)
     override fun runInference(input: String, resultListener: (partialResult: String, done: Boolean) -> Unit, cleanUpListener: () -> Unit, onError: (String) -> Unit) {
-        if (!_isReady.value || conversation == null) {
+        if (!_isReady.value || engine == null) {
             onError("Model not ready. Please load the model first.")
             return
         }
@@ -416,6 +421,7 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
             }
 
             try {
+                resetConversationForInference()
                 val conv = conversation!!
                 val content = Contents.of(Content.Text(input))
                 Log.d(TAG, "Sending message with ${input.length} chars")
@@ -469,7 +475,7 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
 
     @OptIn(ExperimentalApi::class)
     override fun runInferenceWithImage(input: String, image: Bitmap, resultListener: (partialResult: String, done: Boolean) -> Unit, cleanUpListener: () -> Unit, onError: (String) -> Unit) {
-        if (!_isReady.value || conversation == null) {
+        if (!_isReady.value || engine == null) {
             onError("Model not ready. Please load the model first.")
             return
         }
@@ -488,6 +494,7 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
             }
 
             try {
+                resetConversationForInference()
                 val stream = java.io.ByteArrayOutputStream()
                 image.compress(Bitmap.CompressFormat.JPEG, 85, stream)
                 val imageBytes = stream.toByteArray()
@@ -545,12 +552,13 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
 
     @OptIn(ExperimentalApi::class)
     override fun runInferenceFlow(input: String): Flow<String> = flow {
-        if (!_isReady.value || conversation == null) throw IllegalStateException("Model not ready. Please load the model first.")
+        if (!_isReady.value || engine == null) throw IllegalStateException("Model not ready. Please load the model first.")
         _isProcessing.value = true
         val filter = StreamingTokenFilter()
         var accumulated = ""
 
         try {
+            resetConversationForInference()
             val conv = conversation!!
             val content = Contents.of(Content.Text(input))
             Log.d(TAG, "Sending message via Flow with ${input.length} chars")
@@ -586,12 +594,13 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
 
     @OptIn(ExperimentalApi::class)
     override fun runInferenceWithImageFlow(input: String, image: Bitmap): Flow<String> = flow {
-        if (!_isReady.value || conversation == null) throw IllegalStateException("Model not ready. Please load the model first.")
+        if (!_isReady.value || engine == null) throw IllegalStateException("Model not ready. Please load the model first.")
         _isProcessing.value = true
         val filter = StreamingTokenFilter()
         var accumulated = ""
 
         try {
+            resetConversationForInference()
             val stream = java.io.ByteArrayOutputStream()
             image.compress(Bitmap.CompressFormat.JPEG, 85, stream)
             val imageBytes = stream.toByteArray()
@@ -632,13 +641,14 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
     @OptIn(ExperimentalApi::class)
     override fun runInferenceFlowParts(input: String): Flow<List<MessagePart>> = flow {
         Log.d(TAG, ">>> runInferenceFlowParts CALLED with input length: ${input.length}")
-        if (!_isReady.value || conversation == null) throw IllegalStateException("Model not ready. Please load the model first.")
+        if (!_isReady.value || engine == null) throw IllegalStateException("Model not ready. Please load the model first.")
 
         _isProcessing.value = true
         val filter = StreamingTokenFilter()
         val aggregator = MessagePartAggregator()
 
         try {
+            resetConversationForInference()
             val conv = conversation!!
             val content = Contents.of(Content.Text(input))
 
@@ -675,13 +685,14 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
 
     @OptIn(ExperimentalApi::class)
     override fun runInferenceWithImageFlowParts(input: String, image: Bitmap): Flow<List<MessagePart>> = flow {
-        if (!_isReady.value || conversation == null) throw IllegalStateException("Model not ready. Please load the model first.")
+        if (!_isReady.value || engine == null) throw IllegalStateException("Model not ready. Please load the model first.")
 
         _isProcessing.value = true
         val filter = StreamingTokenFilter()
         val aggregator = MessagePartAggregator()
 
         try {
+            resetConversationForInference()
             val stream = java.io.ByteArrayOutputStream()
             image.compress(Bitmap.CompressFormat.JPEG, 85, stream)
             val imageBytes = stream.toByteArray()
@@ -721,7 +732,7 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
 
     @OptIn(ExperimentalApi::class)
     override fun runInferenceWithAudio(input: String, audioData: FloatArray, resultListener: (partialResult: String, done: Boolean) -> Unit, cleanUpListener: () -> Unit, onError: (String) -> Unit) {
-        if (!_isReady.value || conversation == null) {
+        if (!_isReady.value || engine == null) {
             onError("Model not ready. Please load the model first.")
             return
         }
@@ -740,6 +751,7 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
             }
 
             try {
+                resetConversationForInference()
                 val conv = conversation!!
                 val audioBytes = floatArrayToLittleEndianBytes(audioData)
                 val content = Contents.of(Content.AudioBytes(audioBytes), Content.Text(input))
@@ -789,12 +801,13 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
 
     @OptIn(ExperimentalApi::class)
     override fun runInferenceWithAudioFlow(input: String, audioData: FloatArray): Flow<String> = flow {
-        if (!_isReady.value || conversation == null) throw IllegalStateException("Model not ready. Please load the model first.")
+        if (!_isReady.value || engine == null) throw IllegalStateException("Model not ready. Please load the model first.")
         _isProcessing.value = true
         val filter = StreamingTokenFilter()
         var accumulated = ""
 
         try {
+            resetConversationForInference()
             val conv = conversation!!
             val audioBytes = floatArrayToLittleEndianBytes(audioData)
             val content = Contents.of(Content.AudioBytes(audioBytes), Content.Text(input))
@@ -830,12 +843,13 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
 
     @OptIn(ExperimentalApi::class)
     override fun runInferenceWithAudioFlowParts(input: String, audioData: FloatArray): Flow<List<MessagePart>> = flow {
-        if (!_isReady.value || conversation == null) throw IllegalStateException("Model not ready. Please load the model first.")
+        if (!_isReady.value || engine == null) throw IllegalStateException("Model not ready. Please load the model first.")
         _isProcessing.value = true
         val filter = StreamingTokenFilter()
         val aggregator = MessagePartAggregator()
 
         try {
+            resetConversationForInference()
             val conv = conversation!!
             val audioBytes = floatArrayToLittleEndianBytes(audioData)
             val content = Contents.of(Content.AudioBytes(audioBytes), Content.Text(input))
@@ -878,6 +892,19 @@ class LiteRtInferenceBridge(private val context: Context) : InferenceBridge {
             )
             Log.d(TAG, "Conversation reset")
         }
+    }
+
+    /**
+     * Reset conversation for stateless inference.
+     * The prompt already contains full conversation history,
+     * so we clear the conversation state to avoid duplicate history.
+     */
+    private fun resetConversationForInference() {
+        val currentEngine = engine ?: throw IllegalStateException("Engine not initialized")
+        conversation?.close()
+        conversation = currentEngine.createConversation(
+            ConversationConfig(samplerConfig = SamplerConfig(topK = 64, topP = 0.95, temperature = 0.7))
+        )
     }
 
     override fun stopInference() {

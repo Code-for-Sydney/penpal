@@ -56,7 +56,15 @@ data class ChatUiState(
     val defaultSystemPrompt: String = "",
     // Feature toggles
     val toolsEnabled: Boolean = true,
-    val thinkingEnabled: Boolean = false
+    val thinkingEnabled: Boolean = false,
+    // Individual tool toggles
+    val availableTools: List<ToolInfo> = emptyList(),
+    val enabledTools: Map<String, Boolean> = emptyMap()
+)
+
+data class ToolInfo(
+    val name: String,
+    val description: String
 )
 
 data class ChatMessage(
@@ -111,6 +119,7 @@ sealed class ChatEvent {
     // Feature toggles
     data object ToggleTools : ChatEvent()
     data object ToggleThinking : ChatEvent()
+    data class ToggleTool(val toolName: String) : ChatEvent()
 }
 
 class ChatViewModel(
@@ -140,7 +149,26 @@ class ChatViewModel(
             val defaultSystemPrompt = prefs.getString("default_system_prompt", "") ?: ""
             val toolsEnabled = prefs.getBoolean("tools_enabled", true)
             val thinkingEnabled = prefs.getBoolean("thinking_enabled", false)
-            _uiState.update { it.copy(defaultSystemPrompt = defaultSystemPrompt, systemPrompt = defaultSystemPrompt, toolsEnabled = toolsEnabled, thinkingEnabled = thinkingEnabled) }
+            
+            // Load available tools from registry
+            val availableTools = toolRegistry?.getAll()?.map { tool ->
+                ToolInfo(name = tool.name, description = tool.description)
+            } ?: emptyList()
+            
+            // Load individual tool enabled states (default to true for all)
+            val enabledTools = availableTools.associate { tool ->
+                val enabled = prefs.getBoolean("tool_enabled_${tool.name}", true)
+                tool.name to enabled
+            }
+            
+            _uiState.update { it.copy(
+                defaultSystemPrompt = defaultSystemPrompt,
+                systemPrompt = defaultSystemPrompt,
+                toolsEnabled = toolsEnabled,
+                thinkingEnabled = thinkingEnabled,
+                availableTools = availableTools,
+                enabledTools = enabledTools
+            ) }
 
             inferenceBridge.isReady.collect { isReady ->
                 val previousReady = _uiState.value.isModelReady
@@ -203,7 +231,7 @@ class ChatViewModel(
                             )
                         }
                     }
-                    .onCompletion {
+                    .onCompletion { cause ->
                         val lastMessage = _uiState.value.messages.lastOrNull { it.role == MessageRole.ASSISTANT }
                         val finalContent = lastMessage?.content
                         _uiState.update { it.copy(isLoading = false, retrievedContext = emptyList()) }
@@ -223,6 +251,13 @@ class ChatViewModel(
                                         )
                                     )
                                 }
+                            }
+                        }
+
+                        if (cause == null && _uiState.value.error == null) {
+                            val nextUserMessage = findNextPendingUserMessage()
+                            if (nextUserMessage != null) {
+                                startTurnForUserMessage(nextUserMessage)
                             }
                         }
                     }
@@ -274,6 +309,15 @@ class ChatViewModel(
                 _uiState.update { it.copy(toolsEnabled = newState) }
                 application.getSharedPreferences("penpal_app_prefs", android.content.Context.MODE_PRIVATE)
                     .edit().putBoolean("tools_enabled", newState).apply()
+            }
+            is ChatEvent.ToggleTool -> {
+                val currentEnabled = _uiState.value.enabledTools[event.toolName] ?: true
+                val newEnabled = !currentEnabled
+                _uiState.update { state ->
+                    state.copy(enabledTools = state.enabledTools + (event.toolName to newEnabled))
+                }
+                application.getSharedPreferences("penpal_app_prefs", android.content.Context.MODE_PRIVATE)
+                    .edit().putBoolean("tool_enabled_${event.toolName}", newEnabled).apply()
             }
             is ChatEvent.ToggleThinking -> {
                 val newState = !_uiState.value.thinkingEnabled
@@ -570,7 +614,7 @@ class ChatViewModel(
 
     private fun sendMessage() {
         val currentInput = _uiState.value.inputText.trim()
-        if (currentInput.isEmpty() || _uiState.value.isLoading) return
+        if (currentInput.isEmpty()) return
 
         val conversationId = _uiState.value.currentConversationId
         if (conversationId == null) {
@@ -583,6 +627,30 @@ class ChatViewModel(
             role = MessageRole.USER,
             content = currentInput
         )
+
+        // If model is already responding, queue this message
+        if (_uiState.value.isLoading) {
+            _uiState.update { state ->
+                state.copy(
+                    messages = state.messages + userMessage,
+                    inputText = ""
+                )
+            }
+
+            viewModelScope.launch {
+                chatMessageDao?.insert(
+                    ChatMessageEntity(
+                        id = userMessage.id,
+                        conversationId = conversationId,
+                        role = "USER",
+                        content = userMessage.content,
+                        sourcesJson = "[]",
+                        createdAt = userMessage.timestamp
+                    )
+                )
+            }
+            return
+        }
 
         pendingAssistantMessageId = UUID.randomUUID().toString()
         val assistantMessage = ChatMessage(
@@ -619,7 +687,7 @@ class ChatViewModel(
             if (_uiState.value.messages.size == 2) {
                 val tempTitle = currentInput.take(30)
                 chatConversationDao?.updateTitle(conversationId, tempTitle, System.currentTimeMillis())
-                _uiState.update { it.copy(currentConversationTitle = tempTitle) }
+                _uiState.update { it.copy(currentConversationTitle = tempTitle, needsTitleGeneration = true) }
             }
         }
 
@@ -645,7 +713,7 @@ class ChatViewModel(
 
                 _uiState.update { it.copy(retrievedContext = allChunks) }
 
-                val contextPrompt = buildPrompt(currentInput, allChunks)
+                val contextPrompt = buildPrompt(currentInput, allChunks, userMessage.id)
                 val sourceIds = allChunks.map { it.id }
 
                 val isReadyNow = inferenceBridge.isReady.value
@@ -679,7 +747,7 @@ class ChatViewModel(
                             )
                         }
                     }
-                    .onCompletion {
+                    .onCompletion { cause ->
                         val lastMessage = _uiState.value.messages.lastOrNull { it.role == MessageRole.ASSISTANT }
                         val finalParts = lastMessage?.parts ?: emptyList()
                         val finalContent = lastMessage?.content
@@ -712,8 +780,17 @@ class ChatViewModel(
                         }
 
                         // Generate title after first successful exchange
-                        if (_uiState.value.messages.count { it.role == MessageRole.USER } == 1) {
+                        if (_uiState.value.needsTitleGeneration) {
                             generateConversationTitle()
+                            _uiState.update { it.copy(needsTitleGeneration = false) }
+                        }
+
+                        // Continue with queued user messages if any
+                        if (cause == null && _uiState.value.error == null) {
+                            val nextUserMessage = findNextPendingUserMessage()
+                            if (nextUserMessage != null) {
+                                startTurnForUserMessage(nextUserMessage)
+                            }
                         }
                     }
                     .collect { parts ->
@@ -975,7 +1052,7 @@ class ChatViewModel(
         }
     }
 
-    private fun buildPrompt(userMessage: String, context: List<ChunkEntity>): String {
+    private fun buildPrompt(userMessage: String, context: List<ChunkEntity>, currentUserMessageId: String? = null): String {
         val effectiveSystemPrompt = _uiState.value.systemPrompt.ifBlank { _uiState.value.defaultSystemPrompt }
         val toolsEnabled = _uiState.value.toolsEnabled
         val thinkingEnabled = _uiState.value.thinkingEnabled
@@ -993,14 +1070,17 @@ class ChatViewModel(
         // Build tool declarations if enabled
         var toolDeclarations = ""
         if (toolsEnabled && toolRegistry != null) {
-            val decls = toolRegistry.getGemmaToolDeclarations()
+            val activeTools = _uiState.value.enabledTools.filter { it.value }.keys
+            val decls = if (activeTools.isNotEmpty()) {
+                toolRegistry.getGemmaToolDeclarations(activeTools)
+            } else ""
             if (decls.isNotBlank()) {
                 toolDeclarations = decls
             }
         }
 
         val systemContent = systemPromptBuilder.toString()
-        val conversationHistory = buildConversationHistory()
+        val conversationHistory = buildConversationHistory(currentUserMessageId)
 
         return buildString {
             appendLine("<|turn>system")
@@ -1040,8 +1120,35 @@ class ChatViewModel(
         }
     }
 
-    private fun buildConversationHistory(): String {
-        val historyMessages = _uiState.value.messages
+    private fun buildConversationHistory(currentUserMessageId: String? = null): String {
+        var historyMessages = _uiState.value.messages
+        if (historyMessages.isEmpty()) return ""
+
+        if (currentUserMessageId != null) {
+            val currentIndex = historyMessages.indexOfFirst { it.id == currentUserMessageId }
+            if (currentIndex > 0) {
+                historyMessages = historyMessages.take(currentIndex)
+            } else {
+                return ""
+            }
+        } else {
+            // Exclude current turn: last user message + pending empty assistant message
+            val completedMessages = if (historyMessages.size >= 2) {
+                val lastMsg = historyMessages.last()
+                val secondLastMsg = historyMessages[historyMessages.size - 2]
+                if (lastMsg.role == MessageRole.ASSISTANT && lastMsg.content.isBlank() &&
+                    secondLastMsg.role == MessageRole.USER
+                ) {
+                    historyMessages.dropLast(2)
+                } else {
+                    historyMessages
+                }
+            } else {
+                historyMessages
+            }
+            historyMessages = completedMessages
+        }
+
         if (historyMessages.isEmpty()) return ""
 
         return buildString {
@@ -1053,6 +1160,145 @@ class ChatViewModel(
                 appendLine("<|turn>$role")
                 appendLine(msg.content)
                 appendLine("<turn|>")
+            }
+        }
+    }
+
+    private fun findNextPendingUserMessage(): ChatMessage? {
+        val messages = _uiState.value.messages
+        val lastAssistantIndex = messages.indexOfLast { it.role == MessageRole.ASSISTANT }
+        if (lastAssistantIndex < 0 || lastAssistantIndex >= messages.lastIndex) return null
+        return messages.drop(lastAssistantIndex + 1).firstOrNull { it.role == MessageRole.USER }
+    }
+
+    private fun startTurnForUserMessage(userMessage: ChatMessage) {
+        val conversationId = _uiState.value.currentConversationId ?: return
+
+        val userMessageIndex = _uiState.value.messages.indexOfFirst { it.id == userMessage.id }
+
+        pendingAssistantMessageId = UUID.randomUUID().toString()
+        val assistantMessage = ChatMessage(
+            id = pendingAssistantMessageId!!,
+            role = MessageRole.ASSISTANT,
+            content = "",
+            sources = emptyList()
+        )
+
+        _uiState.update { state ->
+            val newMessages = state.messages.toMutableList()
+            if (userMessageIndex >= 0 && userMessageIndex < newMessages.lastIndex) {
+                newMessages.add(userMessageIndex + 1, assistantMessage)
+            } else {
+                newMessages.add(assistantMessage)
+            }
+            state.copy(
+                messages = newMessages,
+                isLoading = true,
+                error = null
+            )
+        }
+
+        viewModelScope.launch {
+            try {
+                val relevantChunks = vectorStore.similaritySearch(userMessage.content, topK = 6)
+                val attachedStackChunks = mutableListOf<ChunkEntity>()
+                _uiState.value.attachedStacks.forEach { stack ->
+                    val chunks = vectorStore.getChunksForSource(stack.stackId)
+                    attachedStackChunks.addAll(chunks)
+                }
+                val allChunks = (relevantChunks + attachedStackChunks)
+                    .distinctBy { it.id }
+                    .sortedByDescending { chunk -> chunk.text.length }
+                    .take(10)
+
+                _uiState.update { it.copy(retrievedContext = allChunks) }
+
+                val contextPrompt = buildPrompt(userMessage.content, allChunks, userMessage.id)
+                val sourceIds = allChunks.map { it.id }
+
+                val isReadyNow = inferenceBridge.isReady.value
+                if (!isReadyNow) {
+                    onLoadModel?.invoke()
+                    updateLastAssistantMessage(
+                        listOf(MessagePart.TextPart("Loading AI model...")),
+                        sourceIds
+                    )
+                    _uiState.update {
+                        it.copy(
+                            isLoading = true,
+                            retrievedContext = emptyList(),
+                            pendingRetryMessage = userMessage.content,
+                            pendingRetryError = null
+                        )
+                    }
+                    return@launch
+                }
+
+                inferenceBridge.runInferenceFlowParts(contextPrompt)
+                    .catch { error ->
+                        _uiState.update { state ->
+                            state.copy(
+                                isLoading = false,
+                                error = error.message ?: "Inference error",
+                                retrievedContext = emptyList()
+                            )
+                        }
+                    }
+                    .onCompletion { cause ->
+                        val lastMessage = _uiState.value.messages.lastOrNull { it.role == MessageRole.ASSISTANT }
+                        val finalParts = lastMessage?.parts ?: emptyList()
+                        val finalContent = lastMessage?.content
+
+                        val toolCalls = finalParts.filterIsInstance<MessagePart.ToolCallPart>()
+                        if (toolCalls.isNotEmpty() && toolRegistry != null) {
+                            executeToolCallsAfterInference(toolCalls)
+                        }
+
+                        _uiState.update { it.copy(isLoading = false, retrievedContext = emptyList()) }
+
+                        if (finalContent != null && finalContent.isNotBlank()) {
+                            val convId = _uiState.value.currentConversationId
+                            if (convId != null) {
+                                viewModelScope.launch {
+                                    chatMessageDao?.insert(
+                                        ChatMessageEntity(
+                                            id = pendingAssistantMessageId ?: UUID.randomUUID().toString(),
+                                            conversationId = convId,
+                                            role = "ASSISTANT",
+                                            content = finalContent,
+                                            sourcesJson = gson.toJson(sourceIds),
+                                            createdAt = System.currentTimeMillis()
+                                        )
+                                    )
+                                }
+                            }
+                        }
+
+                        if (_uiState.value.needsTitleGeneration) {
+                            generateConversationTitle()
+                            _uiState.update { it.copy(needsTitleGeneration = false) }
+                        }
+
+                        if (cause == null && _uiState.value.error == null) {
+                            val nextUserMessage = findNextPendingUserMessage()
+                            if (nextUserMessage != null) {
+                                startTurnForUserMessage(nextUserMessage)
+                            }
+                        }
+                    }
+                    .collect { parts ->
+                        updateLastAssistantMessage(parts, sourceIds)
+                    }
+
+            } catch (e: Exception) {
+                Log.e("ChatViewModel", "Failed to process message", e)
+                _uiState.update { state ->
+                    state.copy(
+                        isLoading = false,
+                        error = "Failed to process message: ${e.message}",
+                        retrievedContext = emptyList()
+                    )
+                }
             }
         }
     }
