@@ -1,5 +1,4 @@
 package com.drawapp
-
 import java.util.UUID
 
 enum class NotebookType {

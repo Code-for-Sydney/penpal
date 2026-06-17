@@ -1,5 +1,4 @@
 package com.drawapp
-
 import android.graphics.BitmapFactory
 import android.graphics.drawable.GradientDrawable
 import android.view.LayoutInflater
@@ -11,6 +10,7 @@ import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
 import java.io.File
 
+@Deprecated("Legacy v1.x code. Will be removed in future release.", level = DeprecationLevel.WARNING)
 class NotebookAdapter(
     private var notebooks: List<Notebook>,
     private val onNotebookClick: (Notebook) -> Unit,

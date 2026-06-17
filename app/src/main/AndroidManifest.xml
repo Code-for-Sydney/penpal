@@ -14,6 +14,11 @@
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
 
+    <!-- Media permissions for Android 13+ -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+
     <!-- Vulkan is optional but speeds up GPU inference with MediaPipe -->
     <uses-feature android:name="android.hardware.vulkan.version"
         android:version="0x401000" android:required="false" />
@@ -29,14 +34,21 @@
         android:usesCleartextTraffic="true">
 
         <activity
-            android:name=".NotebookSelectionActivity"
+            android:name=".MainComposeActivity"
             android:exported="true"
-            android:theme="@style/AppTheme">
+            android:configChanges="orientation|screenSize"
+            android:theme="@style/Theme.Penpal"
+            android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".NotebookSelectionActivity"
+            android:exported="false"
+            android:theme="@style/AppTheme" />
 
         <activity
             android:name=".MainActivity"

@@ -1,0 +1,386 @@
+package com.penpal.core.media.serialization
+
+import android.graphics.Color
+import android.graphics.RectF
+import org.xmlpull.v1.XmlPullParser
+import org.xmlpull.v1.XmlPullParserFactory
+import java.io.StringReader
+
+object SvgSerializer {
+
+    fun serialize(items: List<SvgData>, width: Int, height: Int, backgroundColor: Int, backgroundType: String = "RULED", contentBounds: RectF? = null): String {
+
+        val sb = StringBuilder()
+        sb.appendLine("""<?xml version="1.0" encoding="UTF-8"?>""")
+
+        val vbX: Float
+        val vbY: Float
+        val vbW: Float
+        val vbH: Float
+        if (contentBounds != null && !contentBounds.isEmpty) {
+            val margin = 20f
+            vbX = contentBounds.left - margin
+            vbY = contentBounds.top - margin
+            vbW = contentBounds.width() + margin * 2
+            vbH = contentBounds.height() + margin * 2
+        } else {
+            vbX = 0f
+            vbY = 0f
+            vbW = width.toFloat()
+            vbH = height.toFloat()
+        }
+        sb.appendLine("""<svg xmlns="http://www.w3.org/2000/svg" width="${vbW.toInt()}" height="${vbH.toInt()}" viewBox="$vbX $vbY $vbW $vbH" data-background-type="$backgroundType">""")
+
+        sb.appendLine("""  <rect x="$vbX" y="$vbY" width="$vbW" height="$vbH" fill="${colorToHex(backgroundColor)}"/>""")
+
+        for ((index, item) in items.withIndex()) {
+            when (item) {
+                is StrokeData -> {
+                    val d = commandsToSvgPath(item.commands)
+                    if (d.isBlank()) continue
+                    val hex = colorToHex(item.color)
+                    val opacity = item.opacity / 255f
+
+                    sb.append("""  <path id="stroke-$index" d="$d""")
+                    sb.append(""" stroke="$hex" stroke-width="${item.strokeWidth}""")
+                    sb.append(""" stroke-opacity="$opacity""")
+                    sb.append(""" stroke-linecap="round" stroke-linejoin="round" fill="none""")
+                    if (item.isLocked) sb.append(""" data-locked="true"""")
+                    sb.appendLine("""/>""")
+                }
+                is ImageData -> {
+                    val m = item.matrix
+                    val transform = "matrix(${m[0]},${m[3]},${m[1]},${m[4]},${m[2]},${m[5]})"
+                    sb.append("""  <image id="image-$index" transform="$transform" href="data:image/jpeg;base64,${item.base64}""")
+                    sb.append(""" data-remove-bg="${item.removeBackground}""")
+                    sb.append(""" data-text="${escapeXml(item.text)}" data-showing-text="${item.isShowingText}""")
+                    if (item.isLocked) sb.append(""" data-locked="true"""")
+                    item.textMatrix?.let { tm ->
+                        val tmStr = "matrix(${tm[0]},${tm[3]},${tm[1]},${tm[4]},${tm[2]},${tm[5]})"
+                        sb.append(""" data-text-transform="$tmStr""")
+                    }
+                    item.textBounds?.let { tb ->
+                        sb.append(""" data-text-bounds="${tb.left},${tb.top},${tb.right},${tb.bottom}""")
+                    }
+                    if (item.pdfWords.isNotEmpty()) {
+                        val wordsStr = item.pdfWords.joinToString(";") { "${it.text.replace(":", " ")}:${it.bounds.left},${it.bounds.top},${it.bounds.right},${it.bounds.bottom}" }
+                        sb.append(""" data-pdf-words="$wordsStr""")
+                    }
+                    if (item.isAiRecognized) sb.append(""" data-ai-recognized="true"""")
+                    sb.appendLine("/>")
+                }
+                is WordData -> {
+                    val m = item.matrix
+                    val transform = "matrix(${m[0]},${m[3]},${m[1]},${m[4]},${m[2]},${m[5]})"
+                    sb.append("""  <g id="word-$index" transform="$transform" data-text="${escapeXml(item.text)}" data-showing-text="${item.isShowingText}""")
+                    if (item.isLocked) sb.append(""" data-locked="true"""")
+                    item.tintColor?.let { sb.append(""" data-tint="${colorToHex(it)}"""") }
+                    item.backgroundColor?.let { sb.append(""" data-bg-fill="${colorToHex(it)}"""") }
+
+                    item.textMatrix?.let { tm ->
+                        val tmStr = "matrix(${tm[0]},${tm[3]},${tm[1]},${tm[4]},${tm[2]},${tm[5]})"
+                        sb.append(""" data-text-transform="$tmStr""")
+                    }
+                    item.textBounds?.let { tb ->
+                        sb.append(""" data-text-bounds="${tb.left},${tb.top},${tb.right},${tb.bottom}""")
+                    }
+                    sb.appendLine(">")
+
+                    for (stroke in item.strokes) {
+                        val d = commandsToSvgPath(stroke.commands)
+                        if (d.isBlank()) continue
+                        val hex = colorToHex(stroke.color)
+                        val opacity = stroke.opacity / 255f
+                        sb.append("""    <path d="$d" stroke="$hex" stroke-width="${stroke.strokeWidth}" stroke-opacity="$opacity" stroke-linecap="round" stroke-linejoin="round" fill="none""")
+                        sb.appendLine("""/>""")
+                    }
+                    sb.appendLine("  </g>")
+                }
+                is PromptData -> {
+                    val m = item.matrix
+                    val transform = "matrix(${m[0]},${m[3]},${m[1]},${m[4]},${m[2]},${m[5]})"
+                    sb.append("""  <rect id="prompt-$index" transform="$transform" width="${item.width}" height="${item.height}""")
+                    sb.append(""" data-type="prompt" data-prompt="${escapeXml(item.prompt)}" data-result="${escapeXml(item.result)}""")
+                    sb.append(""" data-showing-result="${item.isShowingResult}""")
+                    if (item.isLocked) sb.append(""" data-locked="true"""")
+                    sb.appendLine("/>")
+                }
+                is TextData -> {
+                    val m = item.matrix
+                    val transform = "matrix(${m[0]},${m[3]},${m[1]},${m[4]},${m[2]},${m[5]})"
+                    sb.append("""  <text id="text-$index" transform="$transform" font-size="${item.fontSize}" fill="${colorToHex(item.color)}""")
+                    sb.append(""" data-type="text-item" data-text="${escapeXml(item.text)}" width="${item.width}" height="${item.height}""")
+                    if (item.isLocked) sb.append(""" data-locked="true"""")
+                    sb.appendLine(">${escapeXml(item.text)}</text>")
+                }
+            }
+        }
+
+        sb.appendLine("</svg>")
+        return sb.toString()
+    }
+
+    fun deserialize(svg: String): SvgResult {
+        val items = mutableListOf<SvgData>()
+        var backgroundType = "RULED"
+
+        val factory = XmlPullParserFactory.newInstance()
+        val parser = factory.newPullParser()
+        parser.setInput(StringReader(svg))
+
+        var eventType = parser.eventType
+        while (eventType != XmlPullParser.END_DOCUMENT) {
+            if (eventType == XmlPullParser.START_TAG) {
+                if (parser.name == "svg") {
+                    backgroundType = parser.getAttributeValue(null, "data-background-type") ?: "RULED"
+                } else if (parser.name == "path") {
+
+                    val pathData = parser.getAttributeValue(null, "d") ?: ""
+                    val strokeColor = parser.getAttributeValue(null, "stroke") ?: "#000000"
+                    val strokeWidth = parser.getAttributeValue(null, "stroke-width")?.toFloatOrNull() ?: 12f
+                    val strokeOpacity = parser.getAttributeValue(null, "stroke-opacity")?.toFloatOrNull() ?: 1f
+
+                    val commands = svgPathToCommands(pathData)
+                    if (commands.isNotEmpty()) {
+                        items.add(StrokeData(
+                            commands = commands,
+                            color = parseHexColor(strokeColor),
+                            strokeWidth = strokeWidth,
+                            opacity = (strokeOpacity * 255).toInt().coerceIn(0, 255),
+                            isLocked = parser.getAttributeValue(null, "data-locked") == "true"
+                        ))
+                    }
+                } else if (parser.name == "image") {
+                    val transform = parser.getAttributeValue(null, "transform") ?: ""
+                    val href = parser.getAttributeValue(null, "href") ?: ""
+                    val m = parseMatrix(transform)
+                    val base64Data = if (href.startsWith("data:image/png;base64,")) {
+                        href.substring("data:image/png;base64,".length)
+                    } else if (href.startsWith("data:image/jpeg;base64,")) {
+                        href.substring("data:image/jpeg;base64,".length)
+                    } else href
+                    val removeBg = parser.getAttributeValue(null, "data-remove-bg") != "false"
+                    val text = parser.getAttributeValue(null, "data-text") ?: ""
+                    val isShowingText = parser.getAttributeValue(null, "data-showing-text") == "true"
+                    val textMatrixStr = parser.getAttributeValue(null, "data-text-transform")
+                    val textMatrix = if (textMatrixStr != null) parseMatrix(textMatrixStr) else null
+                    val textBoundsStr = parser.getAttributeValue(null, "data-text-bounds")
+                    val textBounds = if (textBoundsStr != null) {
+                        val parts = textBoundsStr.split(",")
+                        if (parts.size == 4) {
+                            FloatRect(parts[0].toFloat(), parts[1].toFloat(), parts[2].toFloat(), parts[3].toFloat())
+                        } else null
+                    } else null
+                    val isLocked = parser.getAttributeValue(null, "data-locked") == "true"
+                    val isAiRecognized = parser.getAttributeValue(null, "data-ai-recognized") == "true"
+                    val pdfWordsStr = parser.getAttributeValue(null, "data-pdf-words")
+                    val pdfWords = if (pdfWordsStr != null) {
+                        pdfWordsStr.split(";").mapNotNull { wordPart ->
+                            val colonIdx = wordPart.lastIndexOf(":")
+                            if (colonIdx != -1) {
+                                val wordText = wordPart.substring(0, colonIdx)
+                                val coords = wordPart.substring(colonIdx + 1).split(",")
+                                if (coords.size == 4) {
+                                    PdfWord(wordText, FloatRect(coords[0].toFloat(), coords[1].toFloat(), coords[2].toFloat(), coords[3].toFloat()))
+                                } else null
+                            } else null
+                        }
+                    } else emptyList()
+
+                    items.add(
+                        ImageData(
+                            base64 = base64Data,
+                            matrix = m,
+                            removeBackground = removeBg,
+                            text = text,
+                            isShowingText = isShowingText,
+                            textMatrix = textMatrix,
+                            textBounds = textBounds,
+                            pdfWords = pdfWords,
+                            isAiRecognized = isAiRecognized,
+                            isLocked = isLocked
+                        )
+                    )
+                } else if (parser.name == "g") {
+                    val text = parser.getAttributeValue(null, "data-text") ?: ""
+                    val transform = parser.getAttributeValue(null, "transform") ?: ""
+                    val m = parseMatrix(transform)
+                    val isShowingText = parser.getAttributeValue(null, "data-showing-text") == "true"
+                    val isLocked = parser.getAttributeValue(null, "data-locked") == "true"
+
+                    val textMatrixStr = parser.getAttributeValue(null, "data-text-transform")
+                    val textMatrix = if (textMatrixStr != null) parseMatrix(textMatrixStr) else null
+                    val tintColor = parser.getAttributeValue(null, "data-tint")?.let { parseHexColor(it) }
+                    val backgroundColor = parser.getAttributeValue(null, "data-bg-fill")?.let { parseHexColor(it) }
+
+                    val textBoundsStr = parser.getAttributeValue(null, "data-text-bounds")
+                    val textBounds = if (textBoundsStr != null) {
+                        val parts = textBoundsStr.split(",")
+                        if (parts.size == 4) {
+                            FloatRect(parts[0].toFloat(), parts[1].toFloat(), parts[2].toFloat(), parts[3].toFloat())
+                        } else null
+                    } else null
+
+                    val strokes = mutableListOf<StrokeData>()
+                    var innerEvent = parser.next()
+                    while (!(innerEvent == XmlPullParser.END_TAG && parser.name == "g")) {
+                        if (innerEvent == XmlPullParser.START_TAG && parser.name == "path") {
+                            val strokeData = parsePath(parser)
+                            if (strokeData != null) strokes.add(strokeData)
+                        }
+                        innerEvent = parser.next()
+                    }
+                    items.add(
+                        WordData(
+                            strokes = strokes,
+                            matrix = m,
+                            text = text,
+                            isShowingText = isShowingText,
+                            textMatrix = textMatrix,
+                            textBounds = textBounds,
+                            tintColor = tintColor,
+                            backgroundColor = backgroundColor,
+                            isLocked = isLocked
+                        )
+                    )
+                } else if (parser.name == "rect" && parser.getAttributeValue(null, "data-type") == "prompt") {
+                    val transform = parser.getAttributeValue(null, "transform") ?: ""
+                    val m = parseMatrix(transform)
+                    val width = parser.getAttributeValue(null, "width")?.toFloatOrNull() ?: 600f
+                    val height = parser.getAttributeValue(null, "height")?.toFloatOrNull() ?: 400f
+                    val prompt = parser.getAttributeValue(null, "data-prompt") ?: ""
+                    val result = parser.getAttributeValue(null, "data-result") ?: ""
+                    val showingResult = parser.getAttributeValue(null, "data-showing-result") == "true"
+                    val isLocked = parser.getAttributeValue(null, "data-locked") == "true"
+
+                    items.add(PromptData(prompt, result, showingResult, m, width, height, isLocked))
+                } else if (parser.name == "text" && parser.getAttributeValue(null, "data-type") == "text-item") {
+                    val transform = parser.getAttributeValue(null, "transform") ?: ""
+                    val m = parseMatrix(transform)
+                    val fontSize = parser.getAttributeValue(null, "font-size")?.toFloatOrNull() ?: 48f
+                    val color = parseHexColor(parser.getAttributeValue(null, "fill") ?: "#000000")
+                    val text = parser.getAttributeValue(null, "data-text") ?: ""
+                    val width = parser.getAttributeValue(null, "width")?.toFloatOrNull() ?: 400f
+                    val height = parser.getAttributeValue(null, "height")?.toFloatOrNull() ?: 100f
+                    val isLocked = parser.getAttributeValue(null, "data-locked") == "true"
+
+                    items.add(TextData(text, m, color, fontSize, width, height, isLocked))
+                }
+            }
+            eventType = parser.next()
+        }
+        return SvgResult(items, backgroundType)
+    }
+
+    private fun escapeXml(text: String): String {
+        return text.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\"", "&quot;")
+            .replace("'", "&apos;")
+            .replace("\n", "&#10;")
+            .replace("\r", "&#13;")
+    }
+
+    private fun parseMatrix(transform: String): FloatArray {
+        val m = FloatArray(9) { if (it % 4 == 0) 1f else 0f }
+        if (transform.startsWith("matrix(") && transform.endsWith(")")) {
+            val vals = transform.removePrefix("matrix(").removeSuffix(")").split(",")
+            if (vals.size == 6) {
+                val a = vals[0].toFloatOrNull() ?: 1f
+                val b = vals[1].toFloatOrNull() ?: 0f
+                val c = vals[2].toFloatOrNull() ?: 0f
+                val d = vals[3].toFloatOrNull() ?: 1f
+                val e = vals[4].toFloatOrNull() ?: 0f
+                val f = vals[5].toFloatOrNull() ?: 0f
+
+                m[android.graphics.Matrix.MSCALE_X] = a
+                m[android.graphics.Matrix.MSKEW_X] = c
+                m[android.graphics.Matrix.MTRANS_X] = e
+                m[android.graphics.Matrix.MSKEW_Y] = b
+                m[android.graphics.Matrix.MSCALE_Y] = d
+                m[android.graphics.Matrix.MTRANS_Y] = f
+            }
+        }
+        return m
+    }
+
+    private fun parsePath(parser: XmlPullParser): StrokeData? {
+        val pathData = parser.getAttributeValue(null, "d") ?: ""
+        val strokeColor = parser.getAttributeValue(null, "stroke") ?: "#000000"
+        val strokeWidth = parser.getAttributeValue(null, "stroke-width")?.toFloatOrNull() ?: 12f
+        val strokeOpacity = parser.getAttributeValue(null, "stroke-opacity")?.toFloatOrNull() ?: 1f
+
+        val commands = svgPathToCommands(pathData)
+        return if (commands.isNotEmpty()) {
+            StrokeData(
+                commands = commands,
+                color = parseHexColor(strokeColor),
+                strokeWidth = strokeWidth,
+                opacity = (strokeOpacity * 255).toInt().coerceIn(0, 255)
+            )
+        } else null
+    }
+
+    private fun commandsToSvgPath(commands: List<PathCommand>): String {
+        val sb = StringBuilder()
+        for (cmd in commands) {
+            when (cmd) {
+                is PathCommand.MoveTo -> sb.append("M ${cmd.x} ${cmd.y} ")
+                is PathCommand.QuadTo -> sb.append("Q ${cmd.x1} ${cmd.y1} ${cmd.x2} ${cmd.y2} ")
+                is PathCommand.CubicTo -> sb.append("C ${cmd.x1} ${cmd.y1} ${cmd.x2} ${cmd.y2} ${cmd.x3} ${cmd.y3} ")
+                is PathCommand.LineTo -> sb.append("L ${cmd.x} ${cmd.y} ")
+            }
+        }
+        return sb.toString().trim()
+    }
+
+    private fun svgPathToCommands(pathData: String): List<PathCommand> {
+        val commands = mutableListOf<PathCommand>()
+        val tokens = pathData.trim().split(Regex("\\s+"))
+        var i = 0
+        while (i < tokens.size) {
+            when (tokens[i]) {
+                "M" -> {
+                    if (i + 2 < tokens.size) {
+                        commands.add(PathCommand.MoveTo(tokens[i+1].toFloat(), tokens[i+2].toFloat()))
+                        i += 3
+                    } else i++
+                }
+                "Q" -> {
+                    if (i + 4 < tokens.size) {
+                        commands.add(PathCommand.QuadTo(
+                            tokens[i+1].toFloat(), tokens[i+2].toFloat(),
+                            tokens[i+3].toFloat(), tokens[i+4].toFloat()
+                        ))
+                        i += 5
+                    } else i++
+                }
+                "C" -> {
+                    if (i + 6 < tokens.size) {
+                        commands.add(PathCommand.CubicTo(
+                            tokens[i+1].toFloat(), tokens[i+2].toFloat(),
+                            tokens[i+3].toFloat(), tokens[i+4].toFloat(),
+                            tokens[i+5].toFloat(), tokens[i+6].toFloat()
+                        ))
+                        i += 7
+                    } else i++
+                }
+                "L" -> {
+                    if (i + 2 < tokens.size) {
+                        commands.add(PathCommand.LineTo(tokens[i+1].toFloat(), tokens[i+2].toFloat()))
+                        i += 3
+                    } else i++
+                }
+                else -> i++
+            }
+        }
+        return commands
+    }
+
+    private fun colorToHex(color: Int): String =
+        String.format("#%06X", 0xFFFFFF and color)
+
+    private fun parseHexColor(hex: String): Int =
+        try { Color.parseColor(hex) } catch (_: Exception) { Color.BLACK }
+}

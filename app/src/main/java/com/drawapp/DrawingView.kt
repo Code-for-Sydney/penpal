@@ -399,7 +399,6 @@ class DrawingView @JvmOverloads constructor(
             is StrokeItem -> ItemState(Matrix(), Matrix(), RectF(), null, Path(item.path), RectF(item.boundsRect))
             is PromptItem -> ItemState(Matrix(item.matrix), Matrix(), RectF(), null, null, null, item.prompt, item.result, item.isShowingResult)
             is TextItem -> ItemState(Matrix(item.matrix), Matrix(), RectF(), null, null, null, item.text, null, null)
-            else -> ItemState(Matrix(), Matrix(), RectF())
         }
     }
 
@@ -2254,9 +2253,6 @@ class DrawingView @JvmOverloads constructor(
         }
     }
 
-    @Deprecated("Use deleteSelectedItem instead", ReplaceWith("deleteSelectedItem()"))
-    fun deleteSelectedImage() = deleteSelectedItem()
-
     fun groupStrokesIntoWord(strokesToGroup: List<StrokeItem>, text: String, wordsToMerge: List<WordItem> = emptyList(), isAutoGroup: Boolean = false): WordItem? {
         val stillInCanvasLoose = strokesToGroup.filter { it in drawItems }
         val stillInCanvasWords = wordsToMerge.filter { it in drawItems }
@@ -2844,9 +2840,6 @@ class DrawingView @JvmOverloads constructor(
 
     // Removed create bitmap logic since it's now in createBitmapForStrokes
 
-
-    @Deprecated("Use getRecentClusterWithStrokes instead")
-    fun getRecentClusterBitmap(): Bitmap? = getRecentClusterWithStrokes()?.bitmap
 
     fun getRecentClusterItems(): Pair<List<StrokeItem>, List<WordItem>>? {
         val allLooseStrokes = drawItems.filterIsInstance<StrokeItem>()

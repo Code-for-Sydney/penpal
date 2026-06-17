@@ -1,5 +1,4 @@
 package com.drawapp
-
 import android.graphics.Color
 import android.graphics.RectF
 import org.xmlpull.v1.XmlPullParser
@@ -79,6 +78,7 @@ data class SvgResult(
 )
 
 
+@Deprecated("Legacy v1.x code. Will be removed in future release.", level = DeprecationLevel.WARNING)
 object SvgSerializer {
 
     fun serialize(items: List<SvgData>, width: Int, height: Int, backgroundColor: Int, backgroundType: String = "RULED", contentBounds: RectF? = null): String {

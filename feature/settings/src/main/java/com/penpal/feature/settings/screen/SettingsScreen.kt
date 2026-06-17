@@ -1,0 +1,790 @@
+package com.penpal.feature.settings.screen
+
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import com.penpal.core.ai.model.ModelManager
+import com.penpal.core.ai.inference.model.ModelStatus
+import com.penpal.core.ui.component.StatusIndicator
+import androidx.compose.ui.graphics.Color as ComposeColor
+
+import com.penpal.feature.settings.component.ModelDownloadBottomSheet
+import com.penpal.feature.settings.viewmodel.BackendPreference
+import com.penpal.feature.settings.viewmodel.InferenceMode
+import com.penpal.feature.settings.viewmodel.SettingsEvent
+import com.penpal.feature.settings.viewmodel.SettingsUiState
+
+private data class StatusColors(
+    val dotColor: ComposeColor,
+    val text: String,
+    val containerColor: ComposeColor,
+    val textColor: ComposeColor,
+    val clickable: Boolean
+)
+
+/**
+ * Settings Screen - Configure AI model and app preferences.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SettingsScreen(
+    uiState: SettingsUiState,
+    onEvent: (SettingsEvent) -> Unit,
+    isModelReady: Boolean = false,
+    isModelLoading: Boolean = false,
+    isModelUnloading: Boolean = false,
+    modelStatus: ModelStatus = ModelStatus.NOT_DOWNLOADED,
+    onToggleModel: (() -> Unit)? = null,
+    modifier: Modifier = Modifier
+) {
+    val scrollState = rememberScrollState()
+    val uriHandler = LocalUriHandler.current
+
+    // Token input for HuggingFace download
+    var hfToken by remember { mutableStateOf("") }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Settings") },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                ),
+                actions = {
+                    val statusColors = when {
+                        modelStatus == ModelStatus.READY || isModelReady ->
+                            StatusColors(
+                                dotColor = ComposeColor(0xFF4CAF50),
+                                text = "ON",
+                                containerColor = ComposeColor(0xFF4CAF50).copy(alpha = 0.2f),
+                                textColor = ComposeColor(0xFF2E7D32),
+                                clickable = true
+                            )
+                        modelStatus == ModelStatus.LOADING || isModelLoading ->
+                            StatusColors(
+                                dotColor = ComposeColor(0xFFFFC107),
+                                text = "Loading...",
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f),
+                                textColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                clickable = false
+                            )
+                        isModelUnloading ->
+                            StatusColors(
+                                dotColor = ComposeColor(0xFFFFC107),
+                                text = "Unloading...",
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f),
+                                textColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                clickable = false
+                            )
+                        modelStatus == ModelStatus.DOWNLOADING ->
+                            StatusColors(
+                                dotColor = ComposeColor(0xFFFFC107),
+                                text = "Downloading...",
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f),
+                                textColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                clickable = false
+                            )
+                        modelStatus == ModelStatus.ERROR ->
+                            StatusColors(
+                                dotColor = ComposeColor(0xFFF44336),
+                                text = "ERR",
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f),
+                                textColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                clickable = false
+                            )
+                        modelStatus == ModelStatus.DOWNLOADED ->
+                            StatusColors(
+                                dotColor = ComposeColor(0xFF9E9E9E),
+                                text = "DL'd",
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f),
+                                textColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                clickable = true
+                            )
+                        else ->
+                            StatusColors(
+                                dotColor = ComposeColor(0xFF9E9E9E),
+                                text = "OFF",
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f),
+                                textColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                clickable = false
+                            )
+                    }
+                    StatusIndicator(
+                        text = statusColors.text,
+                        dotColor = statusColors.dotColor,
+                        containerColor = statusColors.containerColor,
+                        textColor = statusColors.textColor,
+                        isClickable = statusColors.clickable && onToggleModel != null,
+                        onClick = onToggleModel
+                    )
+                }
+            )
+        },
+        modifier = modifier
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .verticalScroll(scrollState)
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            // ──────────────────────────────────────────────────────────────
+            // AI Model Section
+            // ──────────────────────────────────────────────────────────────
+            SettingsSection(title = "AI Model") {
+                // Current model info
+                SettingsRow(
+                    icon = Icons.Default.Psychology,
+                    title = "Model",
+                    subtitle = uiState.modelName
+                )
+
+                SettingsRow(
+                    icon = Icons.Default.Description,
+                    title = "File",
+                    subtitle = uiState.modelFileName
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Model status with download progress
+                when (uiState.modelStatus) {
+                    ModelStatus.NOT_DOWNLOADED -> {
+                        SettingsRow(
+                            icon = Icons.Default.CloudOff,
+                            title = "Status",
+                            subtitle = "Not downloaded"
+                        )
+                    }
+                    ModelStatus.DOWNLOADING, ModelStatus.LOADING -> {
+                        SettingsRow(
+                            icon = Icons.Default.Download,
+                            title = "Status",
+                            subtitle = "Downloading..."
+                        )
+                        LinearProgressIndicator(
+                            progress = { uiState.downloadProgress },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        if (uiState.downloadProgressText.isNotEmpty()) {
+                            Text(
+                                text = uiState.downloadProgressText,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    ModelStatus.DOWNLOADED, ModelStatus.READY -> {
+                        SettingsRow(
+                            icon = Icons.Default.CheckCircle,
+                            title = "Status",
+                            subtitle = if (uiState.modelStatus == ModelStatus.READY) "Ready (loaded)" else "Downloaded"
+                        )
+                    }
+                    ModelStatus.ERROR -> {
+                        SettingsRow(
+                            icon = Icons.Default.Error,
+                            title = "Status",
+                            subtitle = "Error - ${uiState.error ?: "Unknown"}"
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Download/Delete button
+                when (uiState.modelStatus) {
+                    ModelStatus.NOT_DOWNLOADED, ModelStatus.ERROR -> {
+                        Button(
+                            onClick = { onEvent(SettingsEvent.DownloadModel) },
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = !uiState.isDownloading
+                        ) {
+                            Icon(Icons.Default.Download, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Download Model")
+                        }
+                    }
+                    ModelStatus.DOWNLOADING, ModelStatus.LOADING -> {
+                        OutlinedButton(
+                            onClick = { /* Cancel - not supported for loading */ },
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = false
+                        ) {
+                            Icon(Icons.Default.Close, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Loading...")
+                        }
+                    }
+                    ModelStatus.DOWNLOADED, ModelStatus.READY -> {
+                        OutlinedButton(
+                            onClick = { onEvent(SettingsEvent.ShowDeleteConfirmation) },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = MaterialTheme.colorScheme.error
+                            )
+                        ) {
+                            Icon(Icons.Default.Delete, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Delete Model")
+                        }
+                    }
+                }
+
+                // Model size info
+                if (uiState.modelStatus == ModelStatus.NOT_DOWNLOADED) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Model size: ~2.6 GB (Gemma 4 E2B IT)",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "Downloads from HuggingFace or Kaggle",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Available Models List
+                AvailableModelsSection(
+                    models = uiState.availableModels,
+                    isLoading = uiState.isLoadingModels,
+                    onSelect = { path -> onEvent(SettingsEvent.SelectModel(path)) },
+                    onDelete = { path -> onEvent(SettingsEvent.DeleteSpecificModel(path)) },
+                    onRefresh = { onEvent(SettingsEvent.RefreshModelList) }
+                )
+            }
+
+            // ──────────────────────────────────────────────────────────────
+            // Model Management Section
+            // ──────────────────────────────────────────────────────────────
+            SettingsSection(title = "Model Management") {
+                // Auto-unload timeout
+                Text(
+                    text = "Auto-unload after inactivity",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Text(
+                    text = "Unload model from memory after ${uiState.inactivityTimeoutMinutes} minutes of inactivity to save battery",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Off", style = MaterialTheme.typography.labelSmall)
+                    Slider(
+                        value = uiState.inactivityTimeoutMinutes.toFloat(),
+                        onValueChange = { onEvent(SettingsEvent.UpdateInactivityTimeout(it.toInt())) },
+                        valueRange = 0f..60f,
+                        steps = 11, // 0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60 (12 values = 11 steps)
+                        modifier = Modifier.weight(1f)
+                    )
+                    Text("60 min", style = MaterialTheme.typography.labelSmall)
+                }
+                if (uiState.inactivityTimeoutMinutes == 0) {
+                    Text(
+                        text = "Auto-unload disabled",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+
+            // ──────────────────────────────────────────────────────────────
+            // Inference Mode Section
+            // ──────────────────────────────────────────────────────────────
+            SettingsSection(title = "Inference Mode") {
+                SettingsRow(
+                    icon = Icons.Default.Tune,
+                    title = "Mode",
+                    subtitle = when (uiState.inferenceMode) {
+                        InferenceMode.ON_DEVICE -> "On-device (fastest, private)"
+                        InferenceMode.CLOUD -> "Cloud (most capable)"
+                        InferenceMode.HYBRID -> "Hybrid (balanced)"
+                    },
+                    action = {
+                        IconButton(onClick = { onEvent(SettingsEvent.ToggleInferenceMode) }) {
+                            Icon(Icons.Default.SwapHoriz, contentDescription = "Change mode")
+                        }
+                    }
+                )
+            }
+
+            // ──────────────────────────────────────────────────────────────
+            // System Prompt Section
+            // ──────────────────────────────────────────────────────────────
+            SettingsSection(title = "Default System Prompt") {
+                Text(
+                    text = "This prompt will be used as the default for all new conversations",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+                var systemPromptText by rememberSaveable { mutableStateOf(uiState.defaultSystemPrompt) }
+
+                LaunchedEffect(uiState.defaultSystemPrompt) {
+                    systemPromptText = uiState.defaultSystemPrompt
+                }
+                OutlinedTextField(
+                    value = systemPromptText,
+                    onValueChange = {
+                        systemPromptText = it
+                        onEvent(SettingsEvent.UpdateDefaultSystemPrompt(it))
+                    },
+                    label = { Text("System Prompt") },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 3,
+                    maxLines = 6,
+                    placeholder = { Text("You are a helpful AI assistant...") }
+                )
+            }
+
+            // ──────────────────────────────────────────────────────────────
+            // Backend Section
+            // ──────────────────────────────────────────────────────────────
+            SettingsSection(title = "Backend") {
+                Text(
+                    text = "Select which processor to use for AI inference",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+
+                BackendOption(
+                    label = "Auto (GPU preferred)",
+                    description = "Automatically select best available",
+                    selected = uiState.backendPreference == BackendPreference.AUTO,
+                    onClick = { onEvent(SettingsEvent.UpdateBackendPreference(BackendPreference.AUTO)) }
+                )
+
+                BackendOption(
+                    label = "GPU",
+                    description = "Fastest, uses more battery",
+                    selected = uiState.backendPreference == BackendPreference.GPU,
+                    onClick = { onEvent(SettingsEvent.UpdateBackendPreference(BackendPreference.GPU)) }
+                )
+
+                BackendOption(
+                    label = "CPU",
+                    description = "Slower, works on all devices",
+                    selected = uiState.backendPreference == BackendPreference.CPU,
+                    onClick = { onEvent(SettingsEvent.UpdateBackendPreference(BackendPreference.CPU)) }
+                )
+
+                if (uiState.modelStatus == ModelStatus.DOWNLOADED) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Restart the app to apply backend changes",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(start = 8.dp)
+                    )
+                }
+            }
+
+            // ──────────────────────────────────────────────────────────────
+            // Generation Settings
+            // ──────────────────────────────────────────────────────────────
+            SettingsSection(title = "Generation Settings") {
+                // Max tokens
+                var tokensExpanded by remember { mutableStateOf(false) }
+                var tokensValue by remember { mutableStateOf(uiState.maxTokens.toString()) }
+
+                ExposedDropdownMenuBox(
+                    expanded = tokensExpanded,
+                    onExpandedChange = { tokensExpanded = it }
+                ) {
+                    OutlinedTextField(
+                        value = tokensValue,
+                        onValueChange = { tokensValue = it },
+                        label = { Text("Max Tokens") },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .menuAnchor(),
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = tokensExpanded) },
+                        supportingText = { Text("Output length: 256 - 8192") }
+                    )
+                    ExposedDropdownMenu(
+                        expanded = tokensExpanded,
+                        onDismissRequest = { tokensExpanded = false }
+                    ) {
+                        listOf(256, 512, 1024, 2048, 4096, 8192).forEach { value ->
+                            DropdownMenuItem(
+                                text = { Text("$value tokens") },
+                                onClick = {
+                                    tokensValue = value.toString()
+                                    onEvent(SettingsEvent.UpdateMaxTokens(value))
+                                    tokensExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(16.dp))
+
+                // Temperature
+                Text(
+                    "Temperature",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    "Controls randomness: ${String.format("%.1f", uiState.temperature)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Slider(
+                    value = uiState.temperature,
+                    onValueChange = { onEvent(SettingsEvent.UpdateTemperature(it)) },
+                    valueRange = 0f..2f,
+                    steps = 19,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Precise", style = MaterialTheme.typography.labelSmall)
+                    Text("Creative", style = MaterialTheme.typography.labelSmall)
+                }
+            }
+
+            // ──────────────────────────────────────────────────────────────
+            // About Section
+            // ──────────────────────────────────────────────────────────────
+            SettingsSection(title = "About") {
+                SettingsRow(
+                    icon = Icons.Default.Info,
+                    title = "Version",
+                    subtitle = uiState.appVersion
+                )
+                SettingsRow(
+                    icon = Icons.Default.Code,
+                    title = "Build",
+                    subtitle = "Debug"
+                )
+            }
+        }
+    }
+
+    // Download Dialog
+    if (uiState.showDownloadDialog) {
+        AlertDialog(
+            onDismissRequest = { onEvent(SettingsEvent.HideDownloadDialog) },
+            icon = { Icon(Icons.Default.CloudDownload, contentDescription = null) },
+            title = { Text("Download Model") },
+            text = {
+                Column {
+                    Text(
+                        "Enter your HuggingFace access token to download the Gemma 4 E2B model.",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    OutlinedTextField(
+                        value = hfToken,
+                        onValueChange = { hfToken = it },
+                        label = { Text("Access Token") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    TextButton(
+                        onClick = { uriHandler.openUri("https://huggingface.co/settings/tokens") }
+                    ) {
+                        Text("Get token at huggingface.co")
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (hfToken.isNotBlank()) {
+                            onEvent(SettingsEvent.StartHfDownload(hfToken))
+                        }
+                    },
+                    enabled = hfToken.isNotBlank()
+                ) {
+                    Text("Download")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { onEvent(SettingsEvent.HideDownloadDialog) }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // Delete confirmation dialog
+    if (uiState.showDeleteConfirmation) {
+        AlertDialog(
+            onDismissRequest = { onEvent(SettingsEvent.DismissDeleteConfirmation) },
+            icon = { Icon(Icons.Default.Warning, contentDescription = null) },
+            title = { Text("Delete Model?") },
+            text = {
+                Text("This will remove the AI model from your device. You can download it again later.")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { onEvent(SettingsEvent.DeleteModel) },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { onEvent(SettingsEvent.DismissDeleteConfirmation) }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // Error snackbar
+    uiState.error?.let { error ->
+        Snackbar(
+            modifier = Modifier.padding(16.dp),
+            action = {
+                TextButton(onClick = { onEvent(SettingsEvent.DismissError) }) {
+                    Text("Dismiss")
+                }
+            }
+        ) {
+            Text(error)
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Helper Components
+// ─────────────────────────────────────────────────────────────────────
+
+@Composable
+private fun AvailableModelsSection(
+    models: List<ModelManager.ModelInfo>,
+    isLoading: Boolean,
+    onSelect: (String) -> Unit,
+    onDelete: (String) -> Unit,
+    onRefresh: () -> Unit
+) {
+    Column {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Available Models",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold
+            )
+            IconButton(onClick = onRefresh, enabled = !isLoading) {
+                if (isLoading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = "Refresh"
+                    )
+                }
+            }
+        }
+
+        if (models.isEmpty()) {
+            Text(
+                text = "No models found. Download a model or place .litertlm files in your Downloads folder.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(vertical = 8.dp)
+            )
+        } else {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                )
+            ) {
+                Column(modifier = Modifier.padding(8.dp)) {
+                    models.forEach { model ->
+                        ModelListItem(
+                            model = model,
+                            onSelect = { onSelect(model.path) },
+                            onDelete = { onDelete(model.path) }
+                        )
+                        if (model != models.last()) {
+                            HorizontalDivider(modifier = Modifier.padding(horizontal = 8.dp))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ModelListItem(
+    model: ModelManager.ModelInfo,
+    onSelect: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val sizeMB = model.sizeBytes / (1024 * 1024)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp, horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = Icons.Default.Storage,
+            contentDescription = null,
+            modifier = Modifier.size(24.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(
+            modifier = Modifier.weight(1f)
+        ) {
+            Text(
+                text = model.name,
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Text(
+                text = "${sizeMB} MB",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Row {
+            TextButton(onClick = onSelect) {
+                Text("Load")
+            }
+            IconButton(onClick = onDelete) {
+                Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = "Delete",
+                    tint = MaterialTheme.colorScheme.error
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun SettingsSection(
+    title: String,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    Column {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(bottom = 8.dp)
+        )
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+            )
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                content = content
+            )
+        }
+    }
+}
+
+@Composable
+private fun BackendOption(
+    label: String,
+    description: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        RadioButton(
+            selected = selected,
+            onClick = onClick
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Column {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Text(
+                text = description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+fun SettingsRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    subtitle: String,
+    action: @Composable (() -> Unit)? = null
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(24.dp)
+        )
+        Spacer(Modifier.width(16.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyLarge
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        action?.invoke()
+    }
+}

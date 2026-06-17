@@ -26,4 +26,11 @@
         <item name="android:textColor">@color/colorAccent</item>
     </style>
 
+    <!-- Compose Activity Theme -->
+    <style name="Theme.Penpal" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/colorBackground</item>
+        <item name="android:statusBarColor">@color/colorPrimaryDark</item>
+        <item name="android:navigationBarColor">@color/colorPrimaryDark</item>
+    </style>
+
 </resources>
